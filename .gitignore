@@ -1,0 +1,16 @@
+omakaiju
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+*.log
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store

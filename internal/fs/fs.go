@@ -62,6 +62,31 @@ func Copy(src, dst string) error {
 	return err
 }
 
+func CopyRecursive(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return Copy(src, dst)
+	}
+	if err := os.MkdirAll(dst, info.Mode()); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if err := CopyRecursive(srcPath, dstPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func Move(src, dst string) error {
 	return os.Rename(src, dst)
 }
