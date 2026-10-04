@@ -16,6 +16,7 @@ type Pane struct {
 	Files         []fs.Entry
 	Cursor        int
 	VisibleHeight int
+	Status        string
 }
 
 func NewPane(width, height int, active bool, theme config.Theme) Pane {
@@ -60,6 +61,10 @@ func (p Pane) Render() string {
 			item := NewFileItem(p.Files[i], i == p.Cursor, p.Theme, p.Width-4)
 			content += item.Render() + "\n"
 		}
+	}
+
+	if p.Status != "" {
+		content += "\n" + p.Theme.AccentText().Render(p.Status)
 	}
 
 	return borderStyle.Width(p.Width).Height(p.Height).Render(content)
