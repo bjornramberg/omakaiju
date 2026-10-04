@@ -8,13 +8,14 @@ import (
 )
 
 type Pane struct {
-	Width  int
-	Height int
-	Active bool
-	Theme  config.Theme
-	Path   string
-	Files  []fs.Entry
-	Cursor int
+	Width         int
+	Height        int
+	Active        bool
+	Theme         config.Theme
+	Path          string
+	Files         []fs.Entry
+	Cursor        int
+	VisibleHeight int
 }
 
 func NewPane(width, height int, active bool, theme config.Theme) Pane {
@@ -37,9 +38,28 @@ func (p Pane) Render() string {
 	var content string
 	content += p.Theme.PathText().Render(p.Path) + "\n\n"
 
-	for i, entry := range p.Files {
-		item := NewFileItem(entry, i == p.Cursor, p.Theme, p.Width-4)
-		content += item.Render() + "\n"
+	if len(p.Files) == 0 {
+		content += p.Theme.StatusText().Render("empty directory")
+	} else {
+		visibleHeight := p.VisibleHeight
+		if visibleHeight <= 0 {
+			visibleHeight = p.Height - 4
+		}
+
+		start := 0
+		if p.Cursor >= visibleHeight {
+			start = p.Cursor - visibleHeight + 1
+		}
+
+		end := start + visibleHeight
+		if end > len(p.Files) {
+			end = len(p.Files)
+		}
+
+		for i := start; i < end; i++ {
+			item := NewFileItem(p.Files[i], i == p.Cursor, p.Theme, p.Width-4)
+			content += item.Render() + "\n"
+		}
 	}
 
 	return borderStyle.Width(p.Width).Height(p.Height).Render(content)
