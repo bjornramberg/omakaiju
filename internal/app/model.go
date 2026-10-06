@@ -7,6 +7,7 @@ import (
 
 	"omakaiju/internal/config"
 	"omakaiju/internal/fs"
+	"omakaiju/internal/fuzzy"
 	"omakaiju/internal/nav"
 	"omakaiju/internal/ui"
 
@@ -28,6 +29,10 @@ type fileOpMsg struct {
 type themeReloadedMsg struct {
 	theme config.Theme
 	err   error
+}
+
+type fuzzyFilesLoadedMsg struct {
+	files []string
 }
 
 type Clipboard struct {
@@ -57,7 +62,18 @@ type Model struct {
 	deleteTarget  string
 	opResult      string
 
-	themeWatcher *fs.Watcher
+	themeWatcher  *fs.Watcher
+	previewPath   string
+	previewFocused bool
+
+	previewCache     []string
+	previewCachePath string
+
+	fuzzyActive   bool
+	fuzzyInput    string
+	fuzzyResults  []string
+	fuzzyCursor   int
+	fuzzyAllFiles []string
 }
 
 func NewModel(cfg config.Config) Model {
@@ -109,6 +125,13 @@ func deleteCmd(path string) tea.Cmd {
 	}
 }
 
+func loadFuzzyFilesCmd(root string) tea.Cmd {
+	return func() tea.Msg {
+		files, _ := fs.WalkDir(root)
+		return fuzzyFilesLoadedMsg{files: files}
+	}
+}
+
 func (m Model) startThemeWatcher() tea.Cmd {
 	return func() tea.Msg {
 		watcher, err := fs.NewWatcher()
@@ -146,6 +169,37 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
+func (m *Model) updatePreview() {
+	var files []fs.Entry
+	var cursor int
+	if m.activePane == 0 {
+		files = m.leftFiles
+		cursor = m.leftCursor
+	} else {
+		files = m.rightFiles
+		cursor = m.rightCursor
+	}
+	if cursor < len(files) {
+		m.previewPath = files[cursor].Path
+	} else {
+		m.previewPath = ""
+	}
+
+	if m.previewPath != m.previewCachePath {
+		m.previewCache = nil
+		m.previewCachePath = ""
+
+		if m.previewPath != "" {
+			fileType := fs.DetectFileType(m.previewPath)
+			if fileType == fs.FileTypeText {
+				lines, _ := fs.ReadFileHead(m.previewPath, 1000)
+				m.previewCache = lines
+				m.previewCachePath = m.previewPath
+			}
+		}
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -168,6 +222,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rightFiles = msg.files
 			m.rightCursor = 0
 		}
+		m.updatePreview()
 		return m, nil
 
 	case fileOpMsg:
@@ -189,9 +244,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.theme = msg.theme
 		return m, nil
 
+	case fuzzyFilesLoadedMsg:
+		m.fuzzyAllFiles = msg.files
+		m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, msg.files)
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.confirmDelete {
 			return m.handleConfirmDelete(msg)
+		}
+
+		if m.fuzzyActive {
+			return m.handleFuzzyKeys(msg)
+		}
+
+		if m.previewFocused {
+			switch msg.String() {
+			case "i", "esc":
+				m.previewFocused = false
+				return m, nil
+			}
+			return m, nil
 		}
 
 		action := nav.Lookup(msg.String())
@@ -203,6 +276,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case nav.ActionTab:
 			m.activePane = 1 - m.activePane
+			m.updatePreview()
 			return m, nil
 		case nav.ActionDown:
 			if m.activePane == 0 {
@@ -214,6 +288,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.rightCursor++
 				}
 			}
+			m.updatePreview()
 			return m, nil
 		case nav.ActionUp:
 			if m.activePane == 0 {
@@ -225,6 +300,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.rightCursor--
 				}
 			}
+			m.updatePreview()
 			return m, nil
 		case nav.ActionRight, nav.ActionEnter:
 			var files []fs.Entry
@@ -268,6 +344,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, loadDirCmd(0, m.leftPath)
 			}
 			return m, loadDirCmd(1, m.rightPath)
+		case nav.ActionFuzzyFind:
+			m.fuzzyActive = true
+			m.fuzzyInput = ""
+			m.fuzzyResults = nil
+			m.fuzzyCursor = 0
+			var currentPath string
+			if m.activePane == 0 {
+				currentPath = m.leftPath
+			} else {
+				currentPath = m.rightPath
+			}
+			return m, loadFuzzyFilesCmd(currentPath)
 		case nav.ActionYank:
 			return m.handleYank()
 		case nav.ActionMove:
@@ -277,6 +365,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case nav.ActionDelete:
 			return m.handleDelete()
 		}
+
+		if msg.String() == "i" {
+			m.previewFocused = true
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.fuzzyActive = false
+		m.fuzzyInput = ""
+		m.fuzzyResults = nil
+		m.fuzzyCursor = 0
+		return m, nil
+	case "enter":
+		if m.fuzzyCursor < len(m.fuzzyResults) {
+			selected := m.fuzzyResults[m.fuzzyCursor]
+			dir := filepath.Dir(selected)
+			if m.activePane == 0 {
+				m.leftPath = dir
+			} else {
+				m.rightPath = dir
+			}
+			m.fuzzyActive = false
+			m.fuzzyInput = ""
+			m.fuzzyResults = nil
+			m.fuzzyCursor = 0
+			return m, loadDirCmd(m.activePane, dir)
+		}
+		return m, nil
+	case "j", "down":
+		if m.fuzzyCursor < len(m.fuzzyResults)-1 {
+			m.fuzzyCursor++
+		}
+		return m, nil
+	case "k", "up":
+		if m.fuzzyCursor > 0 {
+			m.fuzzyCursor--
+		}
+		return m, nil
+	case "backspace":
+		if len(m.fuzzyInput) > 0 {
+			m.fuzzyInput = m.fuzzyInput[:len(m.fuzzyInput)-1]
+			m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, m.fuzzyAllFiles)
+			m.fuzzyCursor = 0
+		}
+		return m, nil
+	}
+
+	keyStr := msg.String()
+	if len(keyStr) == 1 && keyStr[0] >= 32 && keyStr[0] < 127 {
+		m.fuzzyInput += keyStr
+		m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, m.fuzzyAllFiles)
+		m.fuzzyCursor = 0
 	}
 	return m, nil
 }
@@ -396,6 +541,15 @@ func (m Model) handleConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() tea.View {
+	if m.fuzzyActive {
+		finder := ui.NewFuzzyFinder(m.width, m.height, m.theme)
+		finder.Input = m.fuzzyInput
+		finder.Results = m.fuzzyResults
+		finder.Cursor = m.fuzzyCursor
+		finder.AllFiles = m.fuzzyAllFiles
+		return tea.NewView(finder.Render())
+	}
+
 	layout := ui.NewLayout(m.width, m.height, m.theme)
 
 	topBar := ui.NewTopBar(m.width, m.theme).Render()
@@ -412,6 +566,27 @@ func (m Model) View() tea.View {
 	rightPane.Cursor = m.rightCursor
 	rightRendered := rightPane.Render()
 
+	var previewRendered string
+	if m.previewPath != "" && m.previewCache != nil {
+		preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
+		preview = preview.SetPath(m.previewPath)
+		previewRendered = preview.RenderText(m.previewCache)
+	} else if m.previewPath != "" {
+		fileType := fs.DetectFileType(m.previewPath)
+		preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
+		previewRendered = preview.RenderFile(m.previewPath, fileType)
+	} else {
+		preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
+		previewRendered = preview.RenderMetadata("")
+	}
+
+	if m.previewFocused {
+		previewRendered = m.theme.PreviewPanelFocused().
+			Width(layout.PreviewWidth()).
+			Height(layout.MainAreaHeight()).
+			Render(previewRendered)
+	}
+
 	bottomBar := ui.NewBottomBar(m.width, m.theme)
 	if m.confirmDelete {
 		bottomBar.Input = "delete " + filepath.Base(m.deleteTarget) + "? (y/n)"
@@ -424,7 +599,7 @@ func (m Model) View() tea.View {
 	}
 	bottomRendered := bottomBar.Render()
 
-	view := layout.Render(topBar, leftRendered, rightRendered, bottomRendered)
+	view := layout.Render(topBar, leftRendered, rightRendered, previewRendered, bottomRendered)
 
 	return tea.NewView(view)
 }

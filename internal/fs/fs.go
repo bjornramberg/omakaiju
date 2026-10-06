@@ -1,9 +1,11 @@
 package fs
 
 import (
+	"bufio"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Entry struct {
@@ -105,4 +107,97 @@ func CreateFile(path string) error {
 
 func CreateDir(path string) error {
 	return os.MkdirAll(path, 0755)
+}
+
+type FileType int
+
+const (
+	FileTypeText FileType = iota
+	FileTypeBinary
+	FileTypeImage
+	FileTypeArchive
+	FileTypeDirectory
+)
+
+func DetectFileType(path string) FileType {
+	info, err := os.Stat(path)
+	if err != nil {
+		return FileTypeBinary
+	}
+	if info.IsDir() {
+		return FileTypeDirectory
+	}
+
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".txt", ".md", ".go", ".py", ".js", ".ts", ".rs", ".c", ".cpp", ".h", ".json", ".yaml", ".yml", ".toml", ".xml", ".html", ".css", ".sh", ".bash", ".zsh":
+		return FileTypeText
+	case ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp":
+		return FileTypeImage
+	case ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar":
+		return FileTypeArchive
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return FileTypeBinary
+	}
+	defer f.Close()
+
+	buf := make([]byte, 512)
+	n, _ := f.Read(buf)
+	if n == 0 {
+		return FileTypeText
+	}
+
+	for i := 0; i < n; i++ {
+		if buf[i] == 0 {
+			return FileTypeBinary
+		}
+	}
+	return FileTypeText
+}
+
+func ReadFileHead(path string, maxLines int) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	for i := 0; i < maxLines && scanner.Scan(); i++ {
+		lines = append(lines, scanner.Text())
+	}
+	return lines, scanner.Err()
+}
+
+func CountLines(path string) (int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	count := 0
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		count++
+	}
+	return count, scanner.Err()
+}
+
+func WalkDir(root string) ([]string, error) {
+	var files []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	return files, err
 }
