@@ -83,6 +83,14 @@ func (t Theme) PreviewPanel() lipgloss.Style {
 		Padding(1, 2)
 }
 
+func (t Theme) PreviewPanelFocused() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(t.Primary)).
+		BorderBackground(lipgloss.Color(t.BGDark)).
+		Padding(1, 2)
+}
+
 func (t Theme) FileItem() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color(t.FGMain)).
@@ -108,6 +116,11 @@ func (t Theme) FileItemExec() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color(t.Accent)).
 		Padding(0, 1)
+}
+
+func (t Theme) Text() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(t.FGMain))
 }
 
 func (t Theme) StatusText() lipgloss.Style {
