@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"omakaiju/internal/config"
@@ -41,6 +42,17 @@ type Clipboard struct {
 	Source string
 }
 
+// inputMode is the active single-line text prompt. Filter, add, and rename all
+// share one capture path: type to edit, enter commits, esc cancels.
+type inputMode int
+
+const (
+	inputNone inputMode = iota
+	inputFilter
+	inputAdd
+	inputRename
+)
+
 type Model struct {
 	cfg    config.Config
 	theme  config.Theme
@@ -77,7 +89,10 @@ type Model struct {
 
 	leftFilter  string
 	rightFilter string
-	filterInput bool
+
+	mode         inputMode
+	inputBuf     string
+	renameTarget string
 }
 
 func NewModel(cfg config.Config) Model {
@@ -324,8 +339,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleFuzzyKeys(msg)
 		}
 
-		if m.filterInput {
-			return m.handleFilterKeys(msg)
+		if m.mode != inputNone {
+			return m.handleInputKeys(msg)
 		}
 
 		if m.previewFocused {
@@ -387,7 +402,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fuzzyCursor = 0
 			return m, loadFuzzyFilesCmd(m.rawPath(m.activePane))
 		case nav.ActionFilter:
-			m.filterInput = true
+			m.mode = inputFilter
+			m.inputBuf = ""
 			m.setFilter(m.activePane, "")
 			m.setCursor(m.activePane, 0)
 			m.updatePreview()
@@ -396,6 +412,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFilter(m.activePane, "")
 			m.setCursor(m.activePane, 0)
 			m.updatePreview()
+			return m, nil
+		case nav.ActionAdd:
+			m.mode = inputAdd
+			m.inputBuf = ""
+			return m, nil
+		case nav.ActionRename:
+			files := m.visibleFiles(m.activePane)
+			cursor := m.rawCursor(m.activePane)
+			if cursor >= len(files) {
+				return m, nil
+			}
+			m.mode = inputRename
+			m.inputBuf = files[cursor].Name
+			m.renameTarget = files[cursor].Path
 			return m, nil
 		case nav.ActionYank:
 			return m.handleYank()
@@ -467,21 +497,27 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleFilterKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleInputKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.filterInput = false
-		m.setFilter(m.activePane, "")
+		if m.mode == inputFilter {
+			m.setFilter(m.activePane, "")
+		}
+		m.mode = inputNone
+		m.inputBuf = ""
+		m.renameTarget = ""
 		m.setCursor(m.activePane, 0)
+		m.clampCursor(m.activePane)
 		m.updatePreview()
 		return m, nil
 	case "enter":
-		m.filterInput = false
-		return m, nil
+		return m.commitInput()
 	case "backspace":
-		q := m.filterOf(m.activePane)
-		if q != "" {
-			m.setFilter(m.activePane, q[:len(q)-1])
+		if m.inputBuf != "" {
+			m.inputBuf = m.inputBuf[:len(m.inputBuf)-1]
+			if m.mode == inputFilter {
+				m.setFilter(m.activePane, m.inputBuf)
+			}
 			m.setCursor(m.activePane, 0)
 			m.clampCursor(m.activePane)
 			m.updatePreview()
@@ -490,11 +526,80 @@ func (m Model) handleFilterKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if key := msg.String(); len(key) == 1 && key[0] >= 32 && key[0] < 127 {
-		m.setFilter(m.activePane, m.filterOf(m.activePane)+key)
-		m.setCursor(m.activePane, 0)
+		m.inputBuf += key
+		if m.mode == inputFilter {
+			m.setFilter(m.activePane, m.inputBuf)
+			m.setCursor(m.activePane, 0)
+		}
 		m.updatePreview()
 	}
 	return m, nil
+}
+
+func (m Model) commitInput() (tea.Model, tea.Cmd) {
+	switch m.mode {
+	case inputFilter:
+		m.mode = inputNone
+		m.inputBuf = ""
+		return m, nil
+
+	case inputAdd:
+		name := m.inputBuf
+		m.mode = inputNone
+		m.inputBuf = ""
+		if name == "" {
+			return m, nil
+		}
+		isDir := strings.HasSuffix(name, "/")
+		name = strings.TrimSuffix(name, "/")
+		if name == "" {
+			return m, nil
+		}
+
+		path := filepath.Join(m.rawPath(m.activePane), name)
+		if isDir {
+			err := fs.CreateDir(path)
+			m.opResult = resultMessage("created dir", name, err)
+		} else {
+			err := fs.CreateFile(path)
+			m.opResult = resultMessage("created", name, err)
+		}
+		return m, m.loadActive()
+
+	case inputRename:
+		name := strings.TrimSuffix(m.inputBuf, "/")
+		target := m.renameTarget
+		m.mode = inputNone
+		m.inputBuf = ""
+		m.renameTarget = ""
+		if name == "" || target == "" {
+			return m, nil
+		}
+		if name == filepath.Base(target) {
+			return m, nil
+		}
+		err := fs.Move(target, filepath.Join(filepath.Dir(target), name))
+		m.opResult = resultMessage("renamed", name, err)
+		if err != nil {
+			m.loadErr = err
+		}
+		return m, m.loadActive()
+	}
+
+	m.mode = inputNone
+	m.inputBuf = ""
+	return m, nil
+}
+
+func resultMessage(action, name string, err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	return action + " " + name
+}
+
+func (m Model) loadActive() tea.Cmd {
+	return loadDirCmd(m.activePane, m.rawPath(m.activePane))
 }
 
 func (m Model) handleYank() (tea.Model, tea.Cmd) {
@@ -632,15 +737,24 @@ func (m Model) View() tea.View {
 	}
 
 	bottomBar := ui.NewBottomBar(m.width, m.theme)
-	if m.filterInput {
-		bottomBar.FilterActive = true
-		bottomBar.FilterInput = m.filterOf(m.activePane)
-	} else if m.confirmDelete {
-		bottomBar.Input = "delete " + filepath.Base(m.deleteTarget) + "? (y/n)"
-	} else if m.loadErr != nil {
-		bottomBar.Error = m.loadErr.Error()
-	} else if m.opResult != "" {
-		bottomBar.OpResult = m.opResult
+	switch m.mode {
+	case inputFilter:
+		bottomBar.Prompt = "filter"
+		bottomBar.PromptInput = m.inputBuf
+	case inputAdd:
+		bottomBar.Prompt = "new (dir/)"
+		bottomBar.PromptInput = m.inputBuf
+	case inputRename:
+		bottomBar.Prompt = "rename"
+		bottomBar.PromptInput = m.inputBuf
+	default:
+		if m.confirmDelete {
+			bottomBar.Input = "delete " + filepath.Base(m.deleteTarget) + "? (y/n)"
+		} else if m.loadErr != nil {
+			bottomBar.Error = m.loadErr.Error()
+		} else if m.opResult != "" {
+			bottomBar.OpResult = m.opResult
+		}
 	}
 	bottomRendered := bottomBar.Render()
 
