@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"omakaiju/internal/config"
@@ -217,4 +218,44 @@ func indexOf(files []fs.Entry, name string) int {
 		}
 	}
 	return -1
+}
+
+func TestPreviewIsHighlightedForSourceFile(t *testing.T) {
+	m, dir := fixture(t)
+
+	goFile := filepath.Join(dir, "main.go")
+	src := "package main\n\n// comment\nfunc main() {\n\tprintln(\"hi\")\n}\n"
+	if err := os.WriteFile(goFile, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := fs.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.leftFiles = files
+	m.leftPath = dir
+
+	// Directories sort first, so walk the cursor onto main.go.
+	idx := indexOf(m.visibleFiles(0), "main.go")
+	if idx < 0 {
+		t.Fatal("main.go missing from listing")
+	}
+	for i := 0; i < idx; i++ {
+		updated, _ := m.Update(key('j'))
+		m = updated.(Model)
+	}
+
+	if m.previewPath != goFile {
+		t.Fatalf("previewPath = %q, want %q", m.previewPath, goFile)
+	}
+	if len(m.previewCache) == 0 {
+		t.Fatal("expected raw preview cache to be populated")
+	}
+	if len(m.previewHL) != len(m.previewCache) {
+		t.Fatalf("highlighted lines = %d, want %d", len(m.previewHL), len(m.previewCache))
+	}
+	if !strings.Contains(strings.Join(m.previewHL, "\n"), "\x1b[") {
+		t.Error("expected ANSI sequences in highlighted preview")
+	}
 }
