@@ -10,13 +10,13 @@ import (
 )
 
 type FuzzyFinder struct {
-	Width      int
-	Height     int
-	Theme      config.Theme
-	Input      string
-	Results    []string
-	Cursor     int
-	AllFiles   []string
+	Width    int
+	Height   int
+	Theme    config.Theme
+	Input    string
+	Results  []string
+	Cursor   int
+	AllFiles []string
 }
 
 func NewFuzzyFinder(width, height int, theme config.Theme) FuzzyFinder {
