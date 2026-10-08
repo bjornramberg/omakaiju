@@ -80,6 +80,7 @@ type Model struct {
 
 	previewCache     []string
 	previewCachePath string
+	previewHL        []string
 
 	fuzzyActive   bool
 	fuzzyInput    string
@@ -266,6 +267,7 @@ func (m *Model) updatePreview() {
 
 	if m.previewPath != m.previewCachePath {
 		m.previewCache = nil
+		m.previewHL = nil
 		m.previewCachePath = ""
 
 		if m.previewPath != "" {
@@ -273,6 +275,7 @@ func (m *Model) updatePreview() {
 			if fileType == fs.FileTypeText {
 				lines, _ := fs.ReadFileHead(m.previewPath, 1000)
 				m.previewCache = lines
+				m.previewHL = ui.HighlightLines(m.previewPath, lines, m.theme)
 				m.previewCachePath = m.previewPath
 			}
 		}
@@ -323,6 +326,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.theme = msg.theme
+		// Colours changed, so the highlighted preview must be rebuilt.
+		m.previewHL = nil
+		m.previewCachePath = ""
+		m.updatePreview()
 		return m, nil
 
 	case fuzzyFilesLoadedMsg:
@@ -719,7 +726,7 @@ func (m Model) View() tea.View {
 	if m.previewPath != "" && m.previewCache != nil {
 		preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
 		preview = preview.SetPath(m.previewPath)
-		previewRendered = preview.RenderText(m.previewCache)
+		previewRendered = preview.RenderText(m.previewCache, m.previewHL)
 	} else if m.previewPath != "" {
 		fileType := fs.DetectFileType(m.previewPath)
 		preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)

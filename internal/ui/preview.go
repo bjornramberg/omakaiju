@@ -43,26 +43,33 @@ func (p Preview) RenderFile(path string, fileType fs.FileType) string {
 	}
 }
 
-func (p Preview) RenderText(lines []string) string {
+// RenderText renders pre-highlighted content. lines carries the raw source for
+// counting and highlighted carries the colourised text; when highlighted is
+// empty the raw lines are shown unhighlighted.
+func (p Preview) RenderText(lines, highlighted []string) string {
 	chrome := 8
 	maxVisible := p.Height - chrome
 	if maxVisible < 1 {
 		maxVisible = 1
 	}
 
-	totalLines := len(lines)
-	visibleLines := lines
-	truncated := false
-	if len(lines) > maxVisible {
-		visibleLines = lines[:maxVisible]
-		truncated = true
+	body := highlighted
+	if len(body) == 0 {
+		body = lines
+	}
+
+	totalLines := len(body)
+	if len(body) > maxVisible {
+		body = body[:maxVisible]
 	}
 
 	header := p.Theme.AccentText().Bold(true).Render(filepath.Base(p.path))
-	content := p.Theme.Text().Render(strings.Join(visibleLines, "\n"))
+	// Rendered without a wrapping foreground style so the inner ANSI colours
+	// from Chroma are not overridden.
+	content := strings.Join(body, "\n")
 
 	footer := ""
-	if truncated {
+	if totalLines > maxVisible {
 		footer = p.Theme.StatusText().Render(fmt.Sprintf("... (%d more lines)", totalLines-maxVisible))
 	} else {
 		footer = p.Theme.StatusText().Render(fmt.Sprintf("%d lines", totalLines))
@@ -91,7 +98,18 @@ func (p Preview) RenderTextFromFile(path string) string {
 	}
 
 	p.path = path
-	return p.RenderText(lines)
+	highlighted := splitLines(Highlight(path, strings.Join(lines, "\n"), OmarchyStyle(p.Theme)))
+	return p.RenderText(lines, highlighted)
+}
+
+// splitLines splits highlighted output into lines for height-bounded rendering.
+// The formatter emits a style reset at each newline, so slicing by line keeps
+// escape sequences intact.
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
 }
 
 func (p Preview) RenderBinary(path string) string {
