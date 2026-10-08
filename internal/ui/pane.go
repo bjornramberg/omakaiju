@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+
 	"omakaiju/internal/config"
 	"omakaiju/internal/fs"
 
@@ -13,7 +15,9 @@ type Pane struct {
 	Active        bool
 	Theme         config.Theme
 	Path          string
+	Filter        string
 	Files         []fs.Entry
+	TotalFiles    int
 	Cursor        int
 	VisibleHeight int
 	Status        string
@@ -40,7 +44,11 @@ func (p Pane) Render() string {
 	content += p.Theme.PathText().Render(p.Path) + "\n\n"
 
 	if len(p.Files) == 0 {
-		content += p.Theme.StatusText().Render("empty directory")
+		if p.Filter != "" {
+			content += p.Theme.StatusText().Render("no matches for " + p.Filter)
+		} else {
+			content += p.Theme.StatusText().Render("empty directory")
+		}
 	} else {
 		visibleHeight := p.VisibleHeight
 		if visibleHeight <= 0 {
@@ -63,7 +71,13 @@ func (p Pane) Render() string {
 		}
 	}
 
-	if p.Status != "" {
+	if p.Filter != "" {
+		status := fmt.Sprintf("%d/%d", len(p.Files), p.TotalFiles)
+		if p.Status != "" {
+			status += "  " + p.Status
+		}
+		content += "\n" + p.Theme.AccentText().Render(status)
+	} else if p.Status != "" {
 		content += "\n" + p.Theme.AccentText().Render(p.Status)
 	}
 

@@ -10,10 +10,10 @@ import (
 )
 
 type FileItem struct {
-	Entry   fs.Entry
-	Active  bool
-	Theme   config.Theme
-	Width   int
+	Entry  fs.Entry
+	Active bool
+	Theme  config.Theme
+	Width  int
 }
 
 func NewFileItem(entry fs.Entry, active bool, theme config.Theme, width int) FileItem {

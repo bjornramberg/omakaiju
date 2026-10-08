@@ -11,8 +11,8 @@ import (
 	"omakaiju/internal/nav"
 	"omakaiju/internal/ui"
 
-	"github.com/fsnotify/fsnotify"
 	tea "charm.land/bubbletea/v2"
+	"github.com/fsnotify/fsnotify"
 )
 
 type dirLoadedMsg struct {
@@ -62,8 +62,8 @@ type Model struct {
 	deleteTarget  string
 	opResult      string
 
-	themeWatcher  *fs.Watcher
-	previewPath   string
+	themeWatcher   *fs.Watcher
+	previewPath    string
 	previewFocused bool
 
 	previewCache     []string
@@ -74,6 +74,10 @@ type Model struct {
 	fuzzyResults  []string
 	fuzzyCursor   int
 	fuzzyAllFiles []string
+
+	leftFilter  string
+	rightFilter string
+	filterInput bool
 }
 
 func NewModel(cfg config.Config) Model {
@@ -88,11 +92,11 @@ func NewModel(cfg config.Config) Model {
 	}
 
 	return Model{
-		cfg:        cfg,
-		theme:      theme,
-		leftPath:   cwd,
-		rightPath:  cwd,
-		leftCursor: 0,
+		cfg:         cfg,
+		theme:       theme,
+		leftPath:    cwd,
+		rightPath:   cwd,
+		leftCursor:  0,
 		rightCursor: 0,
 	}
 }
@@ -169,16 +173,76 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
-func (m *Model) updatePreview() {
-	var files []fs.Entry
-	var cursor int
-	if m.activePane == 0 {
-		files = m.leftFiles
-		cursor = m.leftCursor
-	} else {
-		files = m.rightFiles
-		cursor = m.rightCursor
+func (m Model) rawFiles(pane int) []fs.Entry {
+	if pane == 0 {
+		return m.leftFiles
 	}
+	return m.rightFiles
+}
+
+func (m Model) rawCursor(pane int) int {
+	if pane == 0 {
+		return m.leftCursor
+	}
+	return m.rightCursor
+}
+
+func (m Model) rawPath(pane int) string {
+	if pane == 0 {
+		return m.leftPath
+	}
+	return m.rightPath
+}
+
+func (m Model) setPath(pane int, path string) {
+	if pane == 0 {
+		m.leftPath = path
+	} else {
+		m.rightPath = path
+	}
+}
+
+func (m Model) filterOf(pane int) string {
+	if pane == 0 {
+		return m.leftFilter
+	}
+	return m.rightFilter
+}
+
+func (m *Model) setFilter(pane int, q string) {
+	if pane == 0 {
+		m.leftFilter = q
+	} else {
+		m.rightFilter = q
+	}
+}
+
+func (m Model) setCursor(pane, cursor int) {
+	if pane == 0 {
+		m.leftCursor = cursor
+	} else {
+		m.rightCursor = cursor
+	}
+}
+
+func (m Model) visibleFiles(pane int) []fs.Entry {
+	return nav.FilterEntries(m.rawFiles(pane), m.filterOf(pane))
+}
+
+func (m *Model) clampCursor(pane int) {
+	cursor := m.rawCursor(pane)
+	if n := len(m.visibleFiles(pane)); cursor > n-1 {
+		cursor = n - 1
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	m.setCursor(pane, cursor)
+}
+
+func (m *Model) updatePreview() {
+	files := m.visibleFiles(m.activePane)
+	cursor := m.rawCursor(m.activePane)
 	if cursor < len(files) {
 		m.previewPath = files[cursor].Path
 	} else {
@@ -217,10 +281,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.leftPath = msg.path
 			m.leftFiles = msg.files
 			m.leftCursor = 0
+			m.leftFilter = ""
 		} else {
 			m.rightPath = msg.path
 			m.rightFiles = msg.files
 			m.rightCursor = 0
+			m.rightFilter = ""
 		}
 		m.updatePreview()
 		return m, nil
@@ -258,6 +324,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleFuzzyKeys(msg)
 		}
 
+		if m.filterInput {
+			return m.handleFilterKeys(msg)
+		}
+
 		if m.previewFocused {
 			switch msg.String() {
 			case "i", "esc":
@@ -279,83 +349,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatePreview()
 			return m, nil
 		case nav.ActionDown:
-			if m.activePane == 0 {
-				if m.leftCursor < len(m.leftFiles)-1 {
-					m.leftCursor++
-				}
-			} else {
-				if m.rightCursor < len(m.rightFiles)-1 {
-					m.rightCursor++
-				}
+			cursor := m.rawCursor(m.activePane)
+			if cursor < len(m.visibleFiles(m.activePane))-1 {
+				m.setCursor(m.activePane, cursor+1)
 			}
 			m.updatePreview()
 			return m, nil
 		case nav.ActionUp:
-			if m.activePane == 0 {
-				if m.leftCursor > 0 {
-					m.leftCursor--
-				}
-			} else {
-				if m.rightCursor > 0 {
-					m.rightCursor--
-				}
+			if cursor := m.rawCursor(m.activePane); cursor > 0 {
+				m.setCursor(m.activePane, cursor-1)
 			}
 			m.updatePreview()
 			return m, nil
 		case nav.ActionRight, nav.ActionEnter:
-			var files []fs.Entry
-			var cursor int
-			if m.activePane == 0 {
-				files = m.leftFiles
-				cursor = m.leftCursor
-			} else {
-				files = m.rightFiles
-				cursor = m.rightCursor
-			}
+			files := m.visibleFiles(m.activePane)
+			cursor := m.rawCursor(m.activePane)
 			if cursor < len(files) && files[cursor].IsDir {
 				newPath := files[cursor].Path
-				if m.activePane == 0 {
-					m.leftPath = newPath
-				} else {
-					m.rightPath = newPath
-				}
+				m.setPath(m.activePane, newPath)
 				return m, loadDirCmd(m.activePane, newPath)
 			}
 			return m, nil
 		case nav.ActionLeft:
-			var currentPath string
-			if m.activePane == 0 {
-				currentPath = m.leftPath
-			} else {
-				currentPath = m.rightPath
-			}
+			currentPath := m.rawPath(m.activePane)
 			parent := filepath.Dir(currentPath)
 			if parent != currentPath {
-				if m.activePane == 0 {
-					m.leftPath = parent
-				} else {
-					m.rightPath = parent
-				}
+				m.setPath(m.activePane, parent)
 				return m, loadDirCmd(m.activePane, parent)
 			}
 			return m, nil
 		case nav.ActionRefresh:
-			if m.activePane == 0 {
-				return m, loadDirCmd(0, m.leftPath)
-			}
-			return m, loadDirCmd(1, m.rightPath)
+			return m, loadDirCmd(m.activePane, m.rawPath(m.activePane))
 		case nav.ActionFuzzyFind:
 			m.fuzzyActive = true
 			m.fuzzyInput = ""
 			m.fuzzyResults = nil
 			m.fuzzyCursor = 0
-			var currentPath string
-			if m.activePane == 0 {
-				currentPath = m.leftPath
-			} else {
-				currentPath = m.rightPath
-			}
-			return m, loadFuzzyFilesCmd(currentPath)
+			return m, loadFuzzyFilesCmd(m.rawPath(m.activePane))
+		case nav.ActionFilter:
+			m.filterInput = true
+			m.setFilter(m.activePane, "")
+			m.setCursor(m.activePane, 0)
+			m.updatePreview()
+			return m, nil
+		case nav.ActionClear:
+			m.setFilter(m.activePane, "")
+			m.setCursor(m.activePane, 0)
+			m.updatePreview()
+			return m, nil
 		case nav.ActionYank:
 			return m.handleYank()
 		case nav.ActionMove:
@@ -426,26 +467,46 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleYank() (tea.Model, tea.Cmd) {
-	var files []fs.Entry
-	var cursor int
-	var currentPath string
-	if m.activePane == 0 {
-		files = m.leftFiles
-		cursor = m.leftCursor
-		currentPath = m.leftPath
-	} else {
-		files = m.rightFiles
-		cursor = m.rightCursor
-		currentPath = m.rightPath
+func (m Model) handleFilterKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.filterInput = false
+		m.setFilter(m.activePane, "")
+		m.setCursor(m.activePane, 0)
+		m.updatePreview()
+		return m, nil
+	case "enter":
+		m.filterInput = false
+		return m, nil
+	case "backspace":
+		q := m.filterOf(m.activePane)
+		if q != "" {
+			m.setFilter(m.activePane, q[:len(q)-1])
+			m.setCursor(m.activePane, 0)
+			m.clampCursor(m.activePane)
+			m.updatePreview()
+		}
+		return m, nil
 	}
+
+	if key := msg.String(); len(key) == 1 && key[0] >= 32 && key[0] < 127 {
+		m.setFilter(m.activePane, m.filterOf(m.activePane)+key)
+		m.setCursor(m.activePane, 0)
+		m.updatePreview()
+	}
+	return m, nil
+}
+
+func (m Model) handleYank() (tea.Model, tea.Cmd) {
+	files := m.visibleFiles(m.activePane)
+	cursor := m.rawCursor(m.activePane)
 	if cursor >= len(files) {
 		return m, nil
 	}
 	m.clipboard = Clipboard{
 		Action: "copy",
 		Files:  []fs.Entry{files[cursor]},
-		Source: currentPath,
+		Source: m.rawPath(m.activePane),
 	}
 	m.clipboardOn = true
 	m.opResult = "yanked " + files[cursor].Name
@@ -453,25 +514,15 @@ func (m Model) handleYank() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleMove() (tea.Model, tea.Cmd) {
-	var files []fs.Entry
-	var cursor int
-	var currentPath string
-	if m.activePane == 0 {
-		files = m.leftFiles
-		cursor = m.leftCursor
-		currentPath = m.leftPath
-	} else {
-		files = m.rightFiles
-		cursor = m.rightCursor
-		currentPath = m.rightPath
-	}
+	files := m.visibleFiles(m.activePane)
+	cursor := m.rawCursor(m.activePane)
 	if cursor >= len(files) {
 		return m, nil
 	}
 	m.clipboard = Clipboard{
 		Action: "move",
 		Files:  []fs.Entry{files[cursor]},
-		Source: currentPath,
+		Source: m.rawPath(m.activePane),
 	}
 	m.clipboardOn = true
 	m.opResult = "moved " + files[cursor].Name
@@ -483,12 +534,7 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	var targetPath string
-	if m.activePane == 0 {
-		targetPath = m.rightPath
-	} else {
-		targetPath = m.leftPath
-	}
+	targetPath := m.rawPath(1 - m.activePane)
 
 	var cmds []tea.Cmd
 	for _, file := range m.clipboard.Files {
@@ -506,15 +552,8 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleDelete() (tea.Model, tea.Cmd) {
-	var files []fs.Entry
-	var cursor int
-	if m.activePane == 0 {
-		files = m.leftFiles
-		cursor = m.leftCursor
-	} else {
-		files = m.rightFiles
-		cursor = m.rightCursor
-	}
+	files := m.visibleFiles(m.activePane)
+	cursor := m.rawCursor(m.activePane)
 	if cursor >= len(files) {
 		return m, nil
 	}
@@ -552,18 +591,23 @@ func (m Model) View() tea.View {
 
 	layout := ui.NewLayout(m.width, m.height, m.theme)
 
-	topBar := ui.NewTopBar(m.width, m.theme).Render()
+	topBar := ui.NewTopBar(m.width, m.theme)
+	topBar.Filter = m.filterOf(m.activePane)
 
 	leftPane := ui.NewPane(layout.PaneWidth(), layout.MainAreaHeight(), m.activePane == 0, m.theme)
 	leftPane.Path = m.leftPath
-	leftPane.Files = m.leftFiles
+	leftPane.Filter = m.leftFilter
+	leftPane.Files = m.visibleFiles(0)
 	leftPane.Cursor = m.leftCursor
+	leftPane.TotalFiles = len(m.leftFiles)
 	leftRendered := leftPane.Render()
 
 	rightPane := ui.NewPane(layout.PaneWidth(), layout.MainAreaHeight(), m.activePane == 1, m.theme)
 	rightPane.Path = m.rightPath
-	rightPane.Files = m.rightFiles
+	rightPane.Filter = m.rightFilter
+	rightPane.Files = m.visibleFiles(1)
 	rightPane.Cursor = m.rightCursor
+	rightPane.TotalFiles = len(m.rightFiles)
 	rightRendered := rightPane.Render()
 
 	var previewRendered string
@@ -588,18 +632,19 @@ func (m Model) View() tea.View {
 	}
 
 	bottomBar := ui.NewBottomBar(m.width, m.theme)
-	if m.confirmDelete {
+	if m.filterInput {
+		bottomBar.FilterActive = true
+		bottomBar.FilterInput = m.filterOf(m.activePane)
+	} else if m.confirmDelete {
 		bottomBar.Input = "delete " + filepath.Base(m.deleteTarget) + "? (y/n)"
-	} else {
-		if m.loadErr != nil {
-			bottomBar.Error = m.loadErr.Error()
-		} else if m.opResult != "" {
-			bottomBar.OpResult = m.opResult
-		}
+	} else if m.loadErr != nil {
+		bottomBar.Error = m.loadErr.Error()
+	} else if m.opResult != "" {
+		bottomBar.OpResult = m.opResult
 	}
 	bottomRendered := bottomBar.Render()
 
-	view := layout.Render(topBar, leftRendered, rightRendered, previewRendered, bottomRendered)
+	view := layout.Render(topBar.Render(), leftRendered, rightRendered, previewRendered, bottomRendered)
 
 	return tea.NewView(view)
 }

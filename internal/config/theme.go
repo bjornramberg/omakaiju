@@ -3,8 +3,8 @@ package config
 import (
 	"os"
 
-	"github.com/BurntSushi/toml"
 	"charm.land/lipgloss/v2"
+	"github.com/BurntSushi/toml"
 )
 
 type Theme struct {

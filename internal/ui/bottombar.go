@@ -5,13 +5,15 @@ import (
 )
 
 type BottomBar struct {
-	Width       int
-	Input       string
-	Error       string
-	OpResult    string
-	FuzzyActive bool
-	FuzzyInput  string
-	Theme       config.Theme
+	Width        int
+	Input        string
+	Error        string
+	OpResult     string
+	FuzzyActive  bool
+	FuzzyInput   string
+	FilterActive bool
+	FilterInput  string
+	Theme        config.Theme
 }
 
 func NewBottomBar(width int, theme config.Theme) BottomBar {
@@ -22,6 +24,11 @@ func (b BottomBar) Render() string {
 	if b.FuzzyActive {
 		prompt := b.Theme.AccentText().Render("fuzzy> ")
 		return b.Theme.BottomBar().Width(b.Width).Render(prompt + b.FuzzyInput)
+	}
+
+	if b.FilterActive {
+		prompt := b.Theme.AccentText().Render("filter> ")
+		return b.Theme.BottomBar().Width(b.Width).Render(prompt + b.FilterInput)
 	}
 
 	if b.Error != "" {
