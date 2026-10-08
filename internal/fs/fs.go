@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -44,7 +45,25 @@ func ReadDir(path string) ([]Entry, error) {
 		})
 	}
 
+	SortEntries(result)
 	return result, nil
+}
+
+// SortEntries orders a listing the way a file manager should: directories
+// first, then case-insensitive by name. ReadDir returns raw filesystem order,
+// which is unstable across machines, so callers get a deterministic list.
+func SortEntries(entries []Entry) {
+	sort.Slice(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		if a.IsDir != b.IsDir {
+			return a.IsDir
+		}
+		la, lb := strings.ToLower(a.Name), strings.ToLower(b.Name)
+		if la != lb {
+			return la < lb
+		}
+		return a.Name < b.Name
+	})
 }
 
 func Copy(src, dst string) error {
@@ -199,5 +218,6 @@ func WalkDir(root string) ([]string, error) {
 		}
 		return nil
 	})
+	sort.Strings(files)
 	return files, err
 }

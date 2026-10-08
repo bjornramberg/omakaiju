@@ -134,7 +134,7 @@ func TestFilterNarrowsVisibleFiles(t *testing.T) {
 
 	updated, _ := m.Update(key('/'))
 	m = updated.(Model)
-	if !m.filterInput {
+	if m.mode != inputFilter {
 		t.Fatal("/ should enter filter mode")
 	}
 
@@ -152,7 +152,7 @@ func TestFilterNarrowsVisibleFiles(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(Model)
-	if m.filterInput {
+	if m.mode == inputFilter {
 		t.Fatal("enter should leave filter mode")
 	}
 	if len(m.visibleFiles(0)) != 1 {
@@ -190,8 +190,16 @@ func TestFilterIsPerPane(t *testing.T) {
 func TestPreviewTracksCursor(t *testing.T) {
 	m, dir := fixture(t)
 
-	updated, _ := m.Update(key('j'))
-	m = updated.(Model)
+	// Directories sort first, then alpha/beta; walk to beta.txt explicitly so
+	// the assertion does not depend on listing order.
+	idx := indexOf(m.visibleFiles(0), "beta.txt")
+	if idx < 0 {
+		t.Fatal("beta.txt missing from listing")
+	}
+	for i := 0; i < idx; i++ {
+		updated, _ := m.Update(key('j'))
+		m = updated.(Model)
+	}
 
 	want := filepath.Join(dir, "beta.txt")
 	if m.previewPath != want {
@@ -200,4 +208,13 @@ func TestPreviewTracksCursor(t *testing.T) {
 	if m.previewCachePath != want {
 		t.Fatalf("previewCachePath = %q, want %q", m.previewCachePath, want)
 	}
+}
+
+func indexOf(files []fs.Entry, name string) int {
+	for i, f := range files {
+		if f.Name == name {
+			return i
+		}
+	}
+	return -1
 }
