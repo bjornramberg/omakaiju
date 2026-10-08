@@ -194,7 +194,7 @@ func (m Model) rawPath(pane int) string {
 	return m.rightPath
 }
 
-func (m Model) setPath(pane int, path string) {
+func (m *Model) setPath(pane int, path string) {
 	if pane == 0 {
 		m.leftPath = path
 	} else {
@@ -217,7 +217,7 @@ func (m *Model) setFilter(pane int, q string) {
 	}
 }
 
-func (m Model) setCursor(pane, cursor int) {
+func (m *Model) setCursor(pane, cursor int) {
 	if pane == 0 {
 		m.leftCursor = cursor
 	} else {
