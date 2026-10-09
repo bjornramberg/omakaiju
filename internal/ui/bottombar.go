@@ -13,6 +13,7 @@ type BottomBar struct {
 	FuzzyInput  string
 	Prompt      string
 	PromptInput string
+	Progress    *Progress
 	Theme       config.Theme
 }
 
@@ -40,6 +41,15 @@ func (b BottomBar) Render() string {
 	if b.Input != "" {
 		prompt := b.Theme.AccentText().Render("> ")
 		return b.Theme.BottomBar().Width(b.Width).Render(prompt + b.Input)
+	}
+
+	// An active copy takes over the bar so progress is not hidden behind a
+	// stale result message.
+	if b.Progress != nil {
+		return b.Theme.BottomBar().
+			Width(b.Width).
+			MaxWidth(b.Width).
+			Render(b.Progress.Render(b.Width - 4))
 	}
 
 	if b.OpResult != "" {
