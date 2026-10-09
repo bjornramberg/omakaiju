@@ -33,6 +33,7 @@ make build
 | y | Yank (copy) |
 | m | Mark / unmark entry (press repeatedly to select several) |
 | p | Move marked entries to the other pane, or paste the yanked file |
+| Esc | Cancel an in-flight copy (removes the partial file) |
 | d | Delete |
 | a | Add file/directory |
 | r | Rename |

@@ -28,6 +28,14 @@ type fileOpMsg struct {
 	err error
 }
 
+// copyProgressMsg reports one chunk of an in-flight copy and asks for the next
+// step, or signals completion.
+type copyProgressMsg struct {
+	copier *fs.Copier
+	done   bool
+	err    error
+}
+
 type themeReloadedMsg struct {
 	theme config.Theme
 	err   error
@@ -78,6 +86,11 @@ type Model struct {
 	// marked accumulates entries selected with m for a bulk move to the other
 	// pane. Keyed by absolute path so it survives directory changes.
 	marked map[string]fs.Entry
+
+	// copier drives an in-flight copy so long copies can report progress and be
+	// cancelled. Small copies skip this and use the blocking path.
+	copier    *fs.Copier
+	copyFiles int
 
 	themeWatcher   *fs.Watcher
 	previewPath    string
@@ -135,6 +148,30 @@ func copyCmd(src, dst string) tea.Cmd {
 	return func() tea.Msg {
 		err := fs.CopyRecursive(src, dst)
 		return fileOpMsg{err: err}
+	}
+}
+
+// copyProgressThreshold is the size below which a copy runs synchronously.
+// Showing a bar for a handful of bytes only produces a one-frame flash, so
+// small copies keep the simple path and just report a result.
+const copyProgressThreshold = 1 << 20
+
+// startCopyCmd builds the copier and performs the first step.
+func startCopyCmd(srcs []string, dstDir string) tea.Cmd {
+	return func() tea.Msg {
+		copier, err := fs.NewCopier(srcs, dstDir)
+		if err != nil {
+			return fileOpMsg{err: err}
+		}
+		return copyProgressMsg{copier: copier}
+	}
+}
+
+// stepCopyCmd advances the copier by one chunk.
+func stepCopyCmd(copier *fs.Copier) tea.Cmd {
+	return func() tea.Msg {
+		done, err := copier.Step()
+		return copyProgressMsg{copier: copier, done: done, err: err}
 	}
 }
 
@@ -328,6 +365,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updatePreview()
 		return m, nil
 
+	case copyProgressMsg:
+		// The copier is owned by the model; adopt it and drive the next step.
+		m.copier = msg.copier
+
+		if msg.err != nil {
+			m.finishCopy()
+			m.loadErr = msg.err
+			return m, tea.Batch(
+				loadDirCmd(0, m.leftPath),
+				loadDirCmd(1, m.rightPath),
+			)
+		}
+
+		if msg.done {
+			files := m.copyFiles
+			m.finishCopy()
+			m.opResult = fmt.Sprintf("copied %d file(s)", files)
+			return m, tea.Batch(
+				loadDirCmd(0, m.leftPath),
+				loadDirCmd(1, m.rightPath),
+			)
+		}
+
+		return m, stepCopyCmd(msg.copier)
+
 	case fileOpMsg:
 		if msg.err != nil {
 			m.opResult = ""
@@ -367,6 +429,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.mode != inputNone {
 			return m.handleInputKeys(msg)
+		}
+
+		// An in-flight copy claims esc, but only once the modal prompts above
+		// have had their chance.
+		if m.copier != nil {
+			if msg.String() == "esc" {
+				return m.cancelCopy()
+			}
+			return m, nil
 		}
 
 		if m.previewFocused {
@@ -670,9 +741,45 @@ func (m Model) handleMove() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// finishCopy releases the copier and restores normal operation.
+func (m *Model) finishCopy() {
+	m.copier = nil
+	m.copyFiles = 0
+}
+
+// cancelCopy aborts an in-flight copy, removing the partially written file.
+func (m Model) cancelCopy() (tea.Model, tea.Cmd) {
+	if m.copier == nil {
+		return m, nil
+	}
+	if err := m.copier.Abort(); err != nil {
+		m.loadErr = err
+	}
+	m.finishCopy()
+	m.opResult = "copy cancelled"
+	return m, tea.Batch(
+		loadDirCmd(0, m.leftPath),
+		loadDirCmd(1, m.rightPath),
+	)
+}
+
+// copyTotalBytes sums the size of every staged entry so the copy path can decide
+// whether the work is large enough to warrant a progress bar.
+func copyTotalBytes(files []fs.Entry) int64 {
+	var total int64
+	for _, f := range files {
+		total += f.Size
+	}
+	return total
+}
+
 // handlePaste moves everything marked with m to the other pane, falling back to
 // the single file staged by y when nothing is marked.
 func (m Model) handlePaste() (tea.Model, tea.Cmd) {
+	if m.copier != nil {
+		m.opResult = "copy in progress"
+		return m, nil
+	}
 	if len(m.marked) > 0 {
 		return m.pasteMarks()
 	}
@@ -681,6 +788,20 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 	}
 
 	targetPath := m.rawPath(1 - m.activePane)
+
+	// Large copies run through the steppable copier so progress is visible and
+	// the operation can be cancelled.
+	if m.clipboard.Action == "copy" {
+		if total := copyTotalBytes(m.clipboard.Files); total >= copyProgressThreshold {
+			srcs := make([]string, 0, len(m.clipboard.Files))
+			for _, f := range m.clipboard.Files {
+				srcs = append(srcs, f.Path)
+			}
+			m.clipboardOn = false
+			m.copyFiles = len(m.clipboard.Files)
+			return m, startCopyCmd(srcs, targetPath)
+		}
+	}
 
 	var cmds []tea.Cmd
 	for _, file := range m.clipboard.Files {
@@ -840,7 +961,10 @@ func (m Model) View() tea.View {
 		bottomBar.Prompt = "rename"
 		bottomBar.PromptInput = m.inputBuf
 	default:
-		if m.confirmDelete {
+		if m.copier != nil {
+			progress := ui.NewProgress(m.copier, m.theme)
+			bottomBar.Progress = &progress
+		} else if m.confirmDelete {
 			bottomBar.Input = "delete " + filepath.Base(m.deleteTarget) + "? (y/n)"
 		} else if m.loadErr != nil {
 			bottomBar.Error = m.loadErr.Error()

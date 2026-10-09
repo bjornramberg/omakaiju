@@ -510,3 +510,177 @@ func TestArchivePreviewIsCached(t *testing.T) {
 		t.Error("View should not re-list the archive")
 	}
 }
+
+// yankCopy stages a file and returns a model ready for paste.
+func yankCopy(t *testing.T, m Model, name string) Model {
+	t.Helper()
+	m = moveCursorTo(t, m, name)
+	updated, _ := m.Update(key('y'))
+	return updated.(Model)
+}
+
+func TestSmallCopyUsesBlockingPath(t *testing.T) {
+	m, _, _ := twoPaneFixture(t)
+
+	// Well under the 1 MiB threshold, so no progress job should start.
+	small := filepath.Join(m.leftPath, "small.bin")
+	if err := os.WriteFile(small, make([]byte, 1024), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := fs.ReadDir(m.leftPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.leftFiles = files
+
+	m = yankCopy(t, m, "small.bin")
+	updated, cmd := m.Update(key('p'))
+	m = updated.(Model)
+
+	if m.copier != nil {
+		t.Error("a small copy should not create a progress job")
+	}
+	if cmd == nil {
+		t.Fatal("small copy should still dispatch a copy command")
+	}
+	requireNoOpErrors(t, runBatch(t, cmd))
+}
+
+func TestLargeCopyStartsProgressJob(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+
+	// Larger than the 1 MiB threshold so the steppable copier is used.
+	big := filepath.Join(m.leftPath, "big.bin")
+	if err := os.WriteFile(big, make([]byte, 3<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := fs.ReadDir(m.leftPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.leftFiles = files
+
+	m = yankCopy(t, m, "big.bin")
+	updated, cmd := m.Update(key('p'))
+	m = updated.(Model)
+
+	if m.copier != nil {
+		t.Fatal("the copier should be created by the returned command, not inline")
+	}
+	if m.copyFiles != 1 {
+		t.Errorf("copyFiles = %d, want 1", m.copyFiles)
+	}
+
+	// Run the creation command to adopt the copier.
+	if _, ok := cmd().(copyProgressMsg); !ok {
+		t.Fatal("expected a copyProgressMsg to start the job")
+	}
+
+	// Drive the job to completion.
+	copier, err := fs.NewCopier([]string{big}, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _ = m.Update(copyProgressMsg{copier: copier})
+	m = updated.(Model)
+	if m.copier == nil {
+		t.Error("model should adopt the copier")
+	}
+
+	for {
+		next := stepCopyCmd(m.copier)
+		msg, ok := next().(copyProgressMsg)
+		if !ok {
+			t.Fatal("expected progress messages while stepping")
+		}
+		updated, _ = m.Update(msg)
+		m = updated.(Model)
+		if msg.done {
+			break
+		}
+	}
+
+	if m.copier != nil {
+		t.Error("copier should be released on completion")
+	}
+	if m.copyFiles != 0 {
+		t.Error("copyFiles should be reset on completion")
+	}
+	info, err := os.Stat(filepath.Join(dst, "big.bin"))
+	if err != nil {
+		t.Fatalf("destination missing: %v", err)
+	}
+	if info.Size() != 3<<20 {
+		t.Errorf("copied size = %d, want %d", info.Size(), 3<<20)
+	}
+}
+
+func TestEscapeCancelsCopyAndRemovesPartial(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+
+	big := filepath.Join(m.leftPath, "big.bin")
+	if err := os.WriteFile(big, make([]byte, 4<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := fs.ReadDir(m.leftPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.leftFiles = files
+
+	m = yankCopy(t, m, "big.bin")
+
+	copier, err := fs.NewCopier([]string{big}, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _ := m.Update(copyProgressMsg{copier: copier})
+	m = updated.(Model)
+
+	// Take one step so a partial file exists.
+	msg := stepCopyCmd(m.copier)().(copyProgressMsg)
+	updated, _ = m.Update(msg)
+	m = updated.(Model)
+
+	if _, err := os.Stat(filepath.Join(dst, "big.bin")); err != nil {
+		t.Fatalf("partial file should exist mid-copy: %v", err)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = updated.(Model)
+
+	if m.copier != nil {
+		t.Error("cancel should release the copier")
+	}
+	if m.opResult != "copy cancelled" {
+		t.Errorf("opResult = %q, want %q", m.opResult, "copy cancelled")
+	}
+	if _, err := os.Stat(filepath.Join(dst, "big.bin")); !os.IsNotExist(err) {
+		t.Error("cancel should remove the partial destination file")
+	}
+}
+
+func TestKeysIgnoredWhileCopying(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+
+	big := filepath.Join(m.leftPath, "big.bin")
+	if err := os.WriteFile(big, make([]byte, 4<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.leftFiles, _ = fs.ReadDir(m.leftPath)
+	m = yankCopy(t, m, "big.bin")
+
+	copier, err := fs.NewCopier([]string{big}, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _ := m.Update(copyProgressMsg{copier: copier})
+	m = updated.(Model)
+
+	before := m.leftCursor
+	updated, _ = m.Update(key('j'))
+	m = updated.(Model)
+	if m.leftCursor != before {
+		t.Error("navigation should be ignored while a copy runs")
+	}
+}
