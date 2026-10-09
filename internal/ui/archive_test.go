@@ -16,7 +16,7 @@ func TestArchiveLinesFormatsEntries(t *testing.T) {
 		{Name: "src", IsDir: true},
 	}
 
-	lines := ArchiveLines(entries, false, theme)
+	lines := ArchiveLines(entries, false, theme, 60)
 	if len(lines) != 2 {
 		t.Fatalf("lines = %d, want 2", len(lines))
 	}
@@ -34,7 +34,7 @@ func TestArchiveLinesFormatsEntries(t *testing.T) {
 }
 
 func TestArchiveLinesMarksTruncation(t *testing.T) {
-	lines := ArchiveLines([]fs.ArchiveEntry{{Name: "a.txt"}}, true, config.DefaultTheme())
+	lines := ArchiveLines([]fs.ArchiveEntry{{Name: "a.txt"}}, true, config.DefaultTheme(), 60)
 	if len(lines) != 2 {
 		t.Fatalf("lines = %d, want 2 with truncation note", len(lines))
 	}
@@ -49,7 +49,7 @@ func TestRenderArchiveTruncatesToHeight(t *testing.T) {
 	for i := range entries {
 		entries[i] = fs.ArchiveEntry{Name: "file" + itoa(i) + ".txt", Size: 10}
 	}
-	lines := ArchiveLines(entries, false, theme)
+	lines := ArchiveLines(entries, false, theme, 26)
 
 	p := NewPreview(30, 16, theme)
 	p = p.SetPath("/tmp/big.zip")

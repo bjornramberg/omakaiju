@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"omakaiju/internal/fs"
@@ -489,15 +488,15 @@ func TestArchivePreviewIsCached(t *testing.T) {
 	if m.previewCachePath != zipPath {
 		t.Errorf("previewCachePath = %q, want %q", m.previewCachePath, zipPath)
 	}
-	if !strings.Contains(strings.Join(m.previewArchive, "\n"), "hello.txt") {
-		t.Error("listing should contain the archive member")
+	if len(m.previewArchive) == 0 || m.previewArchive[0].Name != "hello.txt" {
+		t.Errorf("cached entries = %v, want hello.txt", m.previewArchive)
 	}
 
 	// Re-running the preview update with the same selection must reuse the
 	// cached listing rather than re-listing the archive.
-	before := strings.Join(m.previewArchive, "\n")
+	before := m.previewArchive[0].Name
 	m.updatePreview()
-	if after := strings.Join(m.previewArchive, "\n"); after != before {
+	if len(m.previewArchive) == 0 || m.previewArchive[0].Name != before {
 		t.Error("archive listing should be reused while the selection is unchanged")
 	}
 	if m.previewCachePath != zipPath {
@@ -507,7 +506,7 @@ func TestArchivePreviewIsCached(t *testing.T) {
 	// Rendering must not disturb the cache.
 	m.width, m.height = 120, 40
 	_ = m.View()
-	if strings.Join(m.previewArchive, "\n") != before {
+	if len(m.previewArchive) == 0 || m.previewArchive[0].Name != before {
 		t.Error("View should not re-list the archive")
 	}
 }

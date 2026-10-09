@@ -11,23 +11,29 @@ import (
 )
 
 // ArchiveLines formats archive entries for the preview panel: icon, name, and a
-// faint size, with directories in the directory style.
-func ArchiveLines(entries []fs.ArchiveEntry, truncated bool, theme config.Theme) []string {
+// faint size, with directories in the directory style. maxCells bounds each row
+// so long member paths cannot wrap and break the panel height.
+func ArchiveLines(entries []fs.ArchiveEntry, truncated bool, theme config.Theme, maxCells int) []string {
 	lines := make([]string, 0, len(entries)+1)
 
 	for _, e := range entries {
 		name := e.Name
-		var style = theme.FileItem()
+		style := theme.FileItem()
 		if e.IsDir {
 			name = strings.TrimSuffix(name, "/") + "/"
 			style = theme.FileItemDir()
 		}
 
-		row := fmt.Sprintf("%s %s", icons.ForFile(e.Name), name)
+		icon := icons.ForFile(e.Name)
+		if e.IsDir {
+			icon = icons.ForDir()
+		}
+
+		row := fmt.Sprintf("%s %s", icon, TruncateName(name, maxCells-2-DisplayWidth(icon)))
 		if !e.IsDir {
 			row += "  " + theme.StatusText().Render(fs.FormatSize(e.Size))
 		}
-		lines = append(lines, style.Render(row))
+		lines = append(lines, style.UnsetPaddingLeft().UnsetPaddingRight().Render(row))
 	}
 
 	if truncated {
