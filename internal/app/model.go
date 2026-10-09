@@ -86,6 +86,7 @@ type Model struct {
 	previewCache     []string
 	previewCachePath string
 	previewHL        []string
+	previewArchive   []string
 
 	fuzzyActive   bool
 	fuzzyInput    string
@@ -273,15 +274,23 @@ func (m *Model) updatePreview() {
 	if m.previewPath != m.previewCachePath {
 		m.previewCache = nil
 		m.previewHL = nil
+		m.previewArchive = nil
 		m.previewCachePath = ""
 
 		if m.previewPath != "" {
 			fileType := fs.DetectFileType(m.previewPath)
-			if fileType == fs.FileTypeText {
+			switch fileType {
+			case fs.FileTypeText:
 				lines, _ := fs.ReadFileHead(m.previewPath, 1000)
 				m.previewCache = lines
 				m.previewHL = ui.HighlightLines(m.previewPath, lines, m.theme)
 				m.previewCachePath = m.previewPath
+			case fs.FileTypeArchive:
+				entries, truncated, err := fs.ListArchive(m.previewPath)
+				if err == nil {
+					m.previewArchive = ui.ArchiveLines(entries, truncated, m.theme)
+					m.previewCachePath = m.previewPath
+				}
 			}
 		}
 	}
@@ -791,17 +800,18 @@ func (m Model) View() tea.View {
 	rightRendered := rightPane.Render()
 
 	var previewRendered string
-	if m.previewPath != "" && m.previewCache != nil {
-		preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
-		preview = preview.SetPath(m.previewPath)
-		previewRendered = preview.RenderText(m.previewCache, m.previewHL)
-	} else if m.previewPath != "" {
-		fileType := fs.DetectFileType(m.previewPath)
-		preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
-		previewRendered = preview.RenderFile(m.previewPath, fileType)
-	} else {
-		preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
+	preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
+	preview = preview.SetPath(m.previewPath)
+
+	switch {
+	case m.previewPath == "":
 		previewRendered = preview.RenderMetadata("")
+	case m.previewCache != nil:
+		previewRendered = preview.RenderText(m.previewCache, m.previewHL)
+	case m.previewArchive != nil:
+		previewRendered = preview.RenderArchive(m.previewArchive)
+	default:
+		previewRendered = preview.RenderFile(m.previewPath, fs.DetectFileType(m.previewPath))
 	}
 
 	if m.previewFocused {

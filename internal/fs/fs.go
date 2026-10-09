@@ -153,7 +153,7 @@ func DetectFileType(path string) FileType {
 		return FileTypeText
 	case ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp":
 		return FileTypeImage
-	case ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar":
+	case ".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar":
 		return FileTypeArchive
 	}
 

@@ -35,7 +35,11 @@ func (p Preview) RenderFile(path string, fileType fs.FileType) string {
 	case fs.FileTypeImage:
 		return p.RenderImage(path)
 	case fs.FileTypeArchive:
-		return p.RenderArchive(path)
+		entries, truncated, err := fs.ListArchive(path)
+		if err != nil {
+			return p.ArchiveNotice(path, archiveMessage(err))
+		}
+		return p.RenderArchive(ArchiveLines(entries, truncated, p.Theme))
 	case fs.FileTypeDirectory:
 		return p.RenderDirectory(path)
 	default:
@@ -139,14 +143,47 @@ func (p Preview) RenderImage(path string) string {
 		Render(header + "\n\n" + size + "\n\n" + footer)
 }
 
-func (p Preview) RenderArchive(path string) string {
-	header := p.Theme.AccentText().Bold(true).Render(filepath.Base(path))
-	footer := p.Theme.StatusText().Render("archive contents not available")
+// RenderArchive lists the contents of an archive. Entries are pre-formatted by
+// the caller and cached, so this only truncates and frames them.
+func (p Preview) RenderArchive(lines []string) string {
+	chrome := 8
+	maxVisible := p.Height - chrome
+	if maxVisible < 1 {
+		maxVisible = 1
+	}
+
+	totalLines := len(lines)
+	body := lines
+	if len(body) > maxVisible {
+		body = body[:maxVisible]
+	}
+
+	header := p.Theme.AccentText().Bold(true).Render(filepath.Base(p.path))
+	content := strings.Join(body, "\n")
+
+	var footer string
+	switch {
+	case totalLines > maxVisible:
+		footer = p.Theme.StatusText().Render(fmt.Sprintf("... (%d more entries)", totalLines-maxVisible))
+	case totalLines == 1:
+		footer = p.Theme.StatusText().Render("1 entry")
+	default:
+		footer = p.Theme.StatusText().Render(fmt.Sprintf("%d entries", totalLines))
+	}
 
 	return p.Theme.PreviewPanel().
 		Width(p.Width).
 		MaxHeight(p.Height).
-		Render(header + "\n\n" + footer)
+		Render(header + "\n\n" + content + "\n\n" + footer)
+}
+
+// ArchiveNotice frames a non-listable archive message in the preview panel.
+func (p Preview) ArchiveNotice(path, message string) string {
+	header := p.Theme.AccentText().Bold(true).Render(filepath.Base(path))
+	return p.Theme.PreviewPanel().
+		Width(p.Width).
+		MaxHeight(p.Height).
+		Render(header + "\n\n" + p.Theme.StatusText().Render(message))
 }
 
 func (p Preview) RenderDirectory(path string) string {
