@@ -208,3 +208,111 @@ func TestPaneEveryRowIsOneLine(t *testing.T) {
 		}
 	}
 }
+
+func TestTruncateEnd(t *testing.T) {
+	if got := TruncateEnd("short", 20); got != "short" {
+		t.Errorf("short line altered: %q", got)
+	}
+	got := TruncateEnd("abcdefghij", 6)
+	if w := DisplayWidth(got); w > 6 {
+		t.Errorf("width = %d, want <= 6", w)
+	}
+	if !strings.Contains(got, ellipsis) {
+		t.Errorf("truncated line should end with an ellipsis: %q", got)
+	}
+	if !strings.HasPrefix(got, "abc") {
+		t.Errorf("truncation should keep the line start: %q", got)
+	}
+}
+
+func TestTruncateEndStripsOverflowStyles(t *testing.T) {
+	styled := "\x1b[31mabcdefghij\x1b[0m"
+	got := TruncateEnd(styled, 6)
+	if DisplayWidth(stripANSI(got)) > 6 {
+		t.Errorf("visible width = %d, want <= 6", DisplayWidth(stripANSI(got)))
+	}
+}
+
+// A long source line must not spill past the preview border and bleed into the
+// neighbouring pane.
+func TestPreviewTextDoesNotBleed(t *testing.T) {
+	theme := config.DefaultTheme()
+	long := strings.Repeat("verylongsourcecontent", 12)
+
+	for _, width := range []int{16, 24, 40, 64} {
+		p := NewPreview(width, 16, theme)
+		p = p.SetPath("/tmp/long.go")
+		out := p.RenderText([]string{long, "short"}, nil)
+
+		for _, line := range strings.Split(stripANSI(out), "\n") {
+			if w := DisplayWidth(line); w > width {
+				t.Errorf("width %d: line is %d cells: %q", width, w, line)
+			}
+		}
+	}
+}
+
+func TestPreviewHighlightedTextDoesNotBleed(t *testing.T) {
+	theme := config.DefaultTheme()
+	highlighted := Highlight("x.go", strings.Repeat("package main; ", 30), OmarchyStyle(theme))
+	lines := splitLines(highlighted)
+
+	for _, width := range []int{16, 24, 40} {
+		p := NewPreview(width, 16, theme)
+		p = p.SetPath("/tmp/x.go")
+		out := p.RenderText(nil, lines)
+
+		for _, line := range strings.Split(stripANSI(out), "\n") {
+			if w := DisplayWidth(line); w > width {
+				t.Errorf("width %d: highlighted line is %d cells", width, w)
+			}
+		}
+	}
+}
+
+// Highlighting resets styling per line, so clipping a line mid-colour must not
+// bleed colour into the following row.
+func TestPreviewClipDoesNotBleedStyle(t *testing.T) {
+	theme := config.DefaultTheme()
+	highlighted := Highlight("x.go", "package main\nfunc main() {}\n", OmarchyStyle(theme))
+	lines := splitLines(highlighted)
+
+	p := NewPreview(12, 16, theme)
+	p = p.SetPath("/tmp/x.go")
+	out := p.RenderText(nil, lines)
+
+	if !strings.Contains(out, "\x1b[0m") && !strings.Contains(out, "\x1b[m") {
+		t.Error("clipped lines should still terminate their styling")
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Count(line, "\x1b[") > 0 && !strings.Contains(line, "\x1b[0m") && !strings.Contains(line, "\x1b[m") {
+			t.Errorf("line has styling without a reset: %q", line)
+		}
+	}
+}
+
+func TestPreviewHeaderDoesNotBleed(t *testing.T) {
+	theme := config.DefaultTheme()
+	long := "/tmp/" + strings.Repeat("nested-directory-name", 6) + "/file.txt"
+
+	p := NewPreview(20, 16, theme)
+	p = p.SetPath(long)
+	out := stripANSI(p.RenderText([]string{"body"}, nil))
+
+	for _, line := range strings.Split(out, "\n") {
+		if w := DisplayWidth(line); w > 20 {
+			t.Errorf("header line is %d cells: %q", w, line)
+		}
+	}
+}
+
+func TestPreviewContentWidth(t *testing.T) {
+	p := NewPreview(40, 20, config.DefaultTheme())
+	if got := p.ContentWidth(); got != 34 {
+		t.Errorf("ContentWidth() = %d, want 34", got)
+	}
+	// Degenerate widths must not go negative.
+	if got := NewPreview(3, 1, config.DefaultTheme()).ContentWidth(); got < 1 {
+		t.Errorf("degenerate ContentWidth() = %d, want >= 1", got)
+	}
+}

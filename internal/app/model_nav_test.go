@@ -259,3 +259,127 @@ func TestPreviewIsHighlightedForSourceFile(t *testing.T) {
 		t.Error("expected ANSI sequences in highlighted preview")
 	}
 }
+
+// loadDir simulates the async directory load the model dispatches for a pane.
+func loadDir(t *testing.T, m Model, pane int) Model {
+	t.Helper()
+	path := m.rawPath(pane)
+	files, err := fs.ReadDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _ := m.Update(dirLoadedMsg{pane: pane, path: path, files: files})
+	return updated.(Model)
+}
+
+// twoDirFixture builds a parent holding two directories. Directories sort
+// first, so entering the second one means the correct restore index is 1 and a
+// missing restore shows up as 0.
+func twoDirFixture(t *testing.T) (Model, string) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range []string{"aaa", "zzz"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := fs.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "none.toml")})
+	m.leftPath, m.leftFiles = dir, files
+	m.rightPath, m.rightFiles = dir, files
+	m.updatePreview()
+	return m, dir
+}
+
+func TestGoingUpRestoresCursorOnEnteredFolder(t *testing.T) {
+	m, dir := twoDirFixture(t)
+
+	// Enter "zzz", which is not the first entry in the parent listing.
+	m = moveCursorTo(t, m, "zzz")
+	if idx := indexOf(m.visibleFiles(0), "zzz"); idx != 1 {
+		t.Fatalf("setup: zzz is at index %d, want 1", idx)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+	m = loadDir(t, m, 0)
+	if m.leftPath != filepath.Join(dir, "zzz") {
+		t.Fatalf("leftPath = %q, want the zzz subdir", m.leftPath)
+	}
+
+	// Go back up: the cursor must land on zzz again, not at the top.
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'h'})
+	m = updated.(Model)
+	m = loadDir(t, m, 0)
+
+	if m.leftPath != dir {
+		t.Fatalf("leftPath = %q, want %q", m.leftPath, dir)
+	}
+	if m.leftCursor != 1 {
+		t.Errorf("leftCursor = %d, want 1 (the directory we came from)", m.leftCursor)
+	}
+}
+
+func TestRestoreFallsBackToTopWhenFolderGone(t *testing.T) {
+	m, dir := fixture(t)
+
+	m = moveCursorTo(t, m, "subdir")
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+	m = loadDir(t, m, 0)
+
+	// Remove the directory we are about to navigate out of.
+	if err := os.Remove(filepath.Join(dir, "subdir")); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'h'})
+	m = updated.(Model)
+	m = loadDir(t, m, 0)
+
+	if m.leftCursor != 0 {
+		t.Errorf("leftCursor = %d, want 0 when the target vanished", m.leftCursor)
+	}
+}
+
+func TestPlainReloadStillStartsAtTop(t *testing.T) {
+	m, _ := fixture(t)
+	m = moveCursorTo(t, m, "beta.txt")
+
+	// A refresh carries no restore target, so the cursor resets.
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'r'})
+	m = updated.(Model)
+	m = loadDir(t, m, 0)
+
+	if m.leftCursor != 0 {
+		t.Errorf("leftCursor = %d, want 0 after a refresh", m.leftCursor)
+	}
+}
+
+func TestRestoreIsPerPane(t *testing.T) {
+	m, dir := fixture(t)
+
+	m = moveCursorTo(t, m, "subdir")
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+	m = loadDir(t, m, 0)
+
+	// Navigating up in the left pane must not disturb the right pane.
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'h'})
+	m = updated.(Model)
+	m = loadDir(t, m, 0)
+
+	if m.rightRestore != "" {
+		t.Errorf("rightRestore = %q, want empty", m.rightRestore)
+	}
+	if m.leftPath != dir {
+		t.Errorf("leftPath = %q, want %q", m.leftPath, dir)
+	}
+}

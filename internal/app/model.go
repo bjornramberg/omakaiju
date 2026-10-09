@@ -92,6 +92,12 @@ type Model struct {
 	copier    *fs.Copier
 	copyFiles int
 
+	// leftRestore/rightRestore hold the directory name the cursor should return
+	// to after going up a level, so leaving and re-entering a folder keeps the
+	// position instead of jumping to the top.
+	leftRestore  string
+	rightRestore string
+
 	themeWatcher   *fs.Watcher
 	previewPath    string
 	previewFocused bool
@@ -289,6 +295,33 @@ func (m Model) visibleFiles(pane int) []fs.Entry {
 	return nav.FilterEntries(m.rawFiles(pane), m.filterOf(pane))
 }
 
+func (m *Model) setRestore(pane int, name string) {
+	if pane == 0 {
+		m.leftRestore = name
+	} else {
+		m.rightRestore = name
+	}
+}
+
+func (m *Model) takeRestore(pane int) string {
+	if pane == 0 {
+		name := m.leftRestore
+		m.leftRestore = ""
+		return name
+	}
+	name := m.rightRestore
+	m.rightRestore = ""
+	return name
+}
+
+func (m *Model) clearRestore(pane int) {
+	if pane == 0 {
+		m.leftRestore = ""
+	} else {
+		m.rightRestore = ""
+	}
+}
+
 func (m *Model) clampCursor(pane int) {
 	cursor := m.rawCursor(pane)
 	if n := len(m.visibleFiles(pane)); cursor > n-1 {
@@ -361,6 +394,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rightFiles = msg.files
 			m.rightCursor = 0
 			m.rightFilter = ""
+		}
+		// A load triggered by going up should land on the directory we came
+		// from; every other load starts at the top as before.
+		if name := m.takeRestore(msg.pane); name != "" {
+			for i, f := range m.rawFiles(msg.pane) {
+				if f.Name == name {
+					m.setCursor(msg.pane, i)
+					break
+				}
+			}
+			m.clampCursor(msg.pane)
 		}
 		m.updatePreview()
 		return m, nil
@@ -486,6 +530,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			currentPath := m.rawPath(m.activePane)
 			parent := filepath.Dir(currentPath)
 			if parent != currentPath {
+				// Record the directory being left so the parent listing can
+				// put the cursor back on it. The name comes from the path,
+				// not the current listing, which may have changed since entry.
+				m.setRestore(m.activePane, filepath.Base(currentPath))
 				m.setPath(m.activePane, parent)
 				return m, loadDirCmd(m.activePane, parent)
 			}
