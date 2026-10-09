@@ -46,6 +46,22 @@ func TruncateName(name string, maxCells int) string {
 	return truncateMiddle(name, maxCells)
 }
 
+// TruncateEnd clips s to maxCells cells, marking the cut with a trailing
+// ellipsis. Used for preview body lines, where the end of the line is the least
+// informative part and clipping must not re-wrap.
+func TruncateEnd(s string, maxCells int) string {
+	if maxCells <= 0 {
+		return ""
+	}
+	if ansi.StringWidth(s) <= maxCells {
+		return s
+	}
+	if maxCells == 1 {
+		return ellipsis
+	}
+	return ansi.Truncate(s, maxCells-1, "") + ellipsis
+}
+
 // truncateMiddle cuts s to maxCells cells with the ellipsis in the middle.
 // Both halves are cell-budgeted so wide glyphs cannot push the result past
 // maxCells and trigger a wrap.
