@@ -12,14 +12,16 @@ import (
 type FileItem struct {
 	Entry  fs.Entry
 	Active bool
+	Marked bool
 	Theme  config.Theme
 	Width  int
 }
 
-func NewFileItem(entry fs.Entry, active bool, theme config.Theme, width int) FileItem {
+func NewFileItem(entry fs.Entry, active bool, marked bool, theme config.Theme, width int) FileItem {
 	return FileItem{
 		Entry:  entry,
 		Active: active,
+		Marked: marked,
 		Theme:  theme,
 		Width:  width,
 	}
@@ -40,11 +42,17 @@ func (f FileItem) Render() string {
 		style = f.Theme.FileItem()
 	}
 
+	// Fixed-width marker column so marked and unmarked rows stay aligned.
+	marker := " "
+	if f.Marked {
+		marker = f.Theme.AccentText().Render("*")
+	}
+
 	if f.Active {
 		style = f.Theme.FileItemActive()
 	}
 
-	content := fmt.Sprintf("%s %s", icon, name)
+	content := fmt.Sprintf("%s %s %s", marker, icon, name)
 
 	return style.Width(f.Width).Render(content)
 }

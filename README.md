@@ -31,8 +31,8 @@ make build
 | Enter | Open directory / file |
 | Tab | Toggle active pane |
 | y | Yank (copy) |
-| m | Move |
-| p | Paste |
+| m | Mark / unmark entry (press repeatedly to select several) |
+| p | Move marked entries to the other pane, or paste the yanked file |
 | d | Delete |
 | a | Add file/directory |
 | r | Rename |
