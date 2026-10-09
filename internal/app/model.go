@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,6 +74,10 @@ type Model struct {
 	confirmDelete bool
 	deleteTarget  string
 	opResult      string
+
+	// marked accumulates entries selected with m for a bulk move to the other
+	// pane. Keyed by absolute path so it survives directory changes.
+	marked map[string]fs.Entry
 
 	themeWatcher   *fs.Watcher
 	previewPath    string
@@ -625,23 +630,38 @@ func (m Model) handleYank() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleMove toggles the cursor entry in the marked set. Pressing m again on
+// an already-marked entry unmarks it, so several files or folders can be staged
+// before moving them to the other pane with p.
 func (m Model) handleMove() (tea.Model, tea.Cmd) {
 	files := m.visibleFiles(m.activePane)
 	cursor := m.rawCursor(m.activePane)
 	if cursor >= len(files) {
 		return m, nil
 	}
-	m.clipboard = Clipboard{
-		Action: "move",
-		Files:  []fs.Entry{files[cursor]},
-		Source: m.rawPath(m.activePane),
+
+	entry := files[cursor]
+	if m.marked == nil {
+		m.marked = make(map[string]fs.Entry)
 	}
-	m.clipboardOn = true
-	m.opResult = "moved " + files[cursor].Name
+
+	if _, exists := m.marked[entry.Path]; exists {
+		delete(m.marked, entry.Path)
+		m.opResult = fmt.Sprintf("unmarked %s (%d)", entry.Name, len(m.marked))
+		return m, nil
+	}
+
+	m.marked[entry.Path] = entry
+	m.opResult = fmt.Sprintf("marked %s (%d)", entry.Name, len(m.marked))
 	return m, nil
 }
 
+// handlePaste moves everything marked with m to the other pane, falling back to
+// the single file staged by y when nothing is marked.
 func (m Model) handlePaste() (tea.Model, tea.Cmd) {
+	if len(m.marked) > 0 {
+		return m.pasteMarks()
+	}
 	if !m.clipboardOn {
 		return m, nil
 	}
@@ -659,7 +679,42 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 	}
 
 	m.clipboardOn = false
-	m.opResult = "pasted " + string(rune(len(m.clipboard.Files))) + " file(s)"
+	m.opResult = fmt.Sprintf("pasted %d file(s)", len(m.clipboard.Files))
+	return m, tea.Batch(cmds...)
+}
+
+// pasteMarks moves the marked set into the inactive pane. Entries that vanished
+// from disk, or that already sit in the destination, are skipped so a stale
+// mark cannot fail the whole batch.
+func (m Model) pasteMarks() (tea.Model, tea.Cmd) {
+	targetPath := m.rawPath(1 - m.activePane)
+
+	var cmds []tea.Cmd
+	moved, skipped := 0, 0
+	for _, entry := range m.marked {
+		if _, err := os.Stat(entry.Path); err != nil {
+			skipped++
+			continue
+		}
+		dst := filepath.Join(targetPath, entry.Name)
+		if filepath.Clean(dst) == filepath.Clean(entry.Path) {
+			skipped++
+			continue
+		}
+		cmds = append(cmds, moveCmd(entry.Path, dst))
+		moved++
+	}
+
+	m.marked = nil
+
+	switch {
+	case moved == 0:
+		m.opResult = "nothing to move"
+	case skipped > 0:
+		m.opResult = fmt.Sprintf("moved %d, skipped %d", moved, skipped)
+	default:
+		m.opResult = fmt.Sprintf("moved %d file(s)", moved)
+	}
 	return m, tea.Batch(cmds...)
 }
 
@@ -706,12 +761,21 @@ func (m Model) View() tea.View {
 	topBar := ui.NewTopBar(m.width, m.theme)
 	topBar.Filter = m.filterOf(m.activePane)
 
+	markedSet := make(map[string]bool, len(m.marked))
+	for path := range m.marked {
+		markedSet[path] = true
+	}
+
 	leftPane := ui.NewPane(layout.PaneWidth(), layout.MainAreaHeight(), m.activePane == 0, m.theme)
 	leftPane.Path = m.leftPath
 	leftPane.Filter = m.leftFilter
 	leftPane.Files = m.visibleFiles(0)
 	leftPane.Cursor = m.leftCursor
 	leftPane.TotalFiles = len(m.leftFiles)
+	leftPane.Marked = markedSet
+	if m.activePane == 0 && len(m.marked) > 0 {
+		leftPane.Status = fmt.Sprintf("%d marked", len(m.marked))
+	}
 	leftRendered := leftPane.Render()
 
 	rightPane := ui.NewPane(layout.PaneWidth(), layout.MainAreaHeight(), m.activePane == 1, m.theme)
@@ -720,6 +784,10 @@ func (m Model) View() tea.View {
 	rightPane.Files = m.visibleFiles(1)
 	rightPane.Cursor = m.rightCursor
 	rightPane.TotalFiles = len(m.rightFiles)
+	rightPane.Marked = markedSet
+	if m.activePane == 1 && len(m.marked) > 0 {
+		rightPane.Status = fmt.Sprintf("%d marked", len(m.marked))
+	}
 	rightRendered := rightPane.Render()
 
 	var previewRendered string

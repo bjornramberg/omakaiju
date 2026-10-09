@@ -21,6 +21,7 @@ type Pane struct {
 	Cursor        int
 	VisibleHeight int
 	Status        string
+	Marked        map[string]bool
 }
 
 func NewPane(width, height int, active bool, theme config.Theme) Pane {
@@ -66,7 +67,7 @@ func (p Pane) Render() string {
 		}
 
 		for i := start; i < end; i++ {
-			item := NewFileItem(p.Files[i], i == p.Cursor, p.Theme, p.Width-4)
+			item := NewFileItem(p.Files[i], i == p.Cursor, p.Marked[p.Files[i].Path], p.Theme, p.Width-4)
 			content += item.Render() + "\n"
 		}
 	}

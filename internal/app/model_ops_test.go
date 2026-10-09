@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"omakaiju/internal/fs"
+
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -238,5 +240,211 @@ func TestAddAndRenameTargetActivePaneOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "right-only.txt")); err != nil {
 		t.Fatalf("file not created: %v", err)
+	}
+}
+
+// runBatch executes a Cmd that may be a tea.Batch and returns every resulting
+// fileOpMsg, so tests can observe the async moves actually completing.
+func runBatch(t *testing.T, cmd tea.Cmd) []fileOpMsg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []fileOpMsg
+		for _, c := range batch {
+			if c == nil {
+				continue
+			}
+			if m, ok := c().(fileOpMsg); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	if m, ok := msg.(fileOpMsg); ok {
+		return []fileOpMsg{m}
+	}
+	return nil
+}
+
+func requireNoOpErrors(t *testing.T, msgs []fileOpMsg) {
+	t.Helper()
+	for _, m := range msgs {
+		if m.err != nil {
+			t.Fatalf("file op failed: %v", m.err)
+		}
+	}
+}
+
+// moveCursorTo advances the active pane cursor onto the named entry.
+func moveCursorTo(t *testing.T, m Model, name string) Model {
+	t.Helper()
+	idx := indexOf(m.visibleFiles(m.activePane), name)
+	if idx < 0 {
+		t.Fatalf("%s missing from listing", name)
+	}
+	for i := 0; i < idx; i++ {
+		updated, _ := m.Update(key('j'))
+		m = updated.(Model)
+	}
+	return m
+}
+
+// twoPaneFixture points the panes at separate directories so moves are visible.
+func twoPaneFixture(t *testing.T) (Model, string, string) {
+	t.Helper()
+	m, src := fixture(t)
+
+	dst := filepath.Join(src, "..", filepath.Base(src)+"-dest")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	m.rightPath = dst
+	rightFiles, err := fs.ReadDir(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.rightFiles = rightFiles
+	return m, src, dst
+}
+
+func TestMarkTogglesOnAndOff(t *testing.T) {
+	m, dir := fixture(t)
+	m = moveCursorTo(t, m, "alpha.txt")
+
+	updated, _ := m.Update(key('m'))
+	m = updated.(Model)
+	if len(m.marked) != 1 {
+		t.Fatalf("marked = %d, want 1", len(m.marked))
+	}
+	if _, ok := m.marked[filepath.Join(dir, "alpha.txt")]; !ok {
+		t.Error("alpha.txt should be marked")
+	}
+
+	updated, _ = m.Update(key('m'))
+	m = updated.(Model)
+	if len(m.marked) != 0 {
+		t.Fatalf("second m should unmark, marked = %d", len(m.marked))
+	}
+}
+
+func TestMarksAccumulate(t *testing.T) {
+	m, _ := fixture(t)
+
+	for _, name := range []string{"alpha.txt", "beta.txt"} {
+		m = moveCursorTo(t, m, name)
+		updated, _ := m.Update(key('m'))
+		m = updated.(Model)
+	}
+
+	if len(m.marked) != 2 {
+		t.Fatalf("marked = %d, want 2", len(m.marked))
+	}
+}
+
+func TestPasteMovesMarkedSetToOtherPane(t *testing.T) {
+	m, src, dst := twoPaneFixture(t)
+
+	for _, name := range []string{"alpha.txt", "beta.txt"} {
+		m = moveCursorTo(t, m, name)
+		updated, _ := m.Update(key('m'))
+		m = updated.(Model)
+	}
+
+	updated, cmd := m.Update(key('p'))
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("paste should return move commands")
+	}
+	if len(m.marked) != 0 {
+		t.Errorf("marks should clear after paste, got %d", len(m.marked))
+	}
+
+	// Drain the returned commands so the moves actually run.
+	msgs := runBatch(t, cmd)
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 move operations, got %d", len(msgs))
+	}
+	requireNoOpErrors(t, msgs)
+
+	for _, name := range []string{"alpha.txt", "beta.txt"} {
+		if _, err := os.Stat(filepath.Join(dst, name)); err != nil {
+			t.Errorf("%s missing from destination: %v", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(src, name)); !os.IsNotExist(err) {
+			t.Errorf("%s should have left the source", name)
+		}
+	}
+}
+
+func TestPasteSkipsStaleMarks(t *testing.T) {
+	m, src, dst := twoPaneFixture(t)
+
+	m = moveCursorTo(t, m, "alpha.txt")
+	updated, _ := m.Update(key('m'))
+	m = updated.(Model)
+	m = moveCursorTo(t, m, "beta.txt")
+	updated, _ = m.Update(key('m'))
+	m = updated.(Model)
+
+	// Delete one marked file behind the model's back.
+	if err := os.Remove(filepath.Join(src, "beta.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, cmd := m.Update(key('p'))
+	m = updated.(Model)
+
+	if m.opResult != "moved 1, skipped 1" {
+		t.Errorf("opResult = %q, want %q", m.opResult, "moved 1, skipped 1")
+	}
+	requireNoOpErrors(t, runBatch(t, cmd))
+	if _, err := os.Stat(filepath.Join(dst, "alpha.txt")); err != nil {
+		t.Errorf("alpha.txt should have moved: %v", err)
+	}
+}
+
+func TestPasteSkipsEntryAlreadyInTarget(t *testing.T) {
+	m, src, _ := twoPaneFixture(t)
+
+	m = moveCursorTo(t, m, "alpha.txt")
+	updated, _ := m.Update(key('m'))
+	m = updated.(Model)
+
+	// Point the destination at the same directory as the source so the
+	// marked entry is already in place.
+	m.rightPath = src
+
+	updated, _ = m.Update(key('p'))
+	m = updated.(Model)
+
+	if m.opResult != "nothing to move" {
+		t.Errorf("opResult = %q, want %q", m.opResult, "nothing to move")
+	}
+}
+
+func TestYankPasteStillWorksWithoutMarks(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+
+	m = moveCursorTo(t, m, "alpha.txt")
+	updated, _ := m.Update(key('y'))
+	m = updated.(Model)
+
+	updated, cmd := m.Update(key('p'))
+	m = updated.(Model)
+
+	if m.opResult != "pasted 1 file(s)" {
+		t.Errorf("opResult = %q, want %q", m.opResult, "pasted 1 file(s)")
+	}
+	requireNoOpErrors(t, runBatch(t, cmd))
+	// A copy leaves the original in place.
+	if _, err := os.Stat(filepath.Join(dst, "alpha.txt")); err != nil {
+		t.Errorf("copy missing from destination: %v", err)
+	}
+	if len(m.marked) != 0 {
+		t.Error("yank should not populate marks")
 	}
 }
