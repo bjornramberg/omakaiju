@@ -83,10 +83,11 @@ type Model struct {
 	previewPath    string
 	previewFocused bool
 
-	previewCache     []string
-	previewCachePath string
-	previewHL        []string
-	previewArchive   []string
+	previewCache            []string
+	previewCachePath        string
+	previewHL               []string
+	previewArchive          []fs.ArchiveEntry
+	previewArchiveTruncated bool
 
 	fuzzyActive   bool
 	fuzzyInput    string
@@ -275,6 +276,7 @@ func (m *Model) updatePreview() {
 		m.previewCache = nil
 		m.previewHL = nil
 		m.previewArchive = nil
+		m.previewArchiveTruncated = false
 		m.previewCachePath = ""
 
 		if m.previewPath != "" {
@@ -288,7 +290,10 @@ func (m *Model) updatePreview() {
 			case fs.FileTypeArchive:
 				entries, truncated, err := fs.ListArchive(m.previewPath)
 				if err == nil {
-					m.previewArchive = ui.ArchiveLines(entries, truncated, m.theme)
+					// Cache raw entries; formatting is width-dependent and
+					// must happen per render so resizes stay correct.
+					m.previewArchive = entries
+					m.previewArchiveTruncated = truncated
 					m.previewCachePath = m.previewPath
 				}
 			}
@@ -809,7 +814,9 @@ func (m Model) View() tea.View {
 	case m.previewCache != nil:
 		previewRendered = preview.RenderText(m.previewCache, m.previewHL)
 	case m.previewArchive != nil:
-		previewRendered = preview.RenderArchive(m.previewArchive)
+		previewRendered = preview.RenderArchive(
+			ui.ArchiveLines(m.previewArchive, m.previewArchiveTruncated, m.theme, preview.Width-4),
+		)
 	default:
 		previewRendered = preview.RenderFile(m.previewPath, fs.DetectFileType(m.previewPath))
 	}

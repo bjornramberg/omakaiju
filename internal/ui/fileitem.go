@@ -30,15 +30,12 @@ func NewFileItem(entry fs.Entry, active bool, marked bool, theme config.Theme, w
 func (f FileItem) Render() string {
 	var style lipgloss.Style
 	var icon string
-	var name string
 
 	if f.Entry.IsDir {
 		icon = icons.ForDir()
-		name = f.Entry.Name + "/"
 		style = f.Theme.FileItemDir()
 	} else {
 		icon = icons.ForFile(f.Entry.Name)
-		name = f.Entry.Name
 		style = f.Theme.FileItem()
 	}
 
@@ -52,7 +49,23 @@ func (f FileItem) Render() string {
 		style = f.Theme.FileItemActive()
 	}
 
+	// Budget the row before rendering: marker, two spaces, and the icon (which
+	// may be a double-width Nerd Font glyph). Width alone is a minimum, so an
+	// over-long name would otherwise spill past the border and wrap, producing
+	// phantom rows that break cursor alignment.
+	used := DisplayWidth(marker) + 2 + DisplayWidth(icon)
+	budget := f.Width - used
+	name := TruncateName(f.Entry.Name, budget)
+	if f.Entry.IsDir {
+		name += "/"
+	}
+
 	content := fmt.Sprintf("%s %s %s", marker, icon, name)
 
-	return style.Width(f.Width).Render(content)
+	// The theme's row style carries horizontal padding, but the row already
+	// spaces itself with the marker and icon. Leaving padding on would add
+	// unaccounted columns and push the row past MaxWidth, so it is removed and
+	// MaxWidth acts as a backstop against any future miscalculation.
+	row := style.UnsetPaddingLeft().UnsetPaddingRight()
+	return row.Width(f.Width).MaxWidth(f.Width).Render(content)
 }

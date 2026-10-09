@@ -39,7 +39,7 @@ func (p Preview) RenderFile(path string, fileType fs.FileType) string {
 		if err != nil {
 			return p.ArchiveNotice(path, archiveMessage(err))
 		}
-		return p.RenderArchive(ArchiveLines(entries, truncated, p.Theme))
+		return p.RenderArchive(ArchiveLines(entries, truncated, p.Theme, p.Width-4))
 	case fs.FileTypeDirectory:
 		return p.RenderDirectory(path)
 	default:

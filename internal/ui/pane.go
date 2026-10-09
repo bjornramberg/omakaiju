@@ -33,6 +33,17 @@ func NewPane(width, height int, active bool, theme config.Theme) Pane {
 	}
 }
 
+// ContentWidth is the usable width inside the pane border and its padding.
+// Width alone is a minimum in Lipgloss, so rows must be sized to this or they
+// spill past the border and wrap into phantom rows.
+func (p Pane) ContentWidth() int {
+	w := p.Width - 2 /*border*/ - 4 /*padding*/
+	if w < 1 {
+		return 1
+	}
+	return w
+}
+
 func (p Pane) Render() string {
 	var borderStyle lipgloss.Style
 	if p.Active {
@@ -40,9 +51,16 @@ func (p Pane) Render() string {
 	} else {
 		borderStyle = p.Theme.PaneInactive()
 	}
+	// Backstop so no child can ever force the pane wider than its column.
+	borderStyle = borderStyle.MaxWidth(p.Width)
 
+	inner := p.ContentWidth()
+
+	// PathText has no padding of its own, but the panel style does; drop it so
+	// the budget matches the space actually available.
+	pathStyle := p.Theme.PathText().UnsetPaddingLeft().UnsetPaddingRight()
 	var content string
-	content += p.Theme.PathText().Render(p.Path) + "\n\n"
+	content += pathStyle.Width(inner).MaxWidth(inner).Render(TruncateName(p.Path, inner)) + "\n\n"
 
 	if len(p.Files) == 0 {
 		if p.Filter != "" {
@@ -67,7 +85,7 @@ func (p Pane) Render() string {
 		}
 
 		for i := start; i < end; i++ {
-			item := NewFileItem(p.Files[i], i == p.Cursor, p.Marked[p.Files[i].Path], p.Theme, p.Width-4)
+			item := NewFileItem(p.Files[i], i == p.Cursor, p.Marked[p.Files[i].Path], p.Theme, inner)
 			content += item.Render() + "\n"
 		}
 	}
