@@ -195,6 +195,13 @@ func deleteCmd(path string) tea.Cmd {
 	}
 }
 
+func trashCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := fs.Trash(path)
+		return fileOpMsg{err: err}
+	}
+}
+
 func loadFuzzyFilesCmd(root string) tea.Cmd {
 	return func() tea.Msg {
 		files, _ := fs.WalkDir(root)
@@ -914,11 +921,19 @@ func (m Model) handleDelete() (tea.Model, tea.Cmd) {
 
 func (m Model) handleConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "y", "Y":
+	// Trash is the safe choice, so it is the one that also answers to the
+	// keys people reach for out of habit.
+	case "t", "T", "y", "Y", "enter":
 		m.confirmDelete = false
 		target := m.deleteTarget
 		m.deleteTarget = ""
-		m.opResult = "deleted"
+		m.opResult = "trashed " + filepath.Base(target)
+		return m, trashCmd(target)
+	case "f", "F":
+		m.confirmDelete = false
+		target := m.deleteTarget
+		m.deleteTarget = ""
+		m.opResult = "deleted " + filepath.Base(target)
 		return m, deleteCmd(target)
 	case "n", "N", "esc":
 		m.confirmDelete = false
@@ -1013,7 +1028,7 @@ func (m Model) View() tea.View {
 			progress := ui.NewProgress(m.copier, m.theme)
 			bottomBar.Progress = &progress
 		} else if m.confirmDelete {
-			bottomBar.Input = "delete " + filepath.Base(m.deleteTarget) + "? (y/n)"
+			bottomBar.Input = filepath.Base(m.deleteTarget) + "? (t)rash / (f)orce / (n)o"
 		} else if m.loadErr != nil {
 			bottomBar.Error = m.loadErr.Error()
 		} else if m.opResult != "" {
