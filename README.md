@@ -45,7 +45,14 @@ make build
 
 ## Configuration
 
-omakaiju reads its theme from `~/.config/omarchy/fm.toml`. Changes to this file are hot-reloaded automatically.
+omakaiju reads its palette from Omarchy's active theme at
+`~/.local/state/omarchy/current/theme/colors.toml` — the same file Omarchy's own
+`omarchy-theme-color` helper resolves, so colours match the rest of the desktop.
+Switching themes is hot-reloaded; you can also point `OMARCHY_COLORS` at a
+different `colors.toml` to override it.
+
+Older setups that render a per-application `~/.config/omarchy/fm.toml` are still
+supported as a fallback. If neither is readable, built-in defaults are used.
 
 ## License
 
