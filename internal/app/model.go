@@ -133,7 +133,7 @@ func NewModel(cfg config.Config) Model {
 		cwd = "/"
 	}
 
-	return Model{
+	m := Model{
 		cfg:         cfg,
 		theme:       theme,
 		leftPath:    cwd,
@@ -141,6 +141,23 @@ func NewModel(cfg config.Config) Model {
 		leftCursor:  0,
 		rightCursor: 0,
 	}
+
+	// The watcher belongs to the model so it can be closed on quit and so the
+	// waiting command has something to block on. Creating it here rather than in
+	// a goroutine also means the model actually holds it; assigning from inside a
+	// command only mutates that command's copy.
+	if watcher, err := fs.NewWatcher(); err == nil {
+		dirs := cfg.ThemeWatchDirs
+		if len(dirs) == 0 {
+			dirs = []string{filepath.Dir(cfg.ThemePath)}
+		}
+		for _, dir := range dirs {
+			_ = watcher.Watch(dir)
+		}
+		m.themeWatcher = watcher
+	}
+
+	return m
 }
 
 func loadDirCmd(pane int, path string) tea.Cmd {
@@ -209,40 +226,71 @@ func loadFuzzyFilesCmd(root string) tea.Cmd {
 	}
 }
 
-func (m Model) startThemeWatcher() tea.Cmd {
+// waitThemeCmd blocks until the next palette-relevant fsnotify event and
+// reports it. It is deliberately one-shot: Update re-issues it after handling
+// each message, so the watcher survives every reload instead of stopping after
+// the first one.
+func (m Model) waitThemeCmd() tea.Cmd {
+	watcher := m.themeWatcher
+	if watcher == nil {
+		return nil
+	}
+	path := m.cfg.ThemePath
+	omarchyPath := m.cfg.OmarchyStateDir
+
 	return func() tea.Msg {
-		watcher, err := fs.NewWatcher()
-		if err != nil {
-			return themeReloadedMsg{err: err}
-		}
-
-		themeDir := filepath.Dir(m.cfg.ThemePath)
-		if err := watcher.Watch(themeDir); err != nil {
-			return themeReloadedMsg{err: err}
-		}
-
-		m.themeWatcher = watcher
-
 		for {
 			select {
-			case event := <-watcher.Events():
-				if event.Name == m.cfg.ThemePath && (event.Has(fsnotify.Write) || event.Has(fsnotify.Create)) {
-					time.Sleep(100 * time.Millisecond)
-					theme, err := config.LoadTheme(m.cfg.ThemePath)
-					return themeReloadedMsg{theme: theme, err: err}
+			case event, ok := <-watcher.Events():
+				if !ok {
+					return themeReloadedMsg{err: fmt.Errorf("theme watcher closed")}
 				}
+				if !relevantThemeEvent(event.Name, path, omarchyPath) {
+					continue
+				}
+				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Chmod) {
+					// Editors and the theme engine write in bursts, so let the
+					// write settle before reading.
+					time.Sleep(100 * time.Millisecond)
+					theme, err := config.LoadTheme(path)
+					if err != nil {
+						// A theme switch briefly swaps the symlink; the next
+						// event will carry the final file.
+						continue
+					}
+					return themeReloadedMsg{theme: theme}
+				}
+
 			case err := <-watcher.Errors():
-				return themeReloadedMsg{err: err}
+				if err != nil {
+					return themeReloadedMsg{err: err}
+				}
 			}
 		}
 	}
+}
+
+// relevantThemeEvent reports whether an fsnotify event concerns the palette.
+// A theme switch re-points the omarchy symlink rather than rewriting the file,
+// so events under the state directory count too.
+func relevantThemeEvent(name, themePath, omarchyStateDir string) bool {
+	if name == "" {
+		return false
+	}
+	if name == themePath {
+		return true
+	}
+	if strings.HasSuffix(name, "colors.toml") {
+		return true
+	}
+	return omarchyStateDir != "" && strings.HasPrefix(name, omarchyStateDir)
 }
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		loadDirCmd(0, m.leftPath),
 		loadDirCmd(1, m.rightPath),
-		m.startThemeWatcher(),
+		m.waitThemeCmd(),
 	)
 }
 
@@ -455,6 +503,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case themeReloadedMsg:
 		if msg.err != nil {
+			// A closed watcher only happens on shutdown; keep the old theme
+			// rather than blanking the UI.
 			return m, nil
 		}
 		m.theme = msg.theme
@@ -462,7 +512,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.previewHL = nil
 		m.previewCachePath = ""
 		m.updatePreview()
-		return m, nil
+		// Re-arm: the previous wait command has returned, so listening must be
+		// resumed or only the first reload would ever take effect.
+		return m, m.waitThemeCmd()
 
 	case fuzzyFilesLoadedMsg:
 		m.fuzzyAllFiles = msg.files
@@ -945,8 +997,18 @@ func (m Model) handleConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() tea.View {
+	layout := ui.NewLayout(m.width, m.height, m.theme)
+
+	// Before the first WindowSizeMsg the size is still zero, and a terminal
+	// dragged below the minimum has nowhere to draw. Both would otherwise hand
+	// Lipgloss zero or negative dimensions and produce stray artifacts.
+	if layout.TooSmall() {
+		return tea.NewView(layout.TooSmallPlaceholder())
+	}
+
 	if m.fuzzyActive {
 		finder := ui.NewFuzzyFinder(m.width, m.height, m.theme)
+		finder.Focused = true
 		finder.Input = m.fuzzyInput
 		finder.Results = m.fuzzyResults
 		finder.Cursor = m.fuzzyCursor
@@ -954,10 +1016,9 @@ func (m Model) View() tea.View {
 		return tea.NewView(finder.Render())
 	}
 
-	layout := ui.NewLayout(m.width, m.height, m.theme)
-
 	topBar := ui.NewTopBar(m.width, m.theme)
 	topBar.Filter = m.filterOf(m.activePane)
+	topBar.Path = m.rawPath(m.activePane)
 
 	markedSet := make(map[string]bool, len(m.marked))
 	for path := range m.marked {
@@ -991,6 +1052,7 @@ func (m Model) View() tea.View {
 	var previewRendered string
 	preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
 	preview = preview.SetPath(m.previewPath)
+	preview.Focused = m.previewFocused
 
 	switch {
 	case m.previewPath == "":
@@ -1003,13 +1065,6 @@ func (m Model) View() tea.View {
 		)
 	default:
 		previewRendered = preview.RenderFile(m.previewPath, fs.DetectFileType(m.previewPath))
-	}
-
-	if m.previewFocused {
-		previewRendered = m.theme.PreviewPanelFocused().
-			Width(layout.PreviewWidth()).
-			Height(layout.MainAreaHeight()).
-			Render(previewRendered)
 	}
 
 	bottomBar := ui.NewBottomBar(m.width, m.theme)
