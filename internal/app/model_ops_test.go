@@ -803,3 +803,34 @@ func TestDeleteOnDirectoryTrees(t *testing.T) {
 		t.Error("trashing a directory should move the whole tree")
 	}
 }
+
+// A terminal too small to host the layout must render the placeholder rather
+// than handing Lipgloss zero or negative dimensions.
+func TestViewShowsPlaceholderWhenTooSmall(t *testing.T) {
+	m, _ := fixture(t)
+
+	for _, tc := range []struct{ w, h int }{{0, 0}, {10, 5}, {39, 40}, {80, 4}} {
+		m.width, m.height = tc.w, tc.h
+		out := m.View().Content
+		// Below 20 columns the message itself cannot fit, so there is
+		// nothing meaningful to assert beyond it not panicking.
+		if tc.w < 20 {
+			continue
+		}
+		if !strings.Contains(out, "too small") {
+			t.Errorf("%dx%d: expected the too-small placeholder, got %q", tc.w, tc.h, out)
+		}
+	}
+}
+
+func TestViewRendersNormallyWhenSized(t *testing.T) {
+	m, dir := fixture(t)
+	m.width, m.height = 120, 40
+	out := m.View().Content
+	if strings.Contains(out, "too small") {
+		t.Error("a normal terminal should not show the placeholder")
+	}
+	if !strings.Contains(out, dir) {
+		t.Error("top bar should show the active path")
+	}
+}
