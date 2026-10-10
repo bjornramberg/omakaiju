@@ -46,6 +46,41 @@ func TruncateName(name string, maxCells int) string {
 	return truncateMiddle(name, maxCells)
 }
 
+// TrimPathLeft shortens a path by dropping leading components, since the tail of
+// a path is the part that identifies where you are.
+func TrimPathLeft(path string, maxCells int) string {
+	if maxCells <= 0 {
+		return ""
+	}
+	if ansi.StringWidth(path) <= maxCells {
+		return path
+	}
+	if maxCells == 1 {
+		return ellipsis
+	}
+
+	parts := strings.Split(path, "/")
+	if len(parts) <= 2 {
+		return TruncateEnd(path, maxCells)
+	}
+
+	// Keep the leading separator so it still reads as an absolute path.
+	head := parts[0] + "/"
+	for i := len(parts) - 1; i >= 2; i-- {
+		candidate := head + strings.Join(parts[i:], "/")
+		if ansi.StringWidth(candidate) > maxCells {
+			break
+		}
+		head = candidate
+	}
+	// Whatever is left is the tail that fit, or the shortest useful slice.
+	tail := strings.Join(parts[len(parts)-1:], "/")
+	if ansi.StringWidth(head) == 0 {
+		return TruncateEnd("/"+tail, maxCells)
+	}
+	return head
+}
+
 // TruncateEnd clips s to maxCells cells, marking the cut with a trailing
 // ellipsis. Used for preview body lines, where the end of the line is the least
 // informative part and clipping must not re-wrap.

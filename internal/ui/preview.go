@@ -15,6 +15,10 @@ type Preview struct {
 	Height int
 	Theme  config.Theme
 	path   string
+	// Focused selects the accent frame. It swaps the panel style rather than
+	// wrapping the rendered panel in a second border, which would add rows and
+	// columns and overflow the layout.
+	Focused bool
 }
 
 func NewPreview(width, height int, theme config.Theme) Preview {
@@ -48,9 +52,22 @@ func clipLines(lines []string, maxCells int) []string {
 	return out
 }
 
+// header renders the preview title, clipped to the panel so a long filename
+// cannot overflow the border on a narrow column.
+func (p Preview) header(name string) string {
+	return p.Theme.AccentText().Bold(true).Render(TruncateName(name, p.ContentWidth()))
+}
+
 // panel renders the preview frame with a MaxWidth backstop, so even a
 // miscalculated budget cannot bleed into the adjacent pane.
 func (p Preview) panel(content string) string {
+	if p.Focused {
+		return p.Theme.PreviewPanelFocused().
+			Width(p.Width).
+			MaxWidth(p.Width).
+			MaxHeight(p.Height).
+			Render(content)
+	}
 	return p.Theme.PreviewPanel().
 		Width(p.Width).
 		MaxWidth(p.Width).
@@ -102,7 +119,7 @@ func (p Preview) RenderText(lines, highlighted []string) string {
 	// body, so an over-long line would wrap and bleed into the next pane.
 	body = clipLines(body, p.ContentWidth())
 
-	header := p.Theme.AccentText().Bold(true).Render(filepath.Base(p.path))
+	header := p.header(filepath.Base(p.path))
 	// Rendered without a wrapping foreground style so the inner ANSI colours
 	// from Chroma are not overridden.
 	content := strings.Join(body, "\n")
@@ -149,7 +166,7 @@ func splitLines(s string) []string {
 }
 
 func (p Preview) RenderBinary(path string) string {
-	header := p.Theme.AccentText().Bold(true).Render(filepath.Base(path))
+	header := p.header(filepath.Base(path))
 	hexDump := p.generateHexDump(path, 256)
 	footer := p.Theme.StatusText().Render("binary file")
 
@@ -162,7 +179,7 @@ func (p Preview) RenderImage(path string) string {
 		return p.RenderError(err)
 	}
 
-	header := p.Theme.AccentText().Bold(true).Render(filepath.Base(path))
+	header := p.header(filepath.Base(path))
 	size := p.Theme.StatusText().Render(fmt.Sprintf("Size: %d bytes", info.Size()))
 	footer := p.Theme.StatusText().Render("image preview not available")
 
@@ -184,7 +201,7 @@ func (p Preview) RenderArchive(lines []string) string {
 		body = body[:maxVisible]
 	}
 
-	header := p.Theme.AccentText().Bold(true).Render(filepath.Base(p.path))
+	header := p.header(filepath.Base(p.path))
 	content := strings.Join(body, "\n")
 
 	var footer string
@@ -202,7 +219,7 @@ func (p Preview) RenderArchive(lines []string) string {
 
 // ArchiveNotice frames a non-listable archive message in the preview panel.
 func (p Preview) ArchiveNotice(path, message string) string {
-	header := p.Theme.AccentText().Bold(true).Render(filepath.Base(path))
+	header := p.header(filepath.Base(path))
 	return p.panel(header + "\n\n" + p.Theme.StatusText().Render(message))
 }
 
@@ -212,7 +229,7 @@ func (p Preview) RenderDirectory(path string) string {
 		return p.RenderError(err)
 	}
 
-	header := p.Theme.AccentText().Bold(true).Render(filepath.Base(path) + "/")
+	header := p.header(filepath.Base(path) + "/")
 	count := p.Theme.StatusText().Render(fmt.Sprintf("%d items", len(entries)))
 
 	return p.panel(header + "\n\n" + count)
@@ -228,7 +245,7 @@ func (p Preview) RenderMetadata(path string) string {
 		return p.RenderError(err)
 	}
 
-	header := p.Theme.AccentText().Bold(true).Render(filepath.Base(path))
+	header := p.header(filepath.Base(path))
 	size := p.Theme.StatusText().Render(fmt.Sprintf("Size: %d bytes", info.Size()))
 	perms := p.Theme.StatusText().Render(fmt.Sprintf("Permissions: %s", info.Mode()))
 	modTime := p.Theme.StatusText().Render(fmt.Sprintf("Modified: %s", info.ModTime().Format("2006-01-02 15:04:05")))

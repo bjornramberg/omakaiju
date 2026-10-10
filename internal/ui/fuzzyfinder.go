@@ -10,6 +10,8 @@ import (
 )
 
 type FuzzyFinder struct {
+	// Focused selects the accent frame instead of the neutral one.
+	Focused  bool
 	Width    int
 	Height   int
 	Theme    config.Theme
@@ -56,7 +58,7 @@ func (f FuzzyFinder) Render() string {
 
 	header := f.Theme.AccentText().Bold(true).Render(" fuzzy find ")
 	prompt := f.Theme.AccentText().Render("> ")
-	input := f.Theme.Text().Render(f.Input)
+	input := f.Theme.Text().Render(TruncateEnd(f.Input, f.Width-8))
 
 	var results []string
 	if len(f.Results) == 0 {
@@ -90,8 +92,15 @@ func (f FuzzyFinder) Render() string {
 
 	content := header + "\n\n" + prompt + input + "\n\n" + strings.Join(results, "\n") + "\n\n" + footer
 
-	return f.Theme.PreviewPanel().
+	style := f.Theme.PreviewPanel()
+	if f.Focused {
+		style = f.Theme.PreviewPanelFocused()
+	}
+	// Both dimensions are bounded so a narrow or short terminal cannot wrap the
+	// overlay or push the layout around.
+	return style.
 		Width(f.Width).
+		MaxWidth(f.Width).
 		MaxHeight(f.Height).
 		Render(content)
 }
