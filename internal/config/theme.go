@@ -2,11 +2,13 @@ package config
 
 import (
 	"os"
+	"strings"
 
 	"charm.land/lipgloss/v2"
 	"github.com/BurntSushi/toml"
 )
 
+// Theme holds the six palette values the UI renders with.
 type Theme struct {
 	Primary     string
 	Subtle      string
@@ -16,7 +18,28 @@ type Theme struct {
 	BGDark      string
 }
 
-type themeFile struct {
+// omarchyColors is the flat palette written by omarchy into each theme's
+// colors.toml.
+type omarchyColors struct {
+	Mode             string `toml:"mode"`
+	Accent           string `toml:"accent"`
+	Selection        string `toml:"selection"`
+	Muted            string `toml:"muted"`
+	Background       string `toml:"background"`
+	DarkBackground   string `toml:"dark_background"`
+	DarkerBackground string `toml:"darker_background"`
+	Foreground       string `toml:"foreground"`
+	DarkForeground   string `toml:"dark_foreground"`
+	BrightForeground string `toml:"bright_foreground"`
+	Cyan             string `toml:"cyan"`
+	BrightCyan       string `toml:"bright_cyan"`
+	Orange           string `toml:"orange"`
+	Blue             string `toml:"blue"`
+}
+
+// legacyThemeFile supports the older per-application template, which nested the
+// values under an [omarchy] table.
+type legacyThemeFile struct {
 	Omarchy struct {
 		Primary     string `toml:"primary"`
 		Subtle      string `toml:"subtle"`
@@ -27,19 +50,73 @@ type themeFile struct {
 	} `toml:"omarchy"`
 }
 
+// first returns the first non-empty candidate, falling back to def.
+func first(def string, candidates ...string) string {
+	for _, c := range candidates {
+		if strings.TrimSpace(c) != "" {
+			return strings.TrimSpace(c)
+		}
+	}
+	return def
+}
+
+func norm(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if !strings.HasPrefix(v, "#") {
+		return "#" + v
+	}
+	return v
+}
+
+// LoadTheme reads an omarchy palette and maps it onto the UI's palette. Missing
+// values fall back to sensible relatives so a partial palette still renders
+// coherently rather than falling back wholesale to the defaults.
 func LoadTheme(path string) (Theme, error) {
-	var tf themeFile
-	if _, err := toml.DecodeFile(path, &tf); err != nil {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return Theme{}, err
 	}
 
+	defaults := DefaultTheme()
+
+	// The legacy template nests values under [omarchy]; try it first and fall
+	// through to the flat palette.
+	var legacy legacyThemeFile
+	if _, err := toml.Decode(string(data), &legacy); err == nil && legacy.Omarchy.Primary != "" {
+		o := legacy.Omarchy
+		return Theme{
+			Primary:     norm(first(defaults.Primary, o.Primary)),
+			Subtle:      norm(first(defaults.Subtle, o.Subtle)),
+			SelectionBG: norm(first(defaults.SelectionBG, o.SelectionBG)),
+			FGMain:      norm(first(defaults.FGMain, o.FGMain)),
+			Accent:      norm(first(defaults.Accent, o.Accent)),
+			BGDark:      norm(first(defaults.BGDark, o.BGDark)),
+		}, nil
+	}
+
+	var c omarchyColors
+	if _, err := toml.Decode(string(data), &c); err != nil {
+		return Theme{}, err
+	}
+
+	accent := first(defaults.Primary, c.Accent, c.Blue, c.Cyan)
+	background := first(defaults.BGDark, c.Background, c.DarkBackground)
+
 	return Theme{
-		Primary:     tf.Omarchy.Primary,
-		Subtle:      tf.Omarchy.Subtle,
-		SelectionBG: tf.Omarchy.SelectionBG,
-		FGMain:      tf.Omarchy.FGMain,
-		Accent:      tf.Omarchy.Accent,
-		BGDark:      tf.Omarchy.BGDark,
+		// Active pane border: the theme's accent.
+		Primary: norm(accent),
+		// Inactive borders: the dimmed foreground, so the focused pane stands out.
+		Subtle:      norm(first(defaults.Subtle, c.DarkForeground, c.Muted)),
+		SelectionBG: norm(first(defaults.SelectionBG, c.Selection, c.Muted)),
+		// Default text.
+		FGMain: norm(first(defaults.FGMain, c.Foreground, c.BrightForeground)),
+		// Executable and link text: a distinct hue from the accent.
+		Accent: norm(first(defaults.Accent, c.BrightCyan, c.Cyan, c.Orange, accent)),
+		// Status bars follow the theme background rather than a fixed black.
+		BGDark: norm(background),
 	}, nil
 }
 
@@ -145,6 +222,7 @@ func (t Theme) ErrorText() lipgloss.Style {
 		Bold(true)
 }
 
+// DefaultTheme is used only when no omarchy palette can be read.
 func DefaultTheme() Theme {
 	return Theme{
 		Primary:     "#7D56F4",
@@ -156,10 +234,11 @@ func DefaultTheme() Theme {
 	}
 }
 
+// ThemePath returns the palette file the app expects to read.
 func ThemePath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return home + "/.config/omarchy/fm.toml"
+	return home + "/.local/state/omarchy/current/theme/colors.toml"
 }
