@@ -34,7 +34,7 @@ make build
 | m | Mark / unmark entry (press repeatedly to select several) |
 | p | Move marked entries to the other pane, or paste the yanked file |
 | Esc | Cancel an in-flight copy (removes the partial file) |
-| d | Delete |
+| d | Delete: `t`rash (default), `f`orce delete, `n`o |
 | a | Add file/directory |
 | r | Rename |
 | / | Filter |

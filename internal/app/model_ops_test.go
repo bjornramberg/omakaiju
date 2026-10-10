@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"omakaiju/internal/fs"
@@ -682,5 +683,123 @@ func TestKeysIgnoredWhileCopying(t *testing.T) {
 	m = updated.(Model)
 	if m.leftCursor != before {
 		t.Error("navigation should be ignored while a copy runs")
+	}
+}
+
+// stageDelete points a pane at dir and opens the delete prompt on name.
+func stageDelete(t *testing.T, m Model, name string) Model {
+	t.Helper()
+	files, err := fs.ReadDir(m.leftPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.leftFiles = files
+	m = moveCursorTo(t, m, name)
+	updated, _ := m.Update(key('d'))
+	m = updated.(Model)
+	if !m.confirmDelete {
+		t.Fatalf("d should open the delete prompt for %s", name)
+	}
+	return m
+}
+
+func TestDeleteTrashesByDefault(t *testing.T) {
+	// Trash is the safe choice, so it answers to t as well as the habitual y
+	// and enter. Each key needs its own file since trashing consumes it.
+	for _, k := range []tea.KeyPressMsg{
+		{Code: 't'},
+		{Code: 'y'},
+		{Code: tea.KeyEnter},
+	} {
+		t.Run(k.String(), func(t *testing.T) {
+			m, dir := fixture(t)
+			t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+			m = stageDelete(t, m, "alpha.txt")
+			updated, cmd := m.Update(k)
+			m = updated.(Model)
+
+			if cmd == nil {
+				t.Fatal("the prompt should dispatch a trash command")
+			}
+			requireNoOpErrors(t, runBatch(t, cmd))
+
+			target := filepath.Join(dir, "alpha.txt")
+			if _, err := os.Stat(target); !os.IsNotExist(err) {
+				t.Error("the file should have moved out of the source directory")
+			}
+			if m.opResult == "" || !strings.HasPrefix(m.opResult, "trashed ") {
+				t.Errorf("opResult = %q, want a trashed message", m.opResult)
+			}
+		})
+	}
+}
+
+func TestDeleteForceRemovesPermanently(t *testing.T) {
+	m, dir := fixture(t)
+
+	target := filepath.Join(dir, "alpha.txt")
+	m = stageDelete(t, m, "alpha.txt")
+
+	updated, cmd := m.Update(key('f'))
+	m = updated.(Model)
+
+	if m.opResult != "deleted alpha.txt" {
+		t.Errorf("opResult = %q, want %q", m.opResult, "deleted alpha.txt")
+	}
+	requireNoOpErrors(t, runBatch(t, cmd))
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Error("force delete should remove the file")
+	}
+}
+
+func TestDeleteCancelKeepsFile(t *testing.T) {
+	m, dir := fixture(t)
+
+	target := filepath.Join(dir, "alpha.txt")
+	m = stageDelete(t, m, "alpha.txt")
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Error("cancelling should not dispatch a command")
+	}
+	if m.confirmDelete {
+		t.Error("cancelling should close the prompt")
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Errorf("cancelling must leave the file in place: %v", err)
+	}
+}
+
+func TestDeletePromptLabelsOfferTrash(t *testing.T) {
+	m, _ := fixture(t)
+	m.width, m.height = 100, 30
+	m = stageDelete(t, m, "alpha.txt")
+
+	content := m.View().Content
+	if !strings.Contains(content, "(t)rash") {
+		t.Error("prompt should offer the safe trash option")
+	}
+	if !strings.Contains(content, "(f)orce") {
+		t.Error("prompt should offer force delete")
+	}
+	if !strings.Contains(content, "alpha.txt") {
+		t.Error("prompt should name the target")
+	}
+}
+
+func TestDeleteOnDirectoryTrees(t *testing.T) {
+	m, dir := fixture(t)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	m = stageDelete(t, m, "subdir")
+	updated, cmd := m.Update(key('t'))
+	m = updated.(Model)
+	requireNoOpErrors(t, runBatch(t, cmd))
+
+	if _, err := os.Stat(filepath.Join(dir, "subdir")); !os.IsNotExist(err) {
+		t.Error("trashing a directory should move the whole tree")
 	}
 }
