@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 type Entry struct {
@@ -163,18 +164,51 @@ func DetectFileType(path string) FileType {
 	}
 	defer f.Close()
 
-	buf := make([]byte, 512)
-	n, _ := f.Read(buf)
+	// Sample generously: a torrent begins with readable bencoded keys and only
+	// hits binary once the piece hashes start, so a short window can read as
+	// clean text when the file is not text at all.
+	const sniffLen = 4096
+	buf := make([]byte, sniffLen)
+	n, _ := io.ReadFull(f, buf)
 	if n == 0 {
 		return FileTypeText
 	}
+	sample := buf[:n]
 
-	for i := 0; i < n; i++ {
-		if buf[i] == 0 {
+	// A null byte is conclusive on its own and is the cheapest test.
+	control := 0
+	for _, b := range sample {
+		if b == 0 {
 			return FileTypeBinary
 		}
+		if isControlByte(b) {
+			control++
+		}
 	}
+
+	// SHA1 blocks are effectively random, so invalid UTF-8 is the signal that
+	// catches them. Valid multi-byte text such as CJK source passes unchanged.
+	if !utf8.Valid(sample) {
+		return FileTypeBinary
+	}
+
+	// Catches binaries whose bytes happen to be valid UTF-8, such as a Latin-1
+	// encoded document. Line breaks are exempt so ordinary text is unaffected.
+	if control*5 > len(sample) {
+		return FileTypeBinary
+	}
+
 	return FileTypeText
+}
+
+// isControlByte reports whether b is a control character that carries no
+// meaning in a text file. Whitespace controls are exempt.
+func isControlByte(b byte) bool {
+	switch b {
+	case '\t', '\n', '\r':
+		return false
+	}
+	return b < 0x20 || b == 0x7f
 }
 
 func ReadFileHead(path string, maxLines int) ([]string, error) {

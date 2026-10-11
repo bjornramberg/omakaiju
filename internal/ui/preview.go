@@ -55,7 +55,7 @@ func clipLines(lines []string, maxCells int) []string {
 // header renders the preview title, clipped to the panel so a long filename
 // cannot overflow the border on a narrow column.
 func (p Preview) header(name string) string {
-	return p.Theme.AccentText().Bold(true).Render(TruncateName(name, p.ContentWidth()))
+	return p.Theme.AccentText().Bold(true).Render(TruncateName(SanitizeDisplay(name), p.ContentWidth()))
 }
 
 // panel renders the preview frame with a MaxWidth backstop, so even a
@@ -108,7 +108,11 @@ func (p Preview) RenderText(lines, highlighted []string) string {
 
 	body := highlighted
 	if len(body) == 0 {
-		body = lines
+		// Unhighlighted content is raw file bytes and must be cleaned.
+		// Highlighted output is emitted by our own formatter and already
+		// carries trusted ANSI colour codes, so running it through the
+		// sanitizer here would strip the highlighting itself.
+		body = SanitizeLines(lines)
 	}
 
 	totalLines := len(body)
@@ -149,6 +153,9 @@ func (p Preview) RenderTextFromFile(path string) string {
 	if err != nil {
 		return p.RenderError(err)
 	}
+	// Clean before highlighting, so the formatter is never handed bytes that
+	// could reach the terminal.
+	lines = SanitizeLines(lines)
 
 	p.path = path
 	highlighted := splitLines(Highlight(path, strings.Join(lines, "\n"), OmarchyStyle(p.Theme)))

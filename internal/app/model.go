@@ -423,6 +423,9 @@ func (m *Model) updatePreview() {
 			switch fileType {
 			case fs.FileTypeText:
 				lines, _ := fs.ReadFileHead(m.previewPath, 1000)
+				// Clean at ingest so neither the highlighter nor the
+				// preview cache ever holds raw bytes from the file.
+				lines = ui.SanitizeLines(lines)
 				m.previewCache = lines
 				m.previewHL = ui.HighlightLines(m.previewPath, lines, m.theme)
 				m.previewCachePath = m.previewPath

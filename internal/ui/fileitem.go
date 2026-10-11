@@ -55,7 +55,7 @@ func (f FileItem) Render() string {
 	// phantom rows that break cursor alignment.
 	used := DisplayWidth(marker) + 2 + DisplayWidth(icon)
 	budget := f.Width - used
-	name := TruncateName(f.Entry.Name, budget)
+	name := TruncateName(SanitizeDisplay(f.Entry.Name), budget)
 	if f.Entry.IsDir {
 		name += "/"
 	}

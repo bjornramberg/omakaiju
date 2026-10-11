@@ -76,7 +76,7 @@ func (t TopBar) Render() string {
 	}
 
 	name := t.Theme.AccentText().Bold(true).Render("omakaiju")
-	path := t.Theme.PathText().Render(TrimPathLeft(t.Path, budget))
+	path := t.Theme.PathText().Render(TrimPathLeft(SanitizeDisplay(t.Path), budget))
 	host := t.Theme.StatusText().Render(hostname)
 
 	cells := []string{name, path, host}
