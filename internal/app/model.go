@@ -551,6 +551,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// A status message reports what just happened, so it stops being
+		// current once the user acts. Clearing ahead of dispatching the key
+		// means a message produced by this very keypress stays visible until
+		// the next one.
+		m.opResult = ""
+		m.loadErr = nil
+
 		if m.confirmDelete {
 			return m.handleConfirmDelete(msg)
 		}

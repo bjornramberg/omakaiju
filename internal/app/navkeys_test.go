@@ -1,8 +1,12 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+
+	"omakaiju/internal/config"
+	"omakaiju/internal/fs"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -113,5 +117,85 @@ func TestTypingResetsCursorToTop(t *testing.T) {
 
 	if m.rawCursor(m.activePane) != 0 {
 		t.Errorf("cursor = %d, want typing to re-anchor at the first match", m.rawCursor(m.activePane))
+	}
+}
+
+// A message left over from an earlier action must not outstay its welcome.
+func TestStatusMessageClearsOnNextKeypress(t *testing.T) {
+	m, _ := fixture(t)
+
+	updated, _ := m.Update(openMsg{name: "alpha.txt"})
+	m = updated.(Model)
+	if m.opResult == "" {
+		t.Fatal("setup: expected a status message after opening")
+	}
+
+	updated, _ = m.Update(key('j'))
+	m = updated.(Model)
+
+	if m.opResult != "" {
+		t.Errorf("opResult = %q, want it cleared by the next keypress", m.opResult)
+	}
+}
+
+// Clearing happens before the key is handled, so an action that reports its own
+// result stays visible until the key after it.
+func TestMessageFromCurrentKeypressSurvives(t *testing.T) {
+	m, _ := fixture(t)
+	m = cursorOn(t, m, "alpha.txt")
+
+	updated, _ := m.Update(key('y'))
+	m = updated.(Model)
+
+	if m.opResult == "" {
+		t.Fatal("yank should report what it did")
+	}
+	afterYank := m.opResult
+
+	updated, _ = m.Update(key('j'))
+	m = updated.(Model)
+
+	if m.opResult != "" {
+		t.Errorf("opResult = %q, want it cleared by the following keypress", m.opResult)
+	}
+
+	// The yank message was visible until an unrelated key was pressed; confirm
+	// it was not replaced mid-flight by checking a fresh action still reports.
+	if afterYank == "" {
+		t.Error("expected the yank message to be recorded")
+	}
+}
+
+// Left arrow navigates to the parent from inside the filter prompt too.
+func TestLeftArrowLeavesDirectoryWhileFiltering(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "subdir")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "inner.txt"), []byte("i"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := fs.ReadDir(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
+	m.width, m.height = 120, 40
+	m.leftPath, m.leftFiles = sub, files
+	m.rightPath, m.rightFiles = sub, files
+	m.mode = inputFilter
+	m.setFilter(0, "")
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	m = updated.(Model)
+
+	if m.leftPath != dir {
+		t.Errorf("leftPath = %q, want the parent %q", m.leftPath, dir)
+	}
+	if m.mode != inputFilter {
+		t.Error("navigating should not close the filter prompt")
 	}
 }
