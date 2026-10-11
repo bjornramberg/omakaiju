@@ -13,4 +13,6 @@ omakaiju
 *.swp
 *.swo
 *~
+designdoc.md
+omakaiju - TUI File Manager Design Document.md
 .DS_Store
