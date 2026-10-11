@@ -178,3 +178,134 @@ func TestFuzzyEscapeRetiresSession(t *testing.T) {
 		t.Errorf("a late walk repopulated a closed session: %v", m.fuzzyAllFiles)
 	}
 }
+
+// Opening the finder must not start the animation loop.
+func TestFuzzyOpenDoesNotStartSpinner(t *testing.T) {
+	dir := t.TempDir()
+	m := modelIn(t, dir)
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
+	m = updated.(Model)
+
+	if m.fuzzySpinning {
+		t.Error("the spinner started on open, before anything was typed")
+	}
+}
+
+// Typing during the scan is what starts the animation.
+func TestFuzzyFirstKeypressStartsSpinner(t *testing.T) {
+	dir := t.TempDir()
+	m := modelIn(t, dir)
+	m.fuzzyActive = true
+	m.fuzzyRoot = dir
+	m.fuzzyLoading = true
+
+	updated, cmd := m.Update(key('a'))
+	m = updated.(Model)
+
+	if !m.fuzzySpinning {
+		t.Error("typing should start the animation")
+	}
+	if cmd == nil {
+		t.Error("the animation loop should be scheduled on the first keypress")
+	}
+}
+
+// Clearing the query again stops the animation rather than leaving it running
+// with nothing on screen to animate.
+func TestFuzzyClearedQueryStopsSpinner(t *testing.T) {
+	dir := t.TempDir()
+	m := modelIn(t, dir)
+	m.fuzzyActive = true
+	m.fuzzyRoot = dir
+	m.fuzzyLoading = true
+
+	updated, _ := m.Update(key('a'))
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = updated.(Model)
+
+	if m.fuzzyInput != "" {
+		t.Fatalf("fuzzyInput = %q, want it cleared", m.fuzzyInput)
+	}
+	updated, cmd := m.Update(fuzzyTickMsg{})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Error("the loop should stop once the query is cleared")
+	}
+	if m.fuzzySpinning {
+		t.Error("the spinner should stop when the query is cleared")
+	}
+}
+
+// The spinner must advance while the walk is running, and keep going.
+func TestFuzzyTickAdvancesSpinnerWhileLoading(t *testing.T) {
+	dir := t.TempDir()
+	m := modelIn(t, dir)
+	m.fuzzyActive = true
+	m.fuzzyRoot = dir
+	m.fuzzyLoading = true
+	// Animation only runs for a query the user is waiting on.
+	m.fuzzyInput = "a"
+	m.fuzzySpinning = true
+
+	updated, cmd := m.Update(fuzzyTickMsg{})
+	m = updated.(Model)
+
+	if m.fuzzySpinner != 1 {
+		t.Errorf("fuzzySpinner = %d, want 1", m.fuzzySpinner)
+	}
+	if cmd == nil {
+		t.Error("the loop should be reissued while the walk runs")
+	}
+}
+
+// A tick that outlives the walk must not restart the loop, otherwise the timer
+// runs forever in the background.
+func TestFuzzyTickStopsAfterLoad(t *testing.T) {
+	dir := t.TempDir()
+	m := modelIn(t, dir)
+	m.fuzzyActive = true
+	m.fuzzyRoot = dir
+	m.fuzzyLoading = true
+	m.fuzzyInput = "a"
+	m.fuzzySpinning = true
+
+	updated, _ := m.Update(fuzzyFilesLoadedMsg{files: []string{"a.go"}, root: dir})
+	m = updated.(Model)
+
+	before := m.fuzzySpinner
+	updated, cmd := m.Update(fuzzyTickMsg{})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Error("no command should be reissued once the walk has landed")
+	}
+	if m.fuzzySpinner != before {
+		t.Errorf("fuzzySpinner moved to %d after loading finished", m.fuzzySpinner)
+	}
+}
+
+func TestFuzzyTickStopsAfterEscape(t *testing.T) {
+	dir := t.TempDir()
+	m := modelIn(t, dir)
+	m.fuzzyActive = true
+	m.fuzzyRoot = dir
+	m.fuzzyLoading = true
+	m.fuzzyInput = "a"
+	m.fuzzySpinning = true
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = updated.(Model)
+
+	before := m.fuzzySpinner
+	updated, cmd := m.Update(fuzzyTickMsg{})
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Error("no command should be reissued after the finder is closed")
+	}
+	if m.fuzzySpinner != before {
+		t.Errorf("fuzzySpinner moved to %d after escape", m.fuzzySpinner)
+	}
+}

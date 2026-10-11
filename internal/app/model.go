@@ -49,6 +49,11 @@ type themeReloadedMsg struct {
 	err   error
 }
 
+// fuzzyTickMsg drives the spinner while a walk is in progress. The animation
+// state lives on the model because the finder widget is rebuilt on every frame
+// and cannot hold it itself.
+type fuzzyTickMsg struct{}
+
 type fuzzyFilesLoadedMsg struct {
 	files []string
 	// root identifies which walk produced files. A walk from a directory the
@@ -131,6 +136,12 @@ type Model struct {
 	fuzzyLoading bool
 	// fuzzyRoot is the directory the live walk belongs to.
 	fuzzyRoot string
+	// fuzzySpinner is the current animation frame.
+	fuzzySpinner int
+	// fuzzySpinning records whether the animation loop is running. It only
+	// starts once the user types, so a walk that finishes immediately does not
+	// flash a spinner for results nobody has had time to see.
+	fuzzySpinning bool
 
 	leftFilter  string
 	rightFilter string
@@ -248,6 +259,15 @@ func loadFuzzyFilesCmd(root string) tea.Cmd {
 		files, _ := fs.WalkDir(root)
 		return fuzzyFilesLoadedMsg{files: files, root: root}
 	}
+}
+
+// fuzzyTickCmd advances the loading spinner. The loop stops on its own: a tick
+// that arrives once the walk has landed, the finder has been closed, or the
+// root has moved on is simply dropped rather than reissued.
+func fuzzyTickCmd() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+		return fuzzyTickMsg{}
+	})
 }
 
 // waitThemeCmd blocks until the next palette-relevant fsnotify event and
@@ -555,6 +575,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the cursor.
 		return m, nil
 
+	case fuzzyTickMsg:
+		// A tick outliving the walk it was animating must not restart the
+		// loop, so the session flags decide whether to continue.
+		if !m.fuzzyActive || !m.fuzzyLoading || m.fuzzyInput == "" {
+			m.fuzzySpinning = false
+			return m, nil
+		}
+		m.fuzzySpinner++
+		return m, fuzzyTickCmd()
+
 	case fuzzyFilesLoadedMsg:
 		// A walk started elsewhere, or from a session already abandoned, must
 		// not replace the current results.
@@ -642,6 +672,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fuzzyAllFiles = nil
 			m.fuzzyLoading = true
 			m.fuzzyRoot = root
+			m.fuzzySpinner = 0
+			m.fuzzySpinning = false
 			return m, loadFuzzyFilesCmd(root)
 		case nav.ActionFilter:
 			m.mode = inputFilter
@@ -689,14 +721,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // refilterFuzzy re-applies the query. While the walk is still running there is
 // nothing to filter, so the query is simply held until it lands.
-// refilterFuzzy re-applies the query. While the walk is still running there is
-// nothing to filter, so the query is simply held until it lands.
-func (m *Model) refilterFuzzy() {
+// refilterFuzzy re-applies the query and reports whether it started the
+// loading animation, which the caller then has to schedule.
+func (m *Model) refilterFuzzy() (started bool) {
 	m.fuzzyCursor = 0
 	if m.fuzzyLoading {
-		return
+		// Nothing to filter yet. The animation only starts once there is a
+		// query the user is actually waiting on.
+		if m.fuzzyInput != "" && !m.fuzzySpinning {
+			m.fuzzySpinning = true
+			m.fuzzySpinner = 0
+			return true
+		}
+		return false
 	}
 	m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, m.fuzzyAllFiles)
+	return false
 }
 
 func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -742,7 +782,9 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "backspace":
 		if len(m.fuzzyInput) > 0 {
 			m.fuzzyInput = m.fuzzyInput[:len(m.fuzzyInput)-1]
-			m.refilterFuzzy()
+			if m.refilterFuzzy() {
+				return m, fuzzyTickCmd()
+			}
 		}
 		return m, nil
 	}
@@ -750,7 +792,9 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyStr := msg.String()
 	if len(keyStr) == 1 && keyStr[0] >= 32 && keyStr[0] < 127 {
 		m.fuzzyInput += keyStr
-		m.refilterFuzzy()
+		if m.refilterFuzzy() {
+			return m, fuzzyTickCmd()
+		}
 	}
 	return m, nil
 }
@@ -1203,6 +1247,7 @@ func (m Model) View() tea.View {
 		finder.Cursor = m.fuzzyCursor
 		finder.Loading = m.fuzzyLoading
 		finder.Root = m.fuzzyRoot
+		finder.Spinner = m.fuzzySpinner
 		view = ui.OverlayCentered(view, finder.Render(), m.width)
 	}
 
