@@ -18,6 +18,10 @@ type FuzzyFinder struct {
 	Input   string
 	Results []string
 	Cursor  int
+	// Loading reports that the walk is still running. Root is shown so the wait
+	// is attributable to a directory rather than looking like a hang.
+	Loading bool
+	Root    string
 }
 
 func NewFuzzyFinder(width, height int, theme config.Theme) FuzzyFinder {
@@ -129,9 +133,16 @@ func (f FuzzyFinder) Render() string {
 	start, end, above, below := f.visibleWindow()
 
 	var rows []string
-	if len(f.Results) == 0 {
+	switch {
+	case f.Loading:
+		label := "scanning"
+		if f.Root != "" {
+			label = "scanning " + f.Root
+		}
+		rows = append(rows, f.Theme.StatusText().Render(TruncateEnd(label, contentWidth)))
+	case len(f.Results) == 0:
 		rows = append(rows, f.Theme.StatusText().Render("no results"))
-	} else {
+	default:
 		if above {
 			rows = append(rows, f.Theme.StatusText().Render("  ..."))
 		}
@@ -143,8 +154,12 @@ func (f FuzzyFinder) Render() string {
 		}
 	}
 
-	footer := f.Theme.StatusText().Render(
-		fmt.Sprintf("%d/%d | j/k:nav | enter:select | esc:cancel", f.Cursor+1, len(f.Results)))
+	parts := []string{}
+	if pos := f.position(); pos != "" {
+		parts = append(parts, pos)
+	}
+	parts = append(parts, "j/k:nav", "enter:select", "esc:cancel")
+	footer := f.Theme.StatusText().Render(strings.Join(parts, " | "))
 
 	lines := []string{header, "", prompt + input, ""}
 	lines = append(lines, rows...)
@@ -181,6 +196,18 @@ func (f FuzzyFinder) Render() string {
 		Width(f.BoxWidth() - 2).
 		MaxWidth(f.BoxWidth() - 2).
 		Render(content)
+}
+
+// position describes where the cursor sits, without implying a selection exists
+// while the walk is still running.
+func (f FuzzyFinder) position() string {
+	if f.Loading {
+		return ""
+	}
+	if len(f.Results) == 0 {
+		return "0/0"
+	}
+	return fmt.Sprintf("%d/%d", f.Cursor+1, len(f.Results))
 }
 
 // renderRow shows the filename prominently with its directory dimmed, because a

@@ -51,6 +51,10 @@ type themeReloadedMsg struct {
 
 type fuzzyFilesLoadedMsg struct {
 	files []string
+	// root identifies which walk produced files. A walk from a directory the
+	// user has since left can finish after the current one, and applying it
+	// would replace the live results with a stale tree.
+	root string
 }
 
 type Clipboard struct {
@@ -121,6 +125,12 @@ type Model struct {
 	fuzzyResults  []string
 	fuzzyCursor   int
 	fuzzyAllFiles []string
+	// fuzzyLoading marks the window between pressing ctrl+f and the walk
+	// finishing. A large root takes seconds, and without this the panel would
+	// show the previous search's results in the meantime.
+	fuzzyLoading bool
+	// fuzzyRoot is the directory the live walk belongs to.
+	fuzzyRoot string
 
 	leftFilter  string
 	rightFilter string
@@ -236,7 +246,7 @@ func trashCmd(path string) tea.Cmd {
 func loadFuzzyFilesCmd(root string) tea.Cmd {
 	return func() tea.Msg {
 		files, _ := fs.WalkDir(root)
-		return fuzzyFilesLoadedMsg{files: files}
+		return fuzzyFilesLoadedMsg{files: files, root: root}
 	}
 }
 
@@ -546,8 +556,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case fuzzyFilesLoadedMsg:
+		// A walk started elsewhere, or from a session already abandoned, must
+		// not replace the current results.
+		if msg.root != m.fuzzyRoot {
+			return m, nil
+		}
 		m.fuzzyAllFiles = msg.files
 		m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, msg.files)
+		m.fuzzyLoading = false
 		return m, nil
 
 	case tea.KeyMsg:
@@ -616,11 +632,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case nav.ActionRefresh:
 			return m, loadDirCmd(m.activePane, m.rawPath(m.activePane))
 		case nav.ActionFuzzyFind:
+			root := m.rawPath(m.activePane)
 			m.fuzzyActive = true
 			m.fuzzyInput = ""
 			m.fuzzyResults = nil
 			m.fuzzyCursor = 0
-			return m, loadFuzzyFilesCmd(m.rawPath(m.activePane))
+			// The previous tree is dropped rather than shown while the new
+			// walk runs, so results never appear to belong to the wrong root.
+			m.fuzzyAllFiles = nil
+			m.fuzzyLoading = true
+			m.fuzzyRoot = root
+			return m, loadFuzzyFilesCmd(root)
 		case nav.ActionFilter:
 			m.mode = inputFilter
 			m.inputBuf = ""
@@ -665,6 +687,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// refilterFuzzy re-applies the query. While the walk is still running there is
+// nothing to filter, so the query is simply held until it lands.
+// refilterFuzzy re-applies the query. While the walk is still running there is
+// nothing to filter, so the query is simply held until it lands.
+func (m *Model) refilterFuzzy() {
+	m.fuzzyCursor = 0
+	if m.fuzzyLoading {
+		return
+	}
+	m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, m.fuzzyAllFiles)
+}
+
 func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -672,6 +706,9 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.fuzzyInput = ""
 		m.fuzzyResults = nil
 		m.fuzzyCursor = 0
+		m.fuzzyAllFiles = nil
+		m.fuzzyLoading = false
+		m.fuzzyRoot = ""
 		return m, nil
 	case "enter":
 		if m.fuzzyCursor < len(m.fuzzyResults) {
@@ -686,6 +723,9 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.fuzzyInput = ""
 			m.fuzzyResults = nil
 			m.fuzzyCursor = 0
+			m.fuzzyAllFiles = nil
+			m.fuzzyLoading = false
+			m.fuzzyRoot = ""
 			return m, loadDirCmd(m.activePane, dir)
 		}
 		return m, nil
@@ -702,8 +742,7 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "backspace":
 		if len(m.fuzzyInput) > 0 {
 			m.fuzzyInput = m.fuzzyInput[:len(m.fuzzyInput)-1]
-			m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, m.fuzzyAllFiles)
-			m.fuzzyCursor = 0
+			m.refilterFuzzy()
 		}
 		return m, nil
 	}
@@ -711,8 +750,7 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyStr := msg.String()
 	if len(keyStr) == 1 && keyStr[0] >= 32 && keyStr[0] < 127 {
 		m.fuzzyInput += keyStr
-		m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, m.fuzzyAllFiles)
-		m.fuzzyCursor = 0
+		m.refilterFuzzy()
 	}
 	return m, nil
 }
@@ -1163,6 +1201,8 @@ func (m Model) View() tea.View {
 		finder.Input = m.fuzzyInput
 		finder.Results = m.fuzzyResults
 		finder.Cursor = m.fuzzyCursor
+		finder.Loading = m.fuzzyLoading
+		finder.Root = m.fuzzyRoot
 		view = ui.OverlayCentered(view, finder.Render(), m.width)
 	}
 
