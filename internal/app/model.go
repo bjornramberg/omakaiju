@@ -605,7 +605,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.updatePreview()
 			return m, nil
-		case nav.ActionRight, nav.ActionEnter:
+		case nav.ActionEnter:
 			files := m.visibleFiles(m.activePane)
 			cursor := m.rawCursor(m.activePane)
 			if cursor < len(files) && files[cursor].IsDir {
@@ -615,6 +615,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if cursor < len(files) {
 				return m, openCmd(files[cursor].Path, files[cursor].Name)
+			}
+			return m, nil
+		case nav.ActionRight:
+			// Entering a directory is a navigation step, but launching a file is
+			// not: that belongs to enter alone, so an arrow press can never
+			// unexpectedly hand a file to the desktop handler.
+			files := m.visibleFiles(m.activePane)
+			cursor := m.rawCursor(m.activePane)
+			if cursor < len(files) && files[cursor].IsDir {
+				newPath := files[cursor].Path
+				m.setPath(m.activePane, newPath)
+				return m, loadDirCmd(m.activePane, newPath)
 			}
 			return m, nil
 		case nav.ActionLeft:
