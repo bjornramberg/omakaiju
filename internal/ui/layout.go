@@ -20,7 +20,15 @@ type Layout struct {
 	Width  int
 	Height int
 	Theme  config.Theme
+	// PanesStacked puts the two file panes on top of each other instead of
+	// side by side. The preview stays on the right at full height either way.
+	PanesStacked bool
 }
+
+// minStackedMainHeight is the smallest main area that still fits two stacked
+// panes. Below this the panes would degrade to little more than borders, so
+// the toggle stays horizontal instead.
+const minStackedMainHeight = 10
 
 func NewLayout(width, height int, theme config.Theme) Layout {
 	return Layout{Width: width, Height: height, Theme: theme}
@@ -58,8 +66,15 @@ func (l Layout) PreviewWidth() int {
 }
 
 // PaneWidth keeps at least one column for each pane even when the preview takes
-// a third of a very narrow terminal.
+// a third of a very narrow terminal. Stacked panes span the whole panes area.
 func (l Layout) PaneWidth() int {
+	if l.PanesStacked {
+		w := l.Width - l.PreviewWidth()
+		if w < 1 {
+			w = 1
+		}
+		return w
+	}
 	w := (l.Width - l.PreviewWidth()) / 2
 	if w < 1 {
 		w = 1
@@ -67,8 +82,38 @@ func (l Layout) PaneWidth() int {
 	return w
 }
 
+// PaneHeight is the height of one file pane. Side by side both panes take the
+// full main area; stacked they split it, with the top pane taking the extra
+// row on odd heights so the pair always sums back to the main area exactly.
+func (l Layout) PaneHeight(top bool) int {
+	h := l.MainAreaHeight()
+	if !l.PanesStacked {
+		return h
+	}
+	half := h / 2
+	if top {
+		return h - half
+	}
+	if half < 1 {
+		half = 1
+	}
+	return half
+}
+
+// CanStack reports whether the terminal is tall enough for stacked panes to be
+// usable.
+func (l Layout) CanStack() bool {
+	return l.MainAreaHeight() >= minStackedMainHeight
+}
+
 func (l Layout) Render(topBar, leftPane, rightPane, preview, bottomBar string) string {
-	main := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane, preview)
+	var main string
+	if l.PanesStacked {
+		stack := lipgloss.JoinVertical(lipgloss.Left, leftPane, rightPane)
+		main = lipgloss.JoinHorizontal(lipgloss.Top, stack, preview)
+	} else {
+		main = lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane, preview)
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, topBar, main, bottomBar)
 }
 
