@@ -102,3 +102,21 @@ func TestStackedViewKeepsPreview(t *testing.T) {
 		t.Errorf("expected the preview behind the stacked panes, got:\n%s", view)
 	}
 }
+
+// The bar under a stacked layout names the way back.
+func TestStackedViewBarNamesRestoreAction(t *testing.T) {
+	m, _ := fixture(t)
+	m.width, m.height = 100, 30
+	m.panesStacked = true
+	view := plainView.ReplaceAllString(m.View().Content, "")
+
+	if !strings.Contains(view, "s:side-by-side") {
+		t.Errorf("expected the restore hint in the bar, got:\n%s", view)
+	}
+
+	m.panesStacked = false
+	view = plainView.ReplaceAllString(m.View().Content, "")
+	if !strings.Contains(view, "s:stack") {
+		t.Errorf("expected the stack hint in the bar, got:\n%s", view)
+	}
+}

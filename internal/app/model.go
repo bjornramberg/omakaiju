@@ -1223,6 +1223,7 @@ func (m Model) View() tea.View {
 	}
 
 	bottomBar := ui.NewBottomBar(m.width, m.theme)
+	bottomBar.PanesStacked = m.panesStacked
 	switch m.mode {
 	case inputFilter:
 		bottomBar.Prompt = "filter"

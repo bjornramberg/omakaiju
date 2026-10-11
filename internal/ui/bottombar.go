@@ -14,7 +14,10 @@ type BottomBar struct {
 	Prompt      string
 	PromptInput string
 	Progress    *Progress
-	Theme       config.Theme
+	// PanesStacked switches the toggle hint to the action pressing s will
+	// take, rather than a fixed label.
+	PanesStacked bool
+	Theme        config.Theme
 }
 
 func NewBottomBar(width int, theme config.Theme) BottomBar {
@@ -53,7 +56,11 @@ func (b BottomBar) Render() string {
 		return b.line(b.Theme.AccentText().Render(" " + b.OpResult))
 	}
 
-	help := b.Theme.StatusText().Render("h/j/k/l:nav  y:yank  m:move  p:paste  d:delete  /:filter  q:quit")
+	stack := "s:stack"
+	if b.PanesStacked {
+		stack = "s:side-by-side"
+	}
+	help := b.Theme.StatusText().Render("h/j/k/l:nav  y:yank  m:move  p:paste  d:delete  /:filter  " + stack + "  q:quit")
 	return b.line(help)
 }
 
