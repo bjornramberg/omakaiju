@@ -36,6 +36,14 @@ type copyProgressMsg struct {
 	err    error
 }
 
+// openMsg reports the result of opening a file with the desktop handler. It is
+// deliberately not a fileOpMsg: that handler reloads both panes, which would
+// reset the cursor every time a file was opened.
+type openMsg struct {
+	name string
+	err  error
+}
+
 type themeReloadedMsg struct {
 	theme config.Theme
 	err   error
@@ -209,6 +217,12 @@ func deleteCmd(path string) tea.Cmd {
 	return func() tea.Msg {
 		err := fs.Delete(path)
 		return fileOpMsg{err: err}
+	}
+}
+
+func openCmd(path, name string) tea.Cmd {
+	return func() tea.Msg {
+		return openMsg{name: name, err: fs.OpenFile(path)}
 	}
 }
 
@@ -516,6 +530,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// resumed or only the first reload would ever take effect.
 		return m, m.waitThemeCmd()
 
+	case openMsg:
+		if msg.err != nil {
+			m.loadErr = msg.err
+			m.opResult = ""
+		} else {
+			m.loadErr = nil
+			m.opResult = "opening " + msg.name + "..."
+		}
+		// No pane reload: opening a file must not disturb the listing or move
+		// the cursor.
+		return m, nil
+
 	case fuzzyFilesLoadedMsg:
 		m.fuzzyAllFiles = msg.files
 		m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, msg.files)
@@ -583,6 +609,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				newPath := files[cursor].Path
 				m.setPath(m.activePane, newPath)
 				return m, loadDirCmd(m.activePane, newPath)
+			}
+			if cursor < len(files) {
+				return m, openCmd(files[cursor].Path, files[cursor].Name)
 			}
 			return m, nil
 		case nav.ActionLeft:

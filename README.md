@@ -28,7 +28,7 @@ make build
 | Key | Action |
 |-----|--------|
 | h/j/k/l or arrows | Navigate |
-| Enter | Open directory / file |
+| Enter | Enter directory, or open file with the desktop handler |
 | Tab | Toggle active pane |
 | y | Yank (copy) |
 | m | Mark / unmark entry (press repeatedly to select several) |

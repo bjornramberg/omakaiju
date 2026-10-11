@@ -2,6 +2,7 @@ package app
 
 import (
 	"archive/zip"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -832,5 +833,105 @@ func TestViewRendersNormallyWhenSized(t *testing.T) {
 	}
 	if !strings.Contains(out, dir) {
 		t.Error("top bar should show the active path")
+	}
+}
+
+// cursorOn moves the active pane cursor onto a named entry.
+func cursorOn(t *testing.T, m Model, name string) Model {
+	t.Helper()
+	m = moveCursorTo(t, m, name)
+	idx := indexOf(m.visibleFiles(m.activePane), name)
+	if m.rawCursor(m.activePane) != idx {
+		t.Fatalf("cursor setup failed for %s", name)
+	}
+	return m
+}
+
+func TestEnterOnFileDispatchesOpen(t *testing.T) {
+	m, _ := fixture(t)
+	m = cursorOn(t, m, "alpha.txt")
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("enter on a file should dispatch an open command")
+	}
+}
+
+// Opening must not disturb the listing or move the cursor, which is why openMsg
+// is separate from fileOpMsg: that one reloads the panes.
+func TestOpenResultPreservesCursorAndListing(t *testing.T) {
+	m, dir := fixture(t)
+	m = cursorOn(t, m, "beta.txt")
+	cursorBefore := m.leftCursor
+	filesBefore := len(m.leftFiles)
+
+	updated, _ := m.Update(openMsg{name: "beta.txt"})
+	m = updated.(Model)
+
+	if m.leftCursor != cursorBefore {
+		t.Errorf("leftCursor = %d, want %d preserved", m.leftCursor, cursorBefore)
+	}
+	if len(m.leftFiles) != filesBefore {
+		t.Errorf("listing changed: %d entries, want %d", len(m.leftFiles), filesBefore)
+	}
+	if m.opResult != "opening beta.txt..." {
+		t.Errorf("opResult = %q, want %q", m.opResult, "opening beta.txt...")
+	}
+	if m.loadErr != nil {
+		t.Errorf("unexpected load error: %v", m.loadErr)
+	}
+	if m.leftPath != dir {
+		t.Errorf("leftPath = %q, want %q", m.leftPath, dir)
+	}
+}
+
+func TestOpenFailureSurfacesError(t *testing.T) {
+	m, dir := fixture(t)
+	m = cursorOn(t, m, "alpha.txt")
+	cursorBefore := m.leftCursor
+
+	updated, _ := m.Update(openMsg{name: "alpha.txt", err: errors.New("no handler")})
+	m = updated.(Model)
+
+	if m.loadErr == nil {
+		t.Fatal("a failed open should surface an error")
+	}
+	if m.opResult != "" {
+		t.Errorf("opResult = %q, want cleared on failure", m.opResult)
+	}
+	if m.leftCursor != cursorBefore {
+		t.Error("a failed open should not move the cursor")
+	}
+	if m.leftPath != dir {
+		t.Error("a failed open should not change the directory")
+	}
+}
+
+func TestEnterOnDirectoryStillNavigates(t *testing.T) {
+	m, dir := fixture(t)
+	m = cursorOn(t, m, "subdir")
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("enter on a directory should still dispatch a load")
+	}
+	if cmd().(dirLoadedMsg).path != filepath.Join(dir, "subdir") {
+		t.Error("enter on a directory should navigate into it")
+	}
+}
+
+func TestOpenMsgDoesNotReloadPanes(t *testing.T) {
+	m, _ := fixture(t)
+	m = cursorOn(t, m, "alpha.txt")
+
+	// A fileOpMsg would reload both panes; openMsg must not.
+	updated, cmd := m.Update(openMsg{name: "alpha.txt"})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Error("openMsg should not dispatch a reload command")
 	}
 }
