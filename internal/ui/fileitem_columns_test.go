@@ -231,3 +231,100 @@ func TestReadDirCarriesMode(t *testing.T) {
 func iconsIconForTest() string {
 	return icons.ForFile("x.txt")
 }
+
+// detailStart is where the size column begins, which must be identical for every
+// row regardless of how long the name is. The size column sits to the left of
+// the permission string by a fixed amount.
+func detailStart(t *testing.T, out, perms string) int {
+	t.Helper()
+	i := strings.Index(out, perms)
+	if i < 0 {
+		t.Fatalf("no %q in row: %q", perms, out)
+	}
+	start := i - (sizeColumnWidth + gapWidth)
+	if start < 0 {
+		t.Fatalf("details sit too close to the left edge: %q", out)
+	}
+	return start
+}
+
+// Short and long names must place the details in the same columns. Trailing
+// padding cannot do this: a name shorter than its budget would drag its size
+// and permissions left.
+func TestFileItemDetailsAlignAcrossNameLengths(t *testing.T) {
+	theme := config.DefaultTheme()
+	names := []struct {
+		name string
+		size int64
+	}{
+		{"a.txt", 999},
+		{"movie.mkv", 45088768},
+		{"a-much-longer-filename-here.txt", 14336},
+		{"z", 1},
+	}
+
+	const width = 80
+	want := -1
+	for _, n := range names {
+		entry := fs.Entry{Name: n.name, Path: "/tmp/" + n.name, Size: n.size, Mode: 0o644}
+		out := stripANSI(NewFileItem(entry, false, false, theme, width).Render())
+
+		if got := DisplayWidth(out); got != width {
+			t.Errorf("%s: row width %d, want %d", n.name, got, width)
+		}
+		at := detailStart(t, out, "-rw-r--r--")
+		if want < 0 {
+			want = at
+		} else if at != want {
+			t.Errorf("%s: details start at %d, want %d (%q)", n.name, at, want, out)
+		}
+	}
+}
+
+// A directory row has a blank size cell but must still line up with the rest.
+func TestFileItemDirectoryRowAlignsWithFiles(t *testing.T) {
+	theme := config.DefaultTheme()
+	const width = 80
+
+	file := fs.Entry{Name: "a.txt", Path: "/tmp/a.txt", Size: 999, Mode: 0o644}
+	dir := dirEntry("subdir")
+
+	fileOut := stripANSI(NewFileItem(file, false, false, theme, width).Render())
+	dirOut := stripANSI(NewFileItem(dir, false, false, theme, width).Render())
+
+	got := detailStart(t, dirOut, "drwxr-xr-x")
+	want := detailStart(t, fileOut, "-rw-r--r--")
+	if got != want {
+		t.Errorf("directory details start at %d, want %d to match file rows (%q)", got, want, dirOut)
+	}
+}
+
+// Marked rows are also compared against differently sized names, which the old
+// test missed by rendering one entry twice.
+func TestFileItemMarkedRowAlignsWithOthers(t *testing.T) {
+	theme := config.DefaultTheme()
+	const width = 80
+
+	short := fs.Entry{Name: "a.txt", Path: "/tmp/a.txt", Size: 999, Mode: 0o644}
+	long := fs.Entry{Name: "a-much-longer-name.txt", Path: "/tmp/x", Size: 2048, Mode: 0o644}
+
+	base := detailStart(t, stripANSI(NewFileItem(short, false, false, theme, width).Render()), "-rw-r--r--")
+	marked := detailStart(t, stripANSI(NewFileItem(long, false, true, theme, width).Render()), "-rw-r--r--")
+
+	if marked != base {
+		t.Errorf("marked row details at %d, want %d", marked, base)
+	}
+}
+
+// When the columns are dropped the row keeps today's behaviour and exact width.
+func TestFileItemNameOnlyRowIsExactWidth(t *testing.T) {
+	theme := config.DefaultTheme()
+	entry := fs.Entry{Name: "a.txt", Path: "/tmp/a.txt", Size: 999, Mode: 0o644}
+
+	for _, w := range []int{20, 22, 25} {
+		out := NewFileItem(entry, false, false, theme, w).Render()
+		if got := DisplayWidth(out); got != w {
+			t.Errorf("width %d: row is %d cells", w, got)
+		}
+	}
+}

@@ -68,9 +68,20 @@ func (f FileItem) Render() string {
 		name += "/"
 	}
 
-	content := fmt.Sprintf("%s %s %s", marker, icon, name)
+	left := fmt.Sprintf("%s %s %s", marker, icon, name)
+	content := left
+
+	// The details have to be pushed to a fixed column rather than trailing the
+	// name. Padding the row style only adds cells at the far right, so a short
+	// name would drag its size and permissions left and leave the columns
+	// ragged down the listing.
 	if detail := strings.TrimRight(size+perms, " "); detail != "" {
-		content += " " + detail
+		right := " " + detail
+		pad := f.Width - DisplayWidth(left) - DisplayWidth(right)
+		if pad < 0 {
+			pad = 0
+		}
+		content = left + strings.Repeat(" ", pad) + right
 	}
 
 	// The theme's row style carries horizontal padding, but the row already
