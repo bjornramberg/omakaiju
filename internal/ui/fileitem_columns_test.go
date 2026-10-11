@@ -3,7 +3,6 @@ package ui
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -51,8 +50,15 @@ func TestFileItemDirectoryHasNoSize(t *testing.T) {
 	}
 	// The size cell sits at a fixed offset left of the permissions, so check
 	// that span directly: it must be blank regardless of what the name holds.
-	if strings.Contains(out, "B ") || regexp.MustCompile(`\d[KMGTPE]?B`).MatchString(out) {
-		t.Errorf("a directory should not show a size, got %q", out)
+	// The size cell sits at a fixed offset left of the permissions, so check
+	// that span directly: it must be blank regardless of what the name holds.
+	i := strings.Index(out, "drwxr-xr-x")
+	if i < 0 {
+		t.Fatalf("expected directory permissions, got %q", out)
+	}
+	cell := out[max(0, i-sizeColumnWidth-gapWidth):max(0, i-gapWidth)]
+	if strings.TrimSpace(cell) != "" {
+		t.Errorf("a directory should not show a size, got %q in %q", cell, out)
 	}
 }
 
@@ -70,14 +76,14 @@ func TestFileItemSizeColumnIsAligned(t *testing.T) {
 	small := stripANSI(NewFileItem(fileEntry("a.txt", 999, 0o644), false, false, theme, 80).Render())
 	large := stripANSI(NewFileItem(fileEntry("b.txt", 45088768, 0o644), false, false, theme, 80).Render())
 
-	smallAt := strings.Index(small, "999B")
+	smallAt := strings.Index(small, "999")
 	largeAt := strings.Index(large, "43MB")
 	if smallAt < 0 || largeAt < 0 {
 		t.Fatalf("expected both sizes, got %q and %q", small, large)
 	}
 	// Right aligned means the ends line up, so the shorter size starts further
 	// right while occupying the same column width.
-	if smallAt+len("999B") != largeAt+len("43MB") {
+	if smallAt+len("999") != largeAt+len("43MB") {
 		t.Errorf("sizes do not share a right edge: %d vs %d", smallAt, largeAt)
 	}
 }

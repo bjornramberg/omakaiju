@@ -147,13 +147,14 @@ func isGzippedTar(path string) bool {
 	return n >= 262 && string(magic[257:262]) == "ustar"
 }
 
-// FormatSize renders a byte count in compact human units: whole numbers, no
-// space, single-letter suffixes. Rounding that reaches the next unit promotes
-// it, so 1048575 reads as 1MB rather than 1024KB.
+// FormatSize renders a byte count in compact human units: whole numbers,
+// single-letter suffixes, no space. Byte counts carry no suffix at all.
+// Rounding that reaches the next unit promotes it, so 1048575 reads as 1MB
+// rather than 1024KB.
 func FormatSize(n int64) string {
 	const unit = 1024
 	if n < unit {
-		return fmt.Sprintf("%dB", n)
+		return fmt.Sprintf("%d", n)
 	}
 	div, exp := int64(unit), 0
 	for m := n / unit; m >= unit && exp < 4; m /= unit {
