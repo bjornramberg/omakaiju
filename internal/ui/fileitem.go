@@ -2,6 +2,9 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"strings"
+
 	"github.com/bjornramberg/omakaiju/internal/config"
 	"github.com/bjornramberg/omakaiju/internal/fs"
 	"github.com/bjornramberg/omakaiju/internal/icons"
@@ -55,12 +58,20 @@ func (f FileItem) Render() string {
 	// phantom rows that break cursor alignment.
 	used := DisplayWidth(marker) + 2 + DisplayWidth(icon)
 	budget := f.Width - used
-	name := TruncateName(SanitizeDisplay(f.Entry.Name), budget)
+	if budget < 1 {
+		budget = 1
+	}
+
+	size, perms := f.detailColumns(budget)
+	name := TruncateName(SanitizeDisplay(f.Entry.Name), budget-detailWidth(size, perms))
 	if f.Entry.IsDir {
 		name += "/"
 	}
 
 	content := fmt.Sprintf("%s %s %s", marker, icon, name)
+	if detail := strings.TrimRight(size+perms, " "); detail != "" {
+		content += " " + detail
+	}
 
 	// The theme's row style carries horizontal padding, but the row already
 	// spaces itself with the marker and icon. Leaving padding on would add
@@ -68,4 +79,69 @@ func (f FileItem) Render() string {
 	// MaxWidth acts as a backstop against any future miscalculation.
 	row := style.UnsetPaddingLeft().UnsetPaddingRight()
 	return row.Width(f.Width).MaxWidth(f.Width).Render(content)
+}
+
+// Column geometry for the detail fields. The size column is wide enough for the
+// largest FormatSize output and right-aligned so units line up; permissions
+// are always ten characters.
+const (
+	sizeColumnWidth  = 9
+	permsColumnWidth = 10
+	gapWidth         = 1
+	detailGap        = 1 /*space between the name and the details*/
+	// minNameWidth is the narrowest a name may become before its column is
+	// dropped. A filename squeezed to a couple of cells is worse than no
+	// detail at all.
+	minNameWidth = 12
+)
+
+// detailColumns decides which detail columns fit in the space left over, and
+// returns them already padded. Size is given up first, then permissions, so a
+// narrow pane degrades to today's name-only row rather than an unreadable one.
+func (f FileItem) detailColumns(budget int) (size, perms string) {
+	if budget-(sizeColumnWidth+gapWidth+permsColumnWidth) >= minNameWidth {
+		// The gap belongs to the size column, so it goes first when size is
+		// dropped along with it.
+		return f.sizeCell() + strings.Repeat(" ", gapWidth), permsCell(f.Entry.Mode)
+	}
+	if budget-(permsColumnWidth+gapWidth) >= minNameWidth {
+		return "", strings.Repeat(" ", gapWidth) + permsCell(f.Entry.Mode)
+	}
+	return "", ""
+}
+
+// sizeCell renders the size right-aligned in a fixed column. Directories have
+// no meaningful byte count, so the cell is left blank.
+func (f FileItem) sizeCell() string {
+	if f.Entry.IsDir {
+		return strings.Repeat(" ", sizeColumnWidth)
+	}
+	size := fs.FormatSize(f.Entry.Size)
+	if DisplayWidth(size) > sizeColumnWidth {
+		size = TruncateEnd(size, sizeColumnWidth)
+	}
+	return strings.Repeat(" ", sizeColumnWidth-DisplayWidth(size)) + size
+}
+
+// permsCell renders permission bits in a fixed column.
+func permsCell(mode os.FileMode) string {
+	if mode == 0 {
+		// No mode recorded, such as an entry built by hand in a test.
+		return strings.Repeat(" ", permsColumnWidth)
+	}
+	perms := mode.String()
+	if DisplayWidth(perms) > permsColumnWidth {
+		perms = TruncateEnd(perms, permsColumnWidth)
+	}
+	return perms + strings.Repeat(" ", permsColumnWidth-DisplayWidth(perms))
+}
+
+// detailWidth is the space the rendered details consume, including the gap that
+// separates them from the name.
+func detailWidth(size, perms string) int {
+	w := DisplayWidth(size) + DisplayWidth(perms) + detailGap
+	if w == detailGap {
+		return 0
+	}
+	return w
 }
