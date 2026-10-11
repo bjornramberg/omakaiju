@@ -1076,16 +1076,6 @@ func (m Model) View() tea.View {
 		return tea.NewView(layout.TooSmallPlaceholder())
 	}
 
-	if m.fuzzyActive {
-		finder := ui.NewFuzzyFinder(m.width, m.height, m.theme)
-		finder.Focused = true
-		finder.Input = m.fuzzyInput
-		finder.Results = m.fuzzyResults
-		finder.Cursor = m.fuzzyCursor
-		finder.AllFiles = m.fuzzyAllFiles
-		return tea.NewView(finder.Render())
-	}
-
 	topBar := ui.NewTopBar(m.width, m.theme)
 	topBar.Filter = m.filterOf(m.activePane)
 	topBar.Path = m.rawPath(m.activePane)
@@ -1163,6 +1153,18 @@ func (m Model) View() tea.View {
 	bottomRendered := bottomBar.Render()
 
 	view := layout.Render(topBar.Render(), leftRendered, rightRendered, previewRendered, bottomRendered)
+
+	// The finder sits on top of the finished layout rather than replacing it,
+	// so the panes stay visible and the terminal is not left with a blank
+	// grid behind the panel.
+	if m.fuzzyActive {
+		finder := ui.NewFuzzyFinder(m.width, m.height, m.theme)
+		finder.Focused = true
+		finder.Input = m.fuzzyInput
+		finder.Results = m.fuzzyResults
+		finder.Cursor = m.fuzzyCursor
+		view = ui.OverlayCentered(view, finder.Render(), m.width)
+	}
 
 	return tea.NewView(view)
 }
