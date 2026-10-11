@@ -21,6 +21,7 @@ const (
 	ActionRefresh
 	ActionClear
 	ActionQuit
+	ActionStack
 )
 
 type Keybind struct {
@@ -50,6 +51,7 @@ var Keybinds = []Keybind{
 	{"ctrl+r", ActionRefresh},
 	{"esc", ActionClear},
 	{"q", ActionQuit},
+	{"s", ActionStack},
 }
 
 func Lookup(key string) Action {

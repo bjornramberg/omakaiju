@@ -85,14 +85,17 @@ type Model struct {
 	width  int
 	height int
 
-	activePane  int
-	leftPath    string
-	leftFiles   []fs.Entry
-	leftCursor  int
-	rightPath   string
-	rightFiles  []fs.Entry
-	rightCursor int
-	loadErr     error
+	activePane int
+	// panesStacked toggles the file panes between side by side and stacked.
+	// It lives for the session only and resets on launch.
+	panesStacked bool
+	leftPath     string
+	leftFiles    []fs.Entry
+	leftCursor   int
+	rightPath    string
+	rightFiles   []fs.Entry
+	rightCursor  int
+	loadErr      error
 
 	clipboard     Clipboard
 	clipboardOn   bool
@@ -645,6 +648,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activePane = 1 - m.activePane
 			m.updatePreview()
 			return m, nil
+		case nav.ActionStack:
+			// The layout object lives in View, so the gate check builds a
+			// throwaway one from the current size.
+			if !ui.NewLayout(m.width, m.height, m.theme).CanStack() {
+				m.opResult = "terminal too short to stack panes"
+				return m, nil
+			}
+			m.panesStacked = !m.panesStacked
+			return m, nil
 		case nav.ActionUp, nav.ActionDown, nav.ActionLeft, nav.ActionRight:
 			return m.handleNavAction(action)
 		case nav.ActionEnter:
@@ -1150,6 +1162,7 @@ func (m Model) handleConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) View() tea.View {
 	layout := ui.NewLayout(m.width, m.height, m.theme)
+	layout.PanesStacked = m.panesStacked
 
 	// Before the first WindowSizeMsg the size is still zero, and a terminal
 	// dragged below the minimum has nowhere to draw. Both would otherwise hand
@@ -1167,7 +1180,7 @@ func (m Model) View() tea.View {
 		markedSet[path] = true
 	}
 
-	leftPane := ui.NewPane(layout.PaneWidth(), layout.MainAreaHeight(), m.activePane == 0, m.theme)
+	leftPane := ui.NewPane(layout.PaneWidth(), layout.PaneHeight(true), m.activePane == 0, m.theme)
 	leftPane.Path = m.leftPath
 	leftPane.Filter = m.leftFilter
 	leftPane.Files = m.visibleFiles(0)
@@ -1179,7 +1192,7 @@ func (m Model) View() tea.View {
 	}
 	leftRendered := leftPane.Render()
 
-	rightPane := ui.NewPane(layout.PaneWidth(), layout.MainAreaHeight(), m.activePane == 1, m.theme)
+	rightPane := ui.NewPane(layout.PaneWidth(), layout.PaneHeight(false), m.activePane == 1, m.theme)
 	rightPane.Path = m.rightPath
 	rightPane.Filter = m.rightFilter
 	rightPane.Files = m.visibleFiles(1)

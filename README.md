@@ -103,6 +103,7 @@ make clean    # rm -f omakaiju
 | Enter | Enter directory, or open file with the desktop handler (`gio open`, `xdg-open` fallback) |
 | Right / l | Enter directory only (never opens files) |
 | Tab | Toggle active pane |
+| s | Stack file panes vertically / restore side by side |
 | i | Focus preview (press `i`/`Esc` to unfocus) |
 | y | Yank (copy) entry under cursor |
 | m | Mark / unmark entry (repeat to select several) |
