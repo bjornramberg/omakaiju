@@ -139,13 +139,18 @@ func (f FileItem) sizeCell() string {
 	return strings.Repeat(" ", sizeColumnWidth-DisplayWidth(size)) + size
 }
 
-// permsCell renders permission bits in a fixed column.
+// permsCell renders permission bits in a fixed column. Symlinks are shown with
+// a lowercase l like ls does, rather than the capital L Go's String method
+// emits, so the type characters stay consistent: -, d, l.
 func permsCell(mode os.FileMode) string {
 	if mode == 0 {
 		// No mode recorded, such as an entry built by hand in a test.
 		return strings.Repeat(" ", permsColumnWidth)
 	}
 	perms := mode.String()
+	if mode&os.ModeSymlink != 0 {
+		perms = "l" + perms[1:]
+	}
 	if DisplayWidth(perms) > permsColumnWidth {
 		perms = TruncateEnd(perms, permsColumnWidth)
 	}

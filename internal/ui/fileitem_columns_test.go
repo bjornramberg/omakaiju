@@ -50,8 +50,6 @@ func TestFileItemDirectoryHasNoSize(t *testing.T) {
 	}
 	// The size cell sits at a fixed offset left of the permissions, so check
 	// that span directly: it must be blank regardless of what the name holds.
-	// The size cell sits at a fixed offset left of the permissions, so check
-	// that span directly: it must be blank regardless of what the name holds.
 	i := strings.Index(out, "drwxr-xr-x")
 	if i < 0 {
 		t.Fatalf("expected directory permissions, got %q", out)
@@ -375,5 +373,45 @@ func TestFileItemShortDirectoryUnchanged(t *testing.T) {
 	}
 	if got := DisplayWidth(out); got != 80 {
 		t.Errorf("row width %d, want 80", got)
+	}
+}
+
+// Symlinks show a lowercase l like ls, not the capital L Go's String method
+// emits, keeping the type characters consistent: -, d, l.
+func TestFileItemSymlinkShowsLowercaseL(t *testing.T) {
+	theme := config.DefaultTheme()
+	entry := fs.Entry{
+		Name: "link",
+		Path: "/tmp/link",
+		Mode: os.ModeSymlink | 0o777,
+	}
+
+	out := stripANSI(NewFileItem(entry, false, false, theme, 80).Render())
+	if !strings.Contains(out, "lrwxrwxrwx") {
+		t.Errorf("expected lrwxrwxrwx, got %q", out)
+	}
+	if strings.Contains(out, "Lrwxrwxrwx") {
+		t.Errorf("capital L leaked through: %q", out)
+	}
+	if got := DisplayWidth(out); got != 80 {
+		t.Errorf("row width %d, want 80", got)
+	}
+}
+
+// A symlink row lines up with the rest of the listing.
+func TestFileItemSymlinkRowAligns(t *testing.T) {
+	theme := config.DefaultTheme()
+	const width = 80
+
+	file := fs.Entry{Name: "a.txt", Path: "/tmp/a.txt", Size: 999, Mode: 0o644}
+	link := fs.Entry{Name: "link", Path: "/tmp/link", Mode: os.ModeSymlink | 0o777}
+
+	fileOut := stripANSI(NewFileItem(file, false, false, theme, width).Render())
+	linkOut := stripANSI(NewFileItem(link, false, false, theme, width).Render())
+
+	got := detailStart(t, linkOut, "lrwxrwxrwx")
+	want := detailStart(t, fileOut, "-rw-r--r--")
+	if got != want {
+		t.Errorf("symlink details at %d, want %d", got, want)
 	}
 }
