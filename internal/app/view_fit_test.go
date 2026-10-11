@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"omakaiju/internal/config"
-	"omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/fs"
 )
 
 // viewFixture builds a model in dir with a realistic listing.

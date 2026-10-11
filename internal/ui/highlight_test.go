@@ -6,7 +6,7 @@ import (
 
 	"github.com/alecthomas/chroma/v2"
 
-	"omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/config"
 )
 
 func testTheme() config.Theme {

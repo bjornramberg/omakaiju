@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/config"
 )
 
 type BottomBar struct {

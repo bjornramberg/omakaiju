@@ -24,7 +24,7 @@ Built in Go with Bubble Tea + Lipgloss. Both panes start in the directory where 
 ## Install
 
 ```bash
-go install github.com/bjornramberg/omakaiju@latest
+go install github.com/bjornramberg/omakaiju/cmd/omakaiju@latest
 ```
 
 Or download a prebuilt Linux (amd64/arm64) tarball from

@@ -6,8 +6,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"omakaiju/internal/config"
-	"omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/fs"
 )
 
 // Progress describes an in-flight copy for display. Copied and Total are the

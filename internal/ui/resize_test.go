@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/config"
 )
 
 // noLineExceeds reports whether every rendered line fits within max. This is

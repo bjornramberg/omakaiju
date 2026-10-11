@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"omakaiju/internal/config"
-	"omakaiju/internal/fs"
-	"omakaiju/internal/fuzzy"
-	"omakaiju/internal/nav"
-	"omakaiju/internal/ui"
+	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/fuzzy"
+	"github.com/bjornramberg/omakaiju/internal/nav"
+	"github.com/bjornramberg/omakaiju/internal/ui"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/fsnotify/fsnotify"

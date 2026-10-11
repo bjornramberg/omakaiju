@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"omakaiju/internal/config"
-	"omakaiju/internal/fs"
-	"omakaiju/internal/icons"
+	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/icons"
 )
 
 // ArchiveLines formats archive entries for the preview panel: icon, name, and a

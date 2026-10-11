@@ -3,7 +3,7 @@ package ui
 import (
 	"os"
 
-	"omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/config"
 )
 
 type TopBar struct {

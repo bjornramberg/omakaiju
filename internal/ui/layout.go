@@ -3,7 +3,7 @@ package ui
 import (
 	"fmt"
 
-	"omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/config"
 
 	"charm.land/lipgloss/v2"
 )

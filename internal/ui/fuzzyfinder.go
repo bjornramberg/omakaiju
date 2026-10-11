@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"omakaiju/internal/config"
-	"omakaiju/internal/fuzzy"
+	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/fuzzy"
 )
 
 type FuzzyFinder struct {

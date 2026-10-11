@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"omakaiju/internal/app"
-	"omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/app"
+	"github.com/bjornramberg/omakaiju/internal/config"
 
 	tea "charm.land/bubbletea/v2"
 )

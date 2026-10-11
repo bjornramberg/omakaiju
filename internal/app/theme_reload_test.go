@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/config"
 
 	tea "charm.land/bubbletea/v2"
 )

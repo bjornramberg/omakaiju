@@ -2,9 +2,9 @@ package ui
 
 import (
 	"fmt"
-	"omakaiju/internal/config"
-	"omakaiju/internal/fs"
-	"omakaiju/internal/icons"
+	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/icons"
 
 	"charm.land/lipgloss/v2"
 )

@@ -3,7 +3,7 @@ package nav
 import (
 	"strings"
 
-	"omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/fs"
 )
 
 func FilterEntries(files []fs.Entry, q string) []fs.Entry {

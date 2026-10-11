@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"omakaiju/internal/config"
-	"omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/fs"
 )
 
 // ownANSI matches escape sequences this program generates for styling. They are

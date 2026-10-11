@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"omakaiju/internal/config"
-	"omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/fs"
 )
 
 type Preview struct {

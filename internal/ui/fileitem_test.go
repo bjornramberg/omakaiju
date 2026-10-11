@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"omakaiju/internal/config"
-	"omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/fs"
 )
 
 func TestFileItemShowsMarkerColumn(t *testing.T) {
