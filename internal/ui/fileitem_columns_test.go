@@ -150,6 +150,12 @@ func TestFileItemRowsNeverExceedWidth(t *testing.T) {
 		fileEntry("notes.md", 14336, 0o644),
 		fileEntry("a-really-long-filename-here.txt", 999, 0o644),
 		dirEntry("subdirectory"),
+		{
+			Name:  "a-much-longer-directory-name-here",
+			Path:  "/tmp/a-much-longer-directory-name-here",
+			IsDir: true,
+			Mode:  os.ModeDir | 0o755,
+		},
 	}
 
 	for _, w := range []int{1, 8, 20, 22, 25, 32, 45, 60, 80, 120, 200} {
@@ -326,5 +332,48 @@ func TestFileItemNameOnlyRowIsExactWidth(t *testing.T) {
 		if got := DisplayWidth(out); got != w {
 			t.Errorf("width %d: row is %d cells", w, got)
 		}
+	}
+}
+
+// A truncated directory name must keep its trailing slash without exceeding
+// the row width. The slash used to be appended after truncation, pushing the
+// row one cell past the pane and wrapping the permissions.
+func TestFileItemLongDirectoryKeepsSlashWithinWidth(t *testing.T) {
+	theme := config.DefaultTheme()
+	entry := fs.Entry{
+		Name:  "a-much-longer-directory-name-here",
+		Path:  "/tmp/a-much-longer-directory-name-here",
+		IsDir: true,
+		Mode:  os.ModeDir | 0o755,
+	}
+
+	for _, w := range []int{32, 45, 60, 80} {
+		out := stripANSI(NewFileItem(entry, false, false, theme, w).Render())
+
+		if got := DisplayWidth(out); got != w {
+			t.Errorf("width %d: row is %d cells", w, got)
+		}
+		if !strings.Contains(out, "drwxr-xr-x") {
+			t.Errorf("width %d: permissions damaged: %q", w, out)
+		}
+		trimmed := strings.TrimRight(out, " ")
+		if !strings.HasSuffix(strings.TrimSuffix(trimmed, "drwxr-xr-x"), "/") &&
+			!strings.Contains(trimmed, "/") {
+			t.Errorf("width %d: directory lost its trailing slash: %q", w, out)
+		}
+	}
+}
+
+// Short directory names render exactly as before.
+func TestFileItemShortDirectoryUnchanged(t *testing.T) {
+	theme := config.DefaultTheme()
+	entry := dirEntry("subdir")
+
+	out := stripANSI(NewFileItem(entry, false, false, theme, 80).Render())
+	if !strings.Contains(out, "subdir/") {
+		t.Errorf("expected subdir/ in the row, got %q", out)
+	}
+	if got := DisplayWidth(out); got != 80 {
+		t.Errorf("row width %d, want 80", got)
 	}
 }

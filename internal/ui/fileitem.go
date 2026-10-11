@@ -63,10 +63,15 @@ func (f FileItem) Render() string {
 	}
 
 	size, perms := f.detailColumns(budget)
-	name := TruncateName(SanitizeDisplay(f.Entry.Name), budget-detailWidth(size, perms))
+	// The trailing slash is part of the name before truncation, not an
+	// addition after it. TruncateName preserves it as the directory suffix,
+	// so a long dirname is cut to exactly its budget instead of one cell
+	// past it, which used to spill the row and wrap the permissions.
+	name := SanitizeDisplay(f.Entry.Name)
 	if f.Entry.IsDir {
 		name += "/"
 	}
+	name = TruncateName(name, budget-detailWidth(size, perms))
 
 	left := fmt.Sprintf("%s %s %s", marker, icon, name)
 	content := left
