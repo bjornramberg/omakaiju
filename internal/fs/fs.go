@@ -16,6 +16,9 @@ type Entry struct {
 	IsDir   bool
 	Size    int64
 	ModTime int64
+	// Mode carries the permission bits for display. ReadDir already holds the
+	// FileInfo, so keeping it costs nothing extra.
+	Mode os.FileMode
 }
 
 func ReadDir(path string) ([]Entry, error) {
@@ -43,6 +46,7 @@ func ReadDir(path string) ([]Entry, error) {
 			IsDir:   e.IsDir(),
 			Size:    info.Size(),
 			ModTime: info.ModTime().Unix(),
+			Mode:    info.Mode(),
 		})
 	}
 
