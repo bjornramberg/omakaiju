@@ -95,12 +95,6 @@ make lint     # go vet ./...
 make clean    # rm -f omakaiju
 ```
 
-## Running
-
-```bash
-./omakaiju
-```
-
 ## Keybindings
 
 | Key | Action |
