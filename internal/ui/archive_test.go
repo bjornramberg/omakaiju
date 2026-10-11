@@ -25,7 +25,7 @@ func TestArchiveLinesFormatsEntries(t *testing.T) {
 	if !strings.Contains(flat, "notes.txt") {
 		t.Error("file name missing")
 	}
-	if !strings.Contains(flat, "2.0 KB") {
+	if !strings.Contains(flat, "2KB") {
 		t.Error("file size missing")
 	}
 	if !strings.Contains(flat, "src/") {

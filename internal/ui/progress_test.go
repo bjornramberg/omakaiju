@@ -43,7 +43,7 @@ func TestProgressRenderContainsPercentAndSizes(t *testing.T) {
 	if !strings.Contains(out, "50%") {
 		t.Errorf("missing percent: %q", out)
 	}
-	if !strings.Contains(out, "2.2 MB/4.5 MB") {
+	if !strings.Contains(out, "2MB/5MB") {
 		t.Errorf("missing aggregate sizes: %q", out)
 	}
 	if !strings.Contains(out, "file 3/28") {

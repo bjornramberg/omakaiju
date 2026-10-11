@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -30,7 +31,7 @@ func TestFileItemShowsSizeAndPerms(t *testing.T) {
 	row := NewFileItem(fileEntry("movie.mkv", 45088768, 0o644), false, false, theme, 80)
 	out := stripANSI(row.Render())
 
-	if !strings.Contains(out, "43.0 MB") {
+	if !strings.Contains(out, "43MB") {
 		t.Errorf("expected the size, got %q", out)
 	}
 	if !strings.Contains(out, "-rw-r--r--") {
@@ -50,7 +51,7 @@ func TestFileItemDirectoryHasNoSize(t *testing.T) {
 	}
 	// The size cell sits at a fixed offset left of the permissions, so check
 	// that span directly: it must be blank regardless of what the name holds.
-	if strings.Contains(out, " B") || strings.Contains(out, " KB") || strings.Contains(out, " MB") {
+	if strings.Contains(out, "B ") || regexp.MustCompile(`\d[KMGTPE]?B`).MatchString(out) {
 		t.Errorf("a directory should not show a size, got %q", out)
 	}
 }
@@ -69,14 +70,14 @@ func TestFileItemSizeColumnIsAligned(t *testing.T) {
 	small := stripANSI(NewFileItem(fileEntry("a.txt", 999, 0o644), false, false, theme, 80).Render())
 	large := stripANSI(NewFileItem(fileEntry("b.txt", 45088768, 0o644), false, false, theme, 80).Render())
 
-	smallAt := strings.Index(small, "999 B")
-	largeAt := strings.Index(large, "43.0 MB")
+	smallAt := strings.Index(small, "999B")
+	largeAt := strings.Index(large, "43MB")
 	if smallAt < 0 || largeAt < 0 {
 		t.Fatalf("expected both sizes, got %q and %q", small, large)
 	}
 	// Right aligned means the ends line up, so the shorter size starts further
 	// right while occupying the same column width.
-	if smallAt+len("999 B") != largeAt+len("43.0 MB") {
+	if smallAt+len("999B") != largeAt+len("43MB") {
 		t.Errorf("sizes do not share a right edge: %d vs %d", smallAt, largeAt)
 	}
 }
@@ -103,7 +104,7 @@ func TestFileItemDropsColumnsAsWidthShrinks(t *testing.T) {
 		row := NewFileItem(entry, false, false, theme, tc.width)
 		out := stripANSI(row.Render())
 
-		hasSize := strings.Contains(out, "43.0 MB")
+		hasSize := strings.Contains(out, "43MB")
 		hasPerms := strings.Contains(out, "-rw-r--r--")
 		if hasSize != tc.wantSize {
 			t.Errorf("width %d: size shown = %v, want %v (%q)", tc.width, hasSize, tc.wantSize, out)
@@ -165,8 +166,8 @@ func TestFileItemMarkedRowsAlign(t *testing.T) {
 	plain := stripANSI(NewFileItem(entry, false, false, theme, 80).Render())
 	marked := stripANSI(NewFileItem(entry, false, true, theme, 80).Render())
 
-	sizeAt := strings.Index(plain, "43.0 MB")
-	markedAt := strings.Index(marked, "43.0 MB")
+	sizeAt := strings.Index(plain, "43MB")
+	markedAt := strings.Index(marked, "43MB")
 	if sizeAt < 0 || markedAt < 0 {
 		t.Fatalf("expected the size in both rows: %q / %q", plain, marked)
 	}
