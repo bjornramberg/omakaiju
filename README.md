@@ -35,6 +35,55 @@ tar xzf omakaiju_Linux_x86_64.tar.gz
 ./omakaiju
 ```
 
+## Use as the Omarchy file manager
+
+omakaiju is a drop-in replacement for Omarchy's default file manager binding.
+These steps target **Omarchy Quattro** (Hyprland, Lua-based config).
+
+**1. Make sure `omakaiju` is on your `PATH`.** If you installed with
+`go install`, the binary lands in `~/go/bin`; symlink it into `~/.local/bin`
+so both your shell and Hyprland can find it:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "$(go env GOPATH)/bin/omakaiju" ~/.local/bin/omakaiju
+```
+
+**2. Rebind `SUPER + SHIFT + F` in `~/.config/hypr/bindings.lua`.** The default
+launches nautilus, so unbind it first:
+
+```lua
+hl.unbind("SUPER + SHIFT + F")
+o.bind("SUPER + SHIFT + F", "File manager", "omarchy launch tui omakaiju")
+```
+
+`omarchy launch tui` starts omakaiju in a new terminal with Omarchy styling.
+Hyprland auto-reloads the config on save; validate with `hyprctl reload`
+followed by `hyprctl configerrors`.
+
+**3. Keep the Omarchy window bindings intact.** If you previously unbound
+`SUPER + CTRL + L` (Lock) or `SUPER + CTRL + F` (Tiled full screen) — a common
+workaround when TUIs steal `Ctrl+F` — delete those `hl.unbind` lines so both
+keys fall back to the Omarchy defaults:
+
+```lua
+-- Remove these; Omarchy's defaults are enough:
+-- hl.unbind("SUPER + CTRL + L")
+-- hl.unbind("SUPER + CTRL + F")
+```
+
+Inside omakaiju, `Ctrl+f` is the fuzzy finder and only applies while omakaiju
+has focus, so it no longer conflicts with the Hyprland binding.
+
+Check the result any time with:
+
+```bash
+omarchy menu keybindings --print
+```
+
+To revert everything, remove the two lines from step 2 and
+`omarchy refresh hyprland`.
+
 ## Building
 
 ```bash
