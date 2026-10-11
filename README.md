@@ -1,5 +1,8 @@
 # omakaiju
 
+![CI](https://github.com/bjornramberg/omakaiju/actions/workflows/ci.yml/badge.svg)
+![Release](https://img.shields.io/github/v/release/bjornramberg/omakaiju)
+
 A modern, ultra-lightweight, dual-pane TUI file manager for Unix-like systems.
 Built in Go with Bubble Tea + Lipgloss. Both panes start in the directory where you launch it.
 
@@ -17,6 +20,20 @@ Built in Go with Bubble Tea + Lipgloss. Both panes start in the directory where 
 
 - Go 1.27+
 - A Nerd Font (optional, for icons)
+
+## Install
+
+```bash
+go install github.com/bjornramberg/omakaiju@latest
+```
+
+Or download a prebuilt Linux (amd64/arm64) tarball from
+[GitHub Releases](https://github.com/bjornramberg/omakaiju/releases), then:
+
+```bash
+tar xzf omakaiju_Linux_x86_64.tar.gz
+./omakaiju
+```
 
 ## Building
 

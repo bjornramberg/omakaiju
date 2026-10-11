@@ -1,0 +1,25 @@
+version: 2
+
+builds:
+  - id: omakaiju
+    binary: omakaiju
+    main: ./cmd/omakaiju
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
