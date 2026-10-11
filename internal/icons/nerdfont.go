@@ -3,7 +3,7 @@ package icons
 var (
 	FileIcon     = "\uf15b"
 	DirIcon      = "\uf07b"
-	LinkIcon     = "\uf0c1"
+	LinkIcon     = "\uf44c"
 	ExecIcon     = "\uf120"
 	ArchiveIcon  = "\uf1c6"
 	ImageIcon    = "\uf1c5"

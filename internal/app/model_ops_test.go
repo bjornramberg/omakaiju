@@ -924,6 +924,80 @@ func TestEnterOnDirectoryStillNavigates(t *testing.T) {
 	}
 }
 
+// Enter on a symlink to a directory has to navigate. It used to fall through to
+// the open path, which handed the link to gio and launched a separate file
+// manager window instead of descending into the directory.
+func TestEnterOnSymlinkToDirectoryNavigates(t *testing.T) {
+	m, dir := fixture(t)
+
+	target := filepath.Join(dir, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "linkdir")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	files, err := fs.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.leftFiles = files
+	m = cursorOn(t, m, "linkdir")
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("enter on a symlinked directory should dispatch a load")
+	}
+	msg, ok := cmd().(dirLoadedMsg)
+	if !ok {
+		t.Fatalf("enter dispatched %T, want dirLoadedMsg", cmd())
+	}
+	if msg.path != link {
+		t.Errorf("navigated to %q, want %q", msg.path, link)
+	}
+}
+
+// The right arrow enters a directory without launching anything, and has to
+// treat a symlinked directory the same way.
+func TestRightOnSymlinkToDirectoryEnters(t *testing.T) {
+	m, dir := fixture(t)
+
+	target := filepath.Join(dir, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "linkdir")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	files, err := fs.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.leftFiles = files
+	m = cursorOn(t, m, "linkdir")
+
+	updated, cmd := m.Update(key('l'))
+	m = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("right on a symlinked directory should dispatch a load")
+	}
+	if msg, ok := cmd().(dirLoadedMsg); !ok {
+		t.Fatalf("right dispatched %T, want dirLoadedMsg", cmd())
+	} else if msg.path != link {
+		t.Errorf("entered %q, want %q", msg.path, link)
+	}
+	if m.leftPath != link {
+		t.Errorf("leftPath = %q, want %q", m.leftPath, link)
+	}
+}
+
 func TestOpenMsgDoesNotReloadPanes(t *testing.T) {
 	m, _ := fixture(t)
 	m = cursorOn(t, m, "alpha.txt")

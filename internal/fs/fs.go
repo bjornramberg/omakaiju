@@ -14,10 +14,12 @@ type Entry struct {
 	Name    string
 	Path    string
 	IsDir   bool
+	IsLink  bool
 	Size    int64
 	ModTime int64
 	// Mode carries the permission bits for display. ReadDir already holds the
-	// FileInfo, so keeping it costs nothing extra.
+	// FileInfo, so keeping it costs nothing extra. For a symlink it stays the
+	// link's own mode, so the listing can show lrwxrwxrwx the way ls does.
 	Mode os.FileMode
 }
 
@@ -40,12 +42,37 @@ func ReadDir(path string) ([]Entry, error) {
 			continue
 		}
 
+		full := filepath.Join(path, e.Name())
+		size := info.Size()
+		modTime := info.ModTime()
+		isDir := e.IsDir()
+
+		// DirEntry.IsDir reports the raw directory entry, so a symlink to a
+		// directory comes back false. Since every other part of the app treats
+		// the target as the real entry, the link is resolved here so Enter
+		// navigates instead of handing a directory to the desktop opener.
+		// Mode stays the link's own so the permissions column keeps its l,
+		// while size and mtime come from the target because the link's own
+		// size is just the length of the path it stores.
+		isLink := info.Mode()&os.ModeSymlink != 0
+		if isLink {
+			if target, err := os.Stat(full); err == nil {
+				isDir = target.IsDir()
+				size = target.Size()
+				modTime = target.ModTime()
+			}
+			// A dangling link resolves to nothing and stays a file: Enter then
+			// hands it to the desktop opener, which reports the broken target
+			// instead of the pane silently refusing to open.
+		}
+
 		result = append(result, Entry{
 			Name:    e.Name(),
-			Path:    filepath.Join(path, e.Name()),
-			IsDir:   e.IsDir(),
-			Size:    info.Size(),
-			ModTime: info.ModTime().Unix(),
+			Path:    full,
+			IsDir:   isDir,
+			IsLink:  isLink,
+			Size:    size,
+			ModTime: modTime.Unix(),
 			Mode:    info.Mode(),
 		})
 	}

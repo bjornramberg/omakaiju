@@ -42,6 +42,13 @@ func (f FileItem) Render() string {
 		style = f.Theme.FileItem()
 	}
 
+	// A symlink takes the link glyph instead of the target's icon, so it reads
+	// as a link without widening the icon column. The trailing slash still
+	// follows IsDir, keeping a link to a directory marked as navigable.
+	if f.Entry.IsLink {
+		icon = icons.LinkIcon
+	}
+
 	// Fixed-width marker column so marked and unmarked rows stay aligned.
 	marker := " "
 	if f.Marked {

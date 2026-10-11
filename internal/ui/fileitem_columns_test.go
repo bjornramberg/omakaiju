@@ -415,3 +415,67 @@ func TestFileItemSymlinkRowAligns(t *testing.T) {
 		t.Errorf("symlink details at %d, want %d", got, want)
 	}
 }
+
+// A symlink shows the link glyph instead of the icon of whatever it points at,
+// so it can be told apart from the real file or directory without widening the
+// icon column.
+func TestFileItemSymlinkUsesLinkIcon(t *testing.T) {
+	theme := config.DefaultTheme()
+
+	link := fs.Entry{
+		Name:   "link",
+		Path:   "/tmp/link",
+		IsLink: true,
+		Mode:   os.ModeSymlink | 0o777,
+	}
+	out := stripANSI(NewFileItem(link, false, false, theme, 80).Render())
+	if !strings.Contains(out, icons.LinkIcon) {
+		t.Errorf("expected the link icon, got %q", out)
+	}
+	if strings.Contains(out, icons.FileIcon) {
+		t.Errorf("a symlink should not show the file icon: %q", out)
+	}
+
+	linkDir := fs.Entry{
+		Name:   "linkdir",
+		Path:   "/tmp/linkdir",
+		IsDir:  true,
+		IsLink: true,
+		Mode:   os.ModeSymlink | 0o777,
+	}
+	out = stripANSI(NewFileItem(linkDir, false, false, theme, 80).Render())
+	if !strings.Contains(out, icons.LinkIcon) {
+		t.Errorf("a symlinked directory should use the link icon too, got %q", out)
+	}
+	if strings.Contains(out, icons.DirIcon) {
+		t.Errorf("a symlinked directory should not show the plain folder icon: %q", out)
+	}
+	if !strings.Contains(out, "linkdir/") {
+		t.Errorf("a symlinked directory should keep its trailing slash, got %q", out)
+	}
+}
+
+// The link glyph replaces the target icon rather than sitting beside it, so
+// the name column stays where it is for every other row.
+func TestFileItemSymlinkIconKeepsColumnAlignment(t *testing.T) {
+	theme := config.DefaultTheme()
+	const width = 80
+
+	link := fs.Entry{
+		Name:   "link",
+		Path:   "/tmp/link",
+		IsLink: true,
+		Mode:   os.ModeSymlink | 0o777,
+	}
+	file := fs.Entry{Name: "note.md", Path: "/tmp/note.md", Size: 12, Mode: 0o644}
+
+	linkOut := stripANSI(NewFileItem(link, false, false, theme, width).Render())
+	fileOut := stripANSI(NewFileItem(file, false, false, theme, width).Render())
+
+	if got, want := strings.Index(linkOut, "link"), strings.Index(fileOut, "note.md"); got != want {
+		t.Errorf("symlink name at %d, want %d to match other rows", got, want)
+	}
+	if got := DisplayWidth(linkOut); got != width {
+		t.Errorf("row width %d, want %d", got, width)
+	}
+}
