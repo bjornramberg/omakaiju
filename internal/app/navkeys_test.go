@@ -60,3 +60,58 @@ func TestEnterStillOpensFile(t *testing.T) {
 		t.Error("enter should not clear the path")
 	}
 }
+
+// Once a filter is applied, the arrows must still move the cursor. They used to
+// be swallowed by the prompt, leaving the cursor pinned to the first result.
+func TestArrowsNavigateWhileFilterPromptIsOpen(t *testing.T) {
+	m, _ := fixture(t)
+
+	// Open the filter prompt.
+	updated, _ := m.Update(key('/'))
+	m = updated.(Model)
+	if m.mode != inputFilter {
+		t.Fatalf("mode = %v, want the filter prompt open", m.mode)
+	}
+
+	// Type a filter that keeps several entries visible.
+	for _, r := range "a" {
+		updated, _ = m.Update(key(r))
+		m = updated.(Model)
+	}
+
+	before := m.rawCursor(m.activePane)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(Model)
+
+	if m.mode != inputFilter {
+		t.Error("the arrow must not close the filter prompt")
+	}
+	if m.rawCursor(m.activePane) <= before {
+		t.Errorf("cursor = %d, want it to move past %d", m.rawCursor(m.activePane), before)
+	}
+	if m.leftFilter != "a" {
+		t.Errorf("leftFilter = %q, want the filter preserved while navigating", m.leftFilter)
+	}
+}
+
+// Typing re-anchors on the first match, which is the whole point of filtering.
+func TestTypingResetsCursorToTop(t *testing.T) {
+	m, _ := fixture(t)
+
+	updated, _ := m.Update(key('/'))
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(Model)
+	if m.rawCursor(m.activePane) == 0 {
+		t.Skip("nothing to move down to")
+	}
+
+	updated, _ = m.Update(key('b'))
+	m = updated.(Model)
+
+	if m.rawCursor(m.activePane) != 0 {
+		t.Errorf("cursor = %d, want typing to re-anchor at the first match", m.rawCursor(m.activePane))
+	}
+}

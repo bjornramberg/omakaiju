@@ -592,19 +592,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activePane = 1 - m.activePane
 			m.updatePreview()
 			return m, nil
-		case nav.ActionDown:
-			cursor := m.rawCursor(m.activePane)
-			if cursor < len(m.visibleFiles(m.activePane))-1 {
-				m.setCursor(m.activePane, cursor+1)
-			}
-			m.updatePreview()
-			return m, nil
-		case nav.ActionUp:
-			if cursor := m.rawCursor(m.activePane); cursor > 0 {
-				m.setCursor(m.activePane, cursor-1)
-			}
-			m.updatePreview()
-			return m, nil
+		case nav.ActionUp, nav.ActionDown, nav.ActionLeft, nav.ActionRight:
+			return m.handleNavAction(action)
 		case nav.ActionEnter:
 			files := m.visibleFiles(m.activePane)
 			cursor := m.rawCursor(m.activePane)
@@ -615,30 +604,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if cursor < len(files) {
 				return m, openCmd(files[cursor].Path, files[cursor].Name)
-			}
-			return m, nil
-		case nav.ActionRight:
-			// Entering a directory is a navigation step, but launching a file is
-			// not: that belongs to enter alone, so an arrow press can never
-			// unexpectedly hand a file to the desktop handler.
-			files := m.visibleFiles(m.activePane)
-			cursor := m.rawCursor(m.activePane)
-			if cursor < len(files) && files[cursor].IsDir {
-				newPath := files[cursor].Path
-				m.setPath(m.activePane, newPath)
-				return m, loadDirCmd(m.activePane, newPath)
-			}
-			return m, nil
-		case nav.ActionLeft:
-			currentPath := m.rawPath(m.activePane)
-			parent := filepath.Dir(currentPath)
-			if parent != currentPath {
-				// Record the directory being left so the parent listing can
-				// put the cursor back on it. The name comes from the path,
-				// not the current listing, which may have changed since entry.
-				m.setRestore(m.activePane, filepath.Base(currentPath))
-				m.setPath(m.activePane, parent)
-				return m, loadDirCmd(m.activePane, parent)
 			}
 			return m, nil
 		case nav.ActionRefresh:
@@ -745,8 +710,62 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleNavAction performs a cursor or directory movement. It is shared by
+// normal mode and the filter prompt so the arrows behave identically in both,
+// and the prompt stays open while they are used.
+func (m Model) handleNavAction(action nav.Action) (tea.Model, tea.Cmd) {
+	switch action {
+	case nav.ActionUp:
+		if cursor := m.rawCursor(m.activePane); cursor > 0 {
+			m.setCursor(m.activePane, cursor-1)
+		}
+		m.updatePreview()
+		return m, nil
+	case nav.ActionDown:
+		cursor := m.rawCursor(m.activePane)
+		if cursor < len(m.visibleFiles(m.activePane))-1 {
+			m.setCursor(m.activePane, cursor+1)
+		}
+		m.updatePreview()
+		return m, nil
+	case nav.ActionLeft:
+		currentPath := m.rawPath(m.activePane)
+		parent := filepath.Dir(currentPath)
+		if parent != currentPath {
+			// Record the directory being left so the parent listing can
+			// put the cursor back on it. The name comes from the path,
+			// not the current listing, which may have changed since entry.
+			m.setRestore(m.activePane, filepath.Base(currentPath))
+			m.setPath(m.activePane, parent)
+			return m, loadDirCmd(m.activePane, parent)
+		}
+		return m, nil
+	case nav.ActionRight:
+		// Entering a directory is a navigation step, but launching a file is
+		// not: that belongs to enter alone, so an arrow press can never
+		// unexpectedly hand a file to the desktop handler.
+		files := m.visibleFiles(m.activePane)
+		cursor := m.rawCursor(m.activePane)
+		if cursor < len(files) && files[cursor].IsDir {
+			newPath := files[cursor].Path
+			m.setPath(m.activePane, newPath)
+			return m, loadDirCmd(m.activePane, newPath)
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
 func (m Model) handleInputKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "up", "down", "left", "right":
+		// Movement stays available while the prompt is open; filtering is
+		// unaffected, so the user can walk the narrowed list and carry on
+		// typing.
+		if m.mode == inputFilter {
+			return m.handleNavAction(nav.Lookup(msg.String()))
+		}
+		return m, nil
 	case "esc":
 		if m.mode == inputFilter {
 			m.setFilter(m.activePane, "")
