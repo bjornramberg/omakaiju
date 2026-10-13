@@ -1,6 +1,7 @@
 package fuzzy
 
 import (
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -10,11 +11,6 @@ type Result struct {
 	Index     int
 	Positions []int
 }
-
-// MaxResults caps how many matches Filter returns. The finder only renders
-// ~10 rows, so holding tens of thousands of string headers in fuzzyResults
-// only pins memory for a count nobody reads.
-const MaxResults = 1000
 
 func Match(pattern, text string) (Result, bool) {
 	pattern = strings.ToLower(pattern)
@@ -71,24 +67,34 @@ func Match(pattern, text string) (Result, bool) {
 	return Result{Score: score, Index: positions[0], Positions: positions}, true
 }
 
+// Filter matches pattern against the basename of each path so typing more
+// letters hones in: "con" matches context.md, Reconsider.txt and file.con,
+// while "context" matches only context.md. Matching the full absolute path
+// instead lets letters scatter across directories, so a fully typed filename
+// still matches hundreds of unrelated paths. A pattern containing a separator
+// falls back to full-path matching so directory fragments stay searchable.
+// There is intentionally no result cap: the finder is allowed to be expensive
+// while it runs, and truncating is what made typing look like it did nothing.
 func Filter(pattern string, items []string) []string {
 	if pattern == "" {
-		if len(items) > MaxResults {
-			return items[:MaxResults]
-		}
 		return items
 	}
 
 	patternLower := strings.ToLower(pattern)
+	usePath := strings.ContainsRune(patternLower, '/')
 
 	type scored struct {
 		item  string
 		score int
 	}
 
-	matches := make([]scored, 0, min(len(items), MaxResults*2))
+	matches := make([]scored, 0, len(items))
 	for _, item := range items {
-		if score, ok := matchScoreLowered(patternLower, strings.ToLower(item)); ok {
+		hay := item
+		if !usePath {
+			hay = filepath.Base(item)
+		}
+		if score, ok := matchScoreLowered(patternLower, strings.ToLower(hay)); ok {
 			matches = append(matches, scored{item, score})
 		}
 	}
@@ -97,68 +103,11 @@ func Filter(pattern string, items []string) []string {
 		return matches[i].score > matches[j].score
 	})
 
-	if len(matches) > MaxResults {
-		matches = matches[:MaxResults]
-	}
-
 	result := make([]string, len(matches))
 	for i, m := range matches {
 		result[i] = m.item
 	}
 	return result
-}
-
-// FilterLowered filters using pre-lowered haystacks so per-keystroke refilters
-// don't re-allocate a lowered copy of every path. items and lowered must be
-// parallel; pattern is lowered once here.
-func FilterLowered(pattern string, items, lowered []string) []string {
-	if len(lowered) != len(items) {
-		return Filter(pattern, items)
-	}
-	if pattern == "" {
-		if len(items) > MaxResults {
-			return items[:MaxResults]
-		}
-		return items
-	}
-
-	patternLower := strings.ToLower(pattern)
-
-	type scored struct {
-		item  string
-		score int
-	}
-
-	matches := make([]scored, 0, min(len(items), MaxResults*2))
-	for i, item := range items {
-		if score, ok := matchScoreLowered(patternLower, lowered[i]); ok {
-			matches = append(matches, scored{item, score})
-		}
-	}
-
-	sort.Slice(matches, func(i, j int) bool {
-		return matches[i].score > matches[j].score
-	})
-
-	if len(matches) > MaxResults {
-		matches = matches[:MaxResults]
-	}
-
-	result := make([]string, len(matches))
-	for i, m := range matches {
-		result[i] = m.item
-	}
-	return result
-}
-
-// Lowered returns a parallel slice of lowered strings for use with
-// FilterLowered. Computed once at walk time instead of per keystroke.
-func Lowered(items []string) []string {
-	out := make([]string, len(items))
-	for i, s := range items {
-		out[i] = strings.ToLower(s)
-	}
-	return out
 }
 
 // matchScoreLowered is the allocation-free scoring path used by Filter. Both
