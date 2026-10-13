@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/bjornramberg/omakaiju/internal/config"
-	"github.com/bjornramberg/omakaiju/internal/fuzzy"
 )
 
 type FuzzyFinder struct {
@@ -277,26 +276,47 @@ func (f FuzzyFinder) Selected() string {
 }
 
 // highlight emphasises the characters that matched the query. Names that no
-// longer match are shown plainly rather than marked.
+// longer match are shown plainly rather than marked. Matching is a case
+// insensitive subsequence scan done byte-wise without allocating lowered
+// copies, since this runs for every visible row on every frame.
 func (f FuzzyFinder) highlight(name string) string {
 	if f.Input == "" {
 		return name
 	}
-	if _, ok := fuzzy.Match(f.Input, name); !ok {
+	if !subseqMatchLower(f.Input, name) {
 		return name
 	}
 
 	var sb strings.Builder
+	// Matched spans are few; the builder only grows for the visible rows.
+	sb.Grow(len(name) + len(f.Input)*8)
 	pi := 0
-	nameLower := strings.ToLower(name)
-	inputLower := strings.ToLower(f.Input)
 	for i := 0; i < len(name); i++ {
-		if pi < len(inputLower) && nameLower[i] == inputLower[pi] {
+		if pi < len(f.Input) && lowerByte(name[i]) == lowerByte(f.Input[pi]) {
 			sb.WriteString(f.Theme.AccentText().Bold(true).Render(string(name[i])))
 			pi++
 			continue
 		}
-		sb.WriteString(string(name[i]))
+		_ = sb.WriteByte(name[i])
 	}
 	return sb.String()
+}
+
+// subseqMatchLower reports whether pattern is a case-insensitive subsequence
+// of text, using ASCII folding without allocating lowered copies.
+func subseqMatchLower(pattern, text string) bool {
+	pi := 0
+	for i := 0; i < len(text) && pi < len(pattern); i++ {
+		if lowerByte(text[i]) == lowerByte(pattern[pi]) {
+			pi++
+		}
+	}
+	return pi >= len(pattern)
+}
+
+func lowerByte(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + ('a' - 'A')
+	}
+	return b
 }

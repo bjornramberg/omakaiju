@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -133,6 +134,10 @@ type Model struct {
 	fuzzyResults  []string
 	fuzzyCursor   int
 	fuzzyAllFiles []string
+	// fuzzyAllLower is a parallel pre-lowered copy of fuzzyAllFiles, built
+	// once when the walk lands so per-keystroke refilters don't re-allocate
+	// a lowered copy of every path.
+	fuzzyAllLower []string
 	// fuzzyLoading marks the window between pressing ctrl+f and the walk
 	// finishing. A large root takes seconds, and without this the panel would
 	// show the previous search's results in the meantime.
@@ -595,7 +600,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.fuzzyAllFiles = msg.files
-		m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, msg.files)
+		m.fuzzyAllLower = fuzzy.Lowered(msg.files)
+		m.fuzzyResults = fuzzy.FilterLowered(m.fuzzyInput, msg.files, m.fuzzyAllLower)
 		m.fuzzyLoading = false
 		return m, nil
 
@@ -682,6 +688,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The previous tree is dropped rather than shown while the new
 			// walk runs, so results never appear to belong to the wrong root.
 			m.fuzzyAllFiles = nil
+			m.fuzzyAllLower = nil
 			m.fuzzyLoading = true
 			m.fuzzyRoot = root
 			m.fuzzySpinner = 0
@@ -747,20 +754,39 @@ func (m *Model) refilterFuzzy() (started bool) {
 		}
 		return false
 	}
-	m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, m.fuzzyAllFiles)
+	m.fuzzyResults = fuzzy.FilterLowered(m.fuzzyInput, m.fuzzyAllFiles, m.ensureFuzzyLower())
 	return false
+}
+
+// ensureFuzzyLower rebuilds the lowered cache when the tree was populated
+// without it (e.g. tests or sessions predating the cache).
+func (m *Model) ensureFuzzyLower() []string {
+	if len(m.fuzzyAllLower) != len(m.fuzzyAllFiles) {
+		m.fuzzyAllLower = fuzzy.Lowered(m.fuzzyAllFiles)
+	}
+	return m.fuzzyAllLower
+}
+
+// clearFuzzy drops the walk tree and filtered results and hands the memory
+// back to the OS in the background. Nil-ing lets the GC reclaim the heap,
+// but RSS stays mapped until the scavenger runs, which is why the footprint
+// previously sat high after closing the finder.
+func (m *Model) clearFuzzy() {
+	m.fuzzyActive = false
+	m.fuzzyInput = ""
+	m.fuzzyResults = nil
+	m.fuzzyCursor = 0
+	m.fuzzyAllFiles = nil
+	m.fuzzyAllLower = nil
+	m.fuzzyLoading = false
+	m.fuzzyRoot = ""
+	go debug.FreeOSMemory()
 }
 
 func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.fuzzyActive = false
-		m.fuzzyInput = ""
-		m.fuzzyResults = nil
-		m.fuzzyCursor = 0
-		m.fuzzyAllFiles = nil
-		m.fuzzyLoading = false
-		m.fuzzyRoot = ""
+		m.clearFuzzy()
 		return m, nil
 	case "enter":
 		if m.fuzzyCursor < len(m.fuzzyResults) {
@@ -771,13 +797,7 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.rightPath = dir
 			}
-			m.fuzzyActive = false
-			m.fuzzyInput = ""
-			m.fuzzyResults = nil
-			m.fuzzyCursor = 0
-			m.fuzzyAllFiles = nil
-			m.fuzzyLoading = false
-			m.fuzzyRoot = ""
+			m.clearFuzzy()
 			return m, loadDirCmd(m.activePane, dir)
 		}
 		return m, nil

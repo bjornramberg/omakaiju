@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -273,16 +274,52 @@ func CountLines(path string) (int, error) {
 }
 
 func WalkDir(root string) ([]string, error) {
-	var files []string
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	files := make([]string, 0, 4096)
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if !info.IsDir() {
-			files = append(files, path)
+		if d.IsDir() {
+			// Never skip the root itself, even if its name matches the
+			// ignore list (e.g. searching inside a directory literally
+			// called "target").
+			if path != root && ignoredDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
 		}
+		if len(files) >= MaxWalkFiles {
+			return errWalkCap
+		}
+		files = append(files, path)
 		return nil
 	})
+	if err == errWalkCap {
+		err = nil
+	}
 	sort.Strings(files)
 	return files, err
+}
+
+// MaxWalkFiles bounds how many paths WalkDir materializes. A full home-tree
+// walk with caches and vendored deps can otherwise pin hundreds of MB that
+// the finder only ever shows the top few hundred of.
+const MaxWalkFiles = 50000
+
+var errWalkCap = errors.New("walk file cap reached")
+
+// ignoredDir reports whether a directory name is a known space hog that
+// should never enter fuzzy results. Matching is by base name only so the
+// walk prunes the whole subtree via SkipDir.
+func ignoredDir(name string) bool {
+	switch name {
+	case ".git", ".hg", ".svn", ".bzr",
+		"node_modules", "vendor", "target",
+		"__pycache__", ".cache", ".npm", ".yarn", ".pnpm-store",
+		"dist", "build", ".next", ".nuxt", ".parcel-cache",
+		"coverage", ".tox", ".venv", "venv",
+		".mypy_cache", ".pytest_cache", ".gradle":
+		return true
+	}
+	return false
 }
