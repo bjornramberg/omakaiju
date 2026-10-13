@@ -22,6 +22,7 @@ const (
 	ActionClear
 	ActionQuit
 	ActionStack
+	ActionSort
 )
 
 type Keybind struct {
@@ -52,6 +53,7 @@ var Keybinds = []Keybind{
 	{"esc", ActionClear},
 	{"q", ActionQuit},
 	{"s", ActionStack},
+	{"o", ActionSort},
 }
 
 func Lookup(key string) Action {

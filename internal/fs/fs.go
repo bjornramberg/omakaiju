@@ -81,14 +81,70 @@ func ReadDir(path string) ([]Entry, error) {
 	return result, nil
 }
 
+// SortMode selects the ordering applied to a pane listing. The cycle is
+// Name -> SizeDesc -> SizeAsc -> Name, advanced by a single key so the user
+// can flip through the three states without a prompt.
+type SortMode int
+
+const (
+	// SortByName is the default: directories first, then case-insensitive
+	// by name, exactly as before.
+	SortByName SortMode = iota
+	// SortBySizeDesc puts the largest entries on top.
+	SortBySizeDesc
+	// SortBySizeAsc puts the smallest entries on top.
+	SortBySizeAsc
+)
+
+// Next advances the cycle Name -> SizeDesc -> SizeAsc -> Name.
+func (s SortMode) Next() SortMode {
+	switch s {
+	case SortByName:
+		return SortBySizeDesc
+	case SortBySizeDesc:
+		return SortBySizeAsc
+	default:
+		return SortByName
+	}
+}
+
+// Label is the short human-readable name shown in the status line.
+func (s SortMode) Label() string {
+	switch s {
+	case SortBySizeDesc:
+		return "size↓"
+	case SortBySizeAsc:
+		return "size↑"
+	default:
+		return "name"
+	}
+}
+
 // SortEntries orders a listing the way a file manager should: directories
 // first, then case-insensitive by name. ReadDir returns raw filesystem order,
 // which is unstable across machines, so callers get a deterministic list.
 func SortEntries(entries []Entry) {
+	SortEntriesBy(entries, SortByName)
+}
+
+// SortEntriesBy orders a listing by mode. Directories always sort first so the
+// size modes only reorder within the dir and file groups; ties fall back to
+// case-insensitive name so the order stays deterministic.
+func SortEntriesBy(entries []Entry, mode SortMode) {
 	sort.Slice(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]
 		if a.IsDir != b.IsDir {
 			return a.IsDir
+		}
+		switch mode {
+		case SortBySizeDesc:
+			if a.Size != b.Size {
+				return a.Size > b.Size
+			}
+		case SortBySizeAsc:
+			if a.Size != b.Size {
+				return a.Size < b.Size
+			}
 		}
 		la, lb := strings.ToLower(a.Name), strings.ToLower(b.Name)
 		if la != lb {
