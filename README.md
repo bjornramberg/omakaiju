@@ -112,6 +112,7 @@ make clean    # rm -f omakaiju
 | a | Add file/directory (trailing `/` creates a directory) |
 | r | Rename |
 | / | Filter (per-pane, arrows keep the prompt open) |
+| o | Cycle sort (per-pane): name → size↓ largest first → size↑ smallest first → name (dirs stay first) |
 | Ctrl+f | Fuzzy find (`j/k` navigate, type/backspace refines, `Enter` jumps, `Esc` exits) |
 | Ctrl+r | Refresh active pane |
 | Esc | Context: cancel copy / dismiss prompt / clear filter |

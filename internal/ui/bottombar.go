@@ -60,7 +60,7 @@ func (b BottomBar) Render() string {
 	if b.PanesStacked {
 		stack = "s:side-by-side"
 	}
-	help := b.Theme.StatusText().Render("h/j/k/l:nav  y:yank  m:move  p:paste  d:delete  /:filter  " + stack + "  q:quit")
+	help := b.Theme.StatusText().Render("h/j/k/l:nav  y:yank  m:move  p:paste  d:delete  /:filter  o:sort  " + stack + "  q:quit")
 	return b.line(help)
 }
 

@@ -90,6 +90,10 @@ type Model struct {
 	// panesStacked toggles the file panes between side by side and stacked.
 	// It lives for the session only and resets on launch.
 	panesStacked bool
+	// leftSort/rightSort hold the per-pane sort cycle:
+	// name -> size↓ -> size↑ -> name. Zero value is SortByName (default).
+	leftSort  fs.SortMode
+	rightSort fs.SortMode
 	leftPath     string
 	leftFiles    []fs.Entry
 	leftCursor   int
@@ -394,6 +398,55 @@ func (m *Model) setCursor(pane, cursor int) {
 	}
 }
 
+func (m Model) sortOf(pane int) fs.SortMode {
+	if pane == 0 {
+		return m.leftSort
+	}
+	return m.rightSort
+}
+
+func (m *Model) setSort(pane int, mode fs.SortMode) {
+	if pane == 0 {
+		m.leftSort = mode
+	} else {
+		m.rightSort = mode
+	}
+}
+
+// applySort re-orders a pane's raw listing by its current sort mode.
+func (m *Model) applySort(pane int) {
+	if pane == 0 {
+		fs.SortEntriesBy(m.leftFiles, m.leftSort)
+	} else {
+		fs.SortEntriesBy(m.rightFiles, m.rightSort)
+	}
+}
+
+// cycleSort advances the active pane through name -> size↓ -> size↑ -> name,
+// keeps the cursor on the same entry when it survives the reorder, and
+// reports the new mode.
+func (m *Model) cycleSort(pane int) fs.SortMode {
+	// Remember the selected entry so the cursor can follow it across the
+	// reorder instead of jumping to an unrelated row.
+	var selected string
+	if files := m.visibleFiles(pane); m.rawCursor(pane) < len(files) {
+		selected = files[m.rawCursor(pane)].Path
+	}
+	next := m.sortOf(pane).Next()
+	m.setSort(pane, next)
+	m.applySort(pane)
+	if selected != "" {
+		for i, f := range m.visibleFiles(pane) {
+			if f.Path == selected {
+				m.setCursor(pane, i)
+				break
+			}
+		}
+	}
+	m.clampCursor(pane)
+	return next
+}
+
 func (m Model) visibleFiles(pane int) []fs.Entry {
 	return nav.FilterEntries(m.rawFiles(pane), m.filterOf(pane))
 }
@@ -501,6 +554,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rightCursor = 0
 			m.rightFilter = ""
 		}
+		// Re-apply the pane's sort mode: ReadDir always arrives in name
+		// order, so a size mode would otherwise be lost on every reload.
+		m.applySort(msg.pane)
 		// A load triggered by going up should land on the directory we came
 		// from; every other load starts at the top as before.
 		if name := m.takeRestore(msg.pane); name != "" {
@@ -657,6 +713,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.panesStacked = !m.panesStacked
+			return m, nil
+		case nav.ActionSort:
+			mode := m.cycleSort(m.activePane)
+			m.opResult = "sort: " + mode.Label()
+			m.updatePreview()
 			return m, nil
 		case nav.ActionUp, nav.ActionDown, nav.ActionLeft, nav.ActionRight:
 			return m.handleNavAction(action)
