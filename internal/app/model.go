@@ -659,7 +659,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fuzzyLoading = false
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
+		// Only presses drive the UI. A terminal that also reports key
+		// releases (Windows console, or Kitty's report-event-types mode)
+		// would otherwise deliver every action twice, and a toggle like v
+		// would fire on press and again on release and appear to do nothing
+		// at all.
+		//
 		// A status message reports what just happened, so it stops being
 		// current once the user acts. Clearing ahead of dispatching the key
 		// means a message produced by this very keypress stays visible until
