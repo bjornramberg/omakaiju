@@ -689,16 +689,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		action := nav.Lookup(msg.String())
+		// v must work even while the preview is focused, otherwise hiding
+		// is unreachable once i has focused the preview and appears dead.
+		if action == nav.ActionTogglePreview {
+			m.previewHidden = !m.previewHidden
+			if m.previewHidden {
+				// A hidden pane cannot stay focused; focusing again via i
+				// unhides it (see below), so this stays reversible.
+				m.previewFocused = false
+			}
+			return m, nil
+		}
+
 		if m.previewFocused {
 			switch msg.String() {
 			case "i", "esc":
 				m.previewFocused = false
 				return m, nil
 			}
-			return m, nil
+			// Focus only highlights the preview border; every other key
+			// falls through to normal handling so focus never locks
+			// navigation, pane switching, or quit.
 		}
 
-		action := nav.Lookup(msg.String())
 		switch action {
 		case nav.ActionQuit:
 			if m.themeWatcher != nil {
@@ -717,14 +731,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.panesStacked = !m.panesStacked
-			return m, nil
-		case nav.ActionTogglePreview:
-			m.previewHidden = !m.previewHidden
-			if m.previewHidden {
-				// A hidden pane cannot stay focused; focusing again via i
-				// unhides it (see below), so this stays reversible.
-				m.previewFocused = false
-			}
 			return m, nil
 		case nav.ActionSort:
 			mode := m.cycleSort(m.activePane)
