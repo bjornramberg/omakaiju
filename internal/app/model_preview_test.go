@@ -1,7 +1,10 @@
 package app
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/bjornramberg/omakaiju/internal/ui"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -96,4 +99,98 @@ func TestPreviewToggleUppercase(t *testing.T) {
 	if !m.previewHidden {
 		t.Fatal("V should hide the preview like v does")
 	}
+}
+
+// Hiding the preview must hand its width back to the file panes: at 120
+// columns each pane grows from a third (40) to a half (60) of the terminal,
+// and to the full width when stacked. Showing again (via v, or via i
+// restoring a hidden preview) must shrink them back. The rendered view must
+// keep fitting the terminal exactly in every state, proving the panes take
+// the full estate with no preview column left behind.
+func TestPreviewToggleExpandsFilePanes(t *testing.T) {
+	m, _ := fixture(t)
+	m.width, m.height = 120, 30
+
+	visible := ui.NewLayout(m.width, m.height, m.theme)
+	if got := visible.PreviewWidth(); got != 40 {
+		t.Fatalf("visible PreviewWidth = %d, want 40", got)
+	}
+	if got := visible.PaneWidth(); got != 40 {
+		t.Fatalf("visible PaneWidth = %d, want 40", got)
+	}
+
+	checkFits := func() {
+		t.Helper()
+		out := stripTestANSI(m.View().Content)
+		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+		if len(lines) != m.height {
+			t.Fatalf("hidden=%v stacked=%v: rendered %d lines, want %d",
+				m.previewHidden, m.panesStacked, len(lines), m.height)
+		}
+		for i, l := range lines {
+			if got := visibleWidth(l); got > m.width {
+				t.Fatalf("hidden=%v stacked=%v: line %d is %d cells wide, want <= %d",
+					m.previewHidden, m.panesStacked, i, got, m.width)
+			}
+		}
+	}
+
+	// Hide: panes must widen and the view must still fit exactly.
+	updated, _ := m.Update(key('v'))
+	m = updated.(Model)
+	if !m.previewHidden {
+		t.Fatal("v should hide the preview")
+	}
+	hidden := ui.NewLayout(m.width, m.height, m.theme)
+	hidden.PreviewHidden = m.previewHidden
+	if got := hidden.PreviewWidth(); got != 0 {
+		t.Fatalf("hidden PreviewWidth = %d, want 0", got)
+	}
+	if got := hidden.PaneWidth(); got != 60 {
+		t.Fatalf("hidden PaneWidth = %d, want 60 (half of 120)", got)
+	}
+	if hidden.PaneWidth() <= visible.PaneWidth() {
+		t.Fatalf("hidden PaneWidth = %d, must exceed visible %d",
+			hidden.PaneWidth(), visible.PaneWidth())
+	}
+	checkFits()
+
+	// Stacked panes span the whole panes area, so hidden + stacked is the
+	// full terminal width.
+	m.panesStacked = true
+	stackedHidden := ui.NewLayout(m.width, m.height, m.theme)
+	stackedHidden.PanesStacked = true
+	stackedHidden.PreviewHidden = true
+	if got := stackedHidden.PaneWidth(); got != 120 {
+		t.Fatalf("stacked hidden PaneWidth = %d, want 120", got)
+	}
+	checkFits()
+
+	// Show again via v: the panes shrink back and the view still fits.
+	updated, _ = m.Update(key('v'))
+	m = updated.(Model)
+	if m.previewHidden {
+		t.Fatal("second v should show the preview again")
+	}
+	shown := ui.NewLayout(m.width, m.height, m.theme)
+	shown.PanesStacked = true
+	if got := shown.PaneWidth(); got != 80 {
+		t.Fatalf("stacked visible PaneWidth = %d, want 80", got)
+	}
+	checkFits()
+
+	// i on a hidden preview restores it, shrinking the panes back too.
+	updated, _ = m.Update(key('v'))
+	m = updated.(Model)
+	updated, _ = m.Update(key('i'))
+	m = updated.(Model)
+	if m.previewHidden {
+		t.Fatal("i should unhide a hidden preview")
+	}
+	restored := ui.NewLayout(m.width, m.height, m.theme)
+	restored.PanesStacked = m.panesStacked
+	if got := restored.PaneWidth(); got != 80 {
+		t.Fatalf("restored PaneWidth = %d, want 80", got)
+	}
+	checkFits()
 }

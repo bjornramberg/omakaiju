@@ -682,8 +682,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// confirmation. Otherwise hiding is unreachable once i has focused
 		// the preview and appears dead. It stays below the fuzzy/input
 		// gates so typing v into those prompts still inserts text instead
-		// of toggling.
-		if action == nav.ActionTogglePreview {
+		// of toggling. The raw key is matched as well so a plain v/V press
+		// toggles even when its String form varies by terminal (Kitty
+		// shift variants, caps lock); Ctrl/Alt combos never count.
+		if action == nav.ActionTogglePreview || isPreviewToggleKey(msg) {
 			m.previewHidden = !m.previewHidden
 			if m.previewHidden {
 				// A hidden pane cannot stay focused; focusing again via i
@@ -819,6 +821,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// isPreviewToggleKey reports a plain v/V press from the raw key event. Lookup
+// on the String form covers the common cases, but terminals disagree on how a
+// shifted or caps-locked v is spelled ("V" vs "shift+v"); the Text/Code below
+// is what the physical key actually produced. Modified combos (Ctrl/Alt/Meta)
+// never count so shortcuts keep their meaning.
+func isPreviewToggleKey(msg tea.KeyMsg) bool {
+	k := msg.Key()
+	if k.Mod.Contains(tea.ModCtrl) ||
+		k.Mod.Contains(tea.ModAlt) ||
+		k.Mod.Contains(tea.ModMeta) ||
+		k.Mod.Contains(tea.ModSuper) ||
+		k.Mod.Contains(tea.ModHyper) {
+		return false
+	}
+	if k.Text == "v" || k.Text == "V" {
+		return true
+	}
+	return k.Text == "" && (k.Code == 'v' || k.Code == 'V')
 }
 
 // refilterFuzzy re-applies the query. While the walk is still running there is

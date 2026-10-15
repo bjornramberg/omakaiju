@@ -131,6 +131,33 @@ func TestViewFitsWhenPreviewFocused(t *testing.T) {
 	}
 }
 
+// Hiding the preview must never break the exact-fit invariant: the two panes
+// take the full estate in every size and orientation, with no overflow rows
+// or wrapped lines left behind by a missing preview column.
+func TestViewFitsWhenPreviewHidden(t *testing.T) {
+	for _, stacked := range []bool{false, true} {
+		m := viewFixture(t)
+		m.previewHidden = true
+		m.panesStacked = stacked
+
+		for _, tc := range []struct{ w, h int }{{40, 10}, {55, 14}, {80, 24}, {100, 24}, {140, 40}, {200, 60}} {
+			m.width, m.height = tc.w, tc.h
+			out := stripTestANSI(m.View().Content)
+			lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+			if len(lines) != tc.h {
+				t.Fatalf("stacked=%v %dx%d: rendered %d lines, want %d",
+					stacked, tc.w, tc.h, len(lines), tc.h)
+			}
+			for i, l := range lines {
+				if got := visibleWidth(l); got > tc.w {
+					t.Fatalf("stacked=%v %dx%d: line %d is %d cells: %q",
+						stacked, tc.w, tc.h, i, got, l)
+				}
+			}
+		}
+	}
+}
+
 // The fuzzy overlay must fit too.
 func TestViewFitsWhenFuzzyOpen(t *testing.T) {
 	m := viewFixture(t)
