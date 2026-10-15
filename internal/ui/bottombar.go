@@ -17,7 +17,10 @@ type BottomBar struct {
 	// PanesStacked switches the toggle hint to the action pressing s will
 	// take, rather than a fixed label.
 	PanesStacked bool
-	Theme        config.Theme
+	// PreviewHidden switches the preview hint to the action pressing v will
+	// take, mirroring PanesStacked.
+	PreviewHidden bool
+	Theme         config.Theme
 }
 
 func NewBottomBar(width int, theme config.Theme) BottomBar {
@@ -60,7 +63,11 @@ func (b BottomBar) Render() string {
 	if b.PanesStacked {
 		stack = "s:side-by-side"
 	}
-	help := b.Theme.StatusText().Render("h/j/k/l:nav  y:yank  m:move  p:paste  d:delete  /:filter  o:sort  " + stack + "  q:quit")
+	preview := "v:hide"
+	if b.PreviewHidden {
+		preview = "v:show"
+	}
+	help := b.Theme.StatusText().Render("h/j/k/l:nav  y:yank  m:move  p:paste  d:delete  /:filter  o:sort  " + stack + "  " + preview + "  q:quit")
 	return b.line(help)
 }
 

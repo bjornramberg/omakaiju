@@ -90,6 +90,10 @@ type Model struct {
 	// panesStacked toggles the file panes between side by side and stacked.
 	// It lives for the session only and resets on launch.
 	panesStacked bool
+	// previewHidden hides the file preview pane and gives its width back to
+	// the two navigation panes. It lives for the session only and resets on
+	// launch, mirroring panesStacked.
+	previewHidden bool
 	// leftSort/rightSort hold the per-pane sort cycle:
 	// name -> size↓ -> size↑ -> name. Zero value is SortByName (default).
 	leftSort  fs.SortMode
@@ -714,6 +718,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.panesStacked = !m.panesStacked
 			return m, nil
+		case nav.ActionTogglePreview:
+			m.previewHidden = !m.previewHidden
+			if m.previewHidden {
+				// A hidden pane cannot stay focused; focusing again via i
+				// unhides it (see below), so this stays reversible.
+				m.previewFocused = false
+			}
+			return m, nil
 		case nav.ActionSort:
 			mode := m.cycleSort(m.activePane)
 			m.opResult = "sort: " + mode.Label()
@@ -786,6 +798,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if msg.String() == "i" {
+			if m.previewHidden {
+				// Focusing a hidden pane unhides it so i always restores
+				// what v hid instead of appearing to do nothing.
+				m.previewHidden = false
+			}
 			m.previewFocused = true
 			return m, nil
 		}
@@ -1231,6 +1248,7 @@ func (m Model) handleConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() tea.View {
 	layout := ui.NewLayout(m.width, m.height, m.theme)
 	layout.PanesStacked = m.panesStacked
+	layout.PreviewHidden = m.previewHidden
 
 	// Before the first WindowSizeMsg the size is still zero, and a terminal
 	// dragged below the minimum has nowhere to draw. Both would otherwise hand
@@ -1273,25 +1291,28 @@ func (m Model) View() tea.View {
 	rightRendered := rightPane.Render()
 
 	var previewRendered string
-	preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
-	preview = preview.SetPath(m.previewPath)
-	preview.Focused = m.previewFocused
+	if !m.previewHidden {
+		preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
+		preview = preview.SetPath(m.previewPath)
+		preview.Focused = m.previewFocused
 
-	switch {
-	case m.previewPath == "":
-		previewRendered = preview.RenderMetadata("")
-	case m.previewCache != nil:
-		previewRendered = preview.RenderText(m.previewCache, m.previewHL)
-	case m.previewArchive != nil:
-		previewRendered = preview.RenderArchive(
-			ui.ArchiveLines(m.previewArchive, m.previewArchiveTruncated, m.theme, preview.Width-4),
-		)
-	default:
-		previewRendered = preview.RenderFile(m.previewPath, fs.DetectFileType(m.previewPath))
+		switch {
+		case m.previewPath == "":
+			previewRendered = preview.RenderMetadata("")
+		case m.previewCache != nil:
+			previewRendered = preview.RenderText(m.previewCache, m.previewHL)
+		case m.previewArchive != nil:
+			previewRendered = preview.RenderArchive(
+				ui.ArchiveLines(m.previewArchive, m.previewArchiveTruncated, m.theme, preview.Width-4),
+			)
+		default:
+			previewRendered = preview.RenderFile(m.previewPath, fs.DetectFileType(m.previewPath))
+		}
 	}
 
 	bottomBar := ui.NewBottomBar(m.width, m.theme)
 	bottomBar.PanesStacked = m.panesStacked
+	bottomBar.PreviewHidden = m.previewHidden
 	switch m.mode {
 	case inputFilter:
 		bottomBar.Prompt = "filter"
