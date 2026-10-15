@@ -668,10 +668,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.opResult = ""
 		m.loadErr = nil
 
-		if m.confirmDelete {
-			return m.handleConfirmDelete(msg)
-		}
-
 		if m.fuzzyActive {
 			return m.handleFuzzyKeys(msg)
 		}
@@ -680,18 +676,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleInputKeys(msg)
 		}
 
-		// An in-flight copy claims esc, but only once the modal prompts above
-		// have had their chance.
-		if m.copier != nil {
-			if msg.String() == "esc" {
-				return m.cancelCopy()
-			}
-			return m, nil
-		}
-
 		action := nav.Lookup(msg.String())
-		// v must work even while the preview is focused, otherwise hiding
-		// is unreachable once i has focused the preview and appears dead.
+		// v must work everywhere typing does not depend on it: while the
+		// preview is focused, during a copy, or under the delete
+		// confirmation. Otherwise hiding is unreachable once i has focused
+		// the preview and appears dead. It stays below the fuzzy/input
+		// gates so typing v into those prompts still inserts text instead
+		// of toggling.
 		if action == nav.ActionTogglePreview {
 			m.previewHidden = !m.previewHidden
 			if m.previewHidden {
@@ -702,9 +693,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if m.confirmDelete {
+			return m.handleConfirmDelete(msg)
+		}
+
+		// An in-flight copy claims esc, but only once the modal prompts above
+		// have had their chance (v is handled above so it stays reachable).
+		if m.copier != nil {
+			if msg.String() == "esc" {
+				return m.cancelCopy()
+			}
+			return m, nil
+		}
+
 		if m.previewFocused {
 			switch msg.String() {
-			case "i", "esc":
+			case "i", "I", "esc":
 				m.previewFocused = false
 				return m, nil
 			}
@@ -803,7 +807,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleDelete()
 		}
 
-		if msg.String() == "i" {
+		switch msg.String() {
+		case "i", "I":
 			if m.previewHidden {
 				// Focusing a hidden pane unhides it so i always restores
 				// what v hid instead of appearing to do nothing.

@@ -56,6 +56,7 @@ var Keybinds = []Keybind{
 	{"s", ActionStack},
 	{"o", ActionSort},
 	{"v", ActionTogglePreview},
+	{"V", ActionTogglePreview},
 }
 
 func Lookup(key string) Action {
