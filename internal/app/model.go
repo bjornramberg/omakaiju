@@ -125,7 +125,7 @@ type Model struct {
 
 	themeWatcher   *fs.Watcher
 	previewPath    string
-	previewFocused bool
+	previewHidden  bool
 
 	previewCache            []string
 	previewCachePath        string
@@ -685,15 +685,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.previewFocused {
-			switch msg.String() {
-			case "i", "esc":
-				m.previewFocused = false
-				return m, nil
-			}
-			return m, nil
-		}
-
 		action := nav.Lookup(msg.String())
 		switch action {
 		case nav.ActionQuit:
@@ -783,10 +774,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handlePaste()
 		case nav.ActionDelete:
 			return m.handleDelete()
-		}
-
-		if msg.String() == "i" {
-			m.previewFocused = true
+		case nav.ActionTogglePreview:
+			m.previewHidden = !m.previewHidden
 			return m, nil
 		}
 	}
@@ -1231,6 +1220,7 @@ func (m Model) handleConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() tea.View {
 	layout := ui.NewLayout(m.width, m.height, m.theme)
 	layout.PanesStacked = m.panesStacked
+	layout.PreviewHidden = m.previewHidden
 
 	// Before the first WindowSizeMsg the size is still zero, and a terminal
 	// dragged below the minimum has nowhere to draw. Both would otherwise hand
@@ -1273,21 +1263,22 @@ func (m Model) View() tea.View {
 	rightRendered := rightPane.Render()
 
 	var previewRendered string
-	preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
-	preview = preview.SetPath(m.previewPath)
-	preview.Focused = m.previewFocused
+	if !m.previewHidden {
+		preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
+		preview = preview.SetPath(m.previewPath)
 
-	switch {
-	case m.previewPath == "":
-		previewRendered = preview.RenderMetadata("")
-	case m.previewCache != nil:
-		previewRendered = preview.RenderText(m.previewCache, m.previewHL)
-	case m.previewArchive != nil:
-		previewRendered = preview.RenderArchive(
-			ui.ArchiveLines(m.previewArchive, m.previewArchiveTruncated, m.theme, preview.Width-4),
-		)
-	default:
-		previewRendered = preview.RenderFile(m.previewPath, fs.DetectFileType(m.previewPath))
+		switch {
+		case m.previewPath == "":
+			previewRendered = preview.RenderMetadata("")
+		case m.previewCache != nil:
+			previewRendered = preview.RenderText(m.previewCache, m.previewHL)
+		case m.previewArchive != nil:
+			previewRendered = preview.RenderArchive(
+				ui.ArchiveLines(m.previewArchive, m.previewArchiveTruncated, m.theme, preview.Width-4),
+			)
+		default:
+			previewRendered = preview.RenderFile(m.previewPath, fs.DetectFileType(m.previewPath))
+		}
 	}
 
 	bottomBar := ui.NewBottomBar(m.width, m.theme)

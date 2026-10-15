@@ -116,21 +116,6 @@ func TestViewExactlyFitsTerminal(t *testing.T) {
 	}
 }
 
-// The preview focus ring must not change the rendered size.
-func TestViewFitsWhenPreviewFocused(t *testing.T) {
-	m := viewFixture(t)
-	m.previewFocused = true
-
-	for _, tc := range []struct{ w, h int }{{80, 24}, {120, 40}, {200, 60}} {
-		m.width, m.height = tc.w, tc.h
-		out := stripTestANSI(m.View().Content)
-		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-		if len(lines) != tc.h {
-			t.Errorf("%dx%d: focused preview rendered %d lines, want %d", tc.w, tc.h, len(lines), tc.h)
-		}
-	}
-}
-
 // The fuzzy overlay must fit too.
 func TestViewFitsWhenFuzzyOpen(t *testing.T) {
 	m := viewFixture(t)

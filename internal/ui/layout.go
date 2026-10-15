@@ -23,6 +23,8 @@ type Layout struct {
 	// PanesStacked puts the two file panes on top of each other instead of
 	// side by side. The preview stays on the right at full height either way.
 	PanesStacked bool
+	// PreviewHidden hides the preview pane, giving full width to the file panes.
+	PreviewHidden bool
 }
 
 // minStackedMainHeight is the smallest main area that still fits two stacked
@@ -58,6 +60,9 @@ func (l Layout) MainAreaHeight() int {
 }
 
 func (l Layout) PreviewWidth() int {
+	if l.PreviewHidden {
+		return 0
+	}
 	w := l.Width / 3
 	if w < 1 {
 		w = 1
@@ -110,9 +115,17 @@ func (l Layout) Render(topBar, leftPane, rightPane, preview, bottomBar string) s
 	var main string
 	if l.PanesStacked {
 		stack := lipgloss.JoinVertical(lipgloss.Left, leftPane, rightPane)
-		main = lipgloss.JoinHorizontal(lipgloss.Top, stack, preview)
+		if l.PreviewHidden {
+			main = stack
+		} else {
+			main = lipgloss.JoinHorizontal(lipgloss.Top, stack, preview)
+		}
 	} else {
-		main = lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane, preview)
+		if l.PreviewHidden {
+			main = lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
+		} else {
+			main = lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane, preview)
+		}
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, topBar, main, bottomBar)
 }
