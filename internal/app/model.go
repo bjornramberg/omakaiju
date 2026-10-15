@@ -127,9 +127,8 @@ type Model struct {
 	leftRestore  string
 	rightRestore string
 
-	themeWatcher   *fs.Watcher
-	previewPath    string
-	previewFocused bool
+	themeWatcher *fs.Watcher
+	previewPath  string
 
 	previewCache            []string
 	previewCachePath        string
@@ -677,20 +676,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		action := nav.Lookup(msg.String())
-		// v must work everywhere typing does not depend on it: while the
-		// preview is focused, during a copy, or under the delete
-		// confirmation. Otherwise hiding is unreachable once i has focused
-		// the preview and appears dead. It stays below the fuzzy/input
-		// gates so typing v into those prompts still inserts text instead
-		// of toggling. The raw key is matched as well so a plain v/V press
-		// toggles even when its String form varies by terminal (Kitty
-		// shift variants, caps lock); Ctrl/Alt combos never count.
-		if action == nav.ActionTogglePreview || isPreviewToggleKey(msg) {
+		// v hides/shows the preview and hands its width back to the file
+		// panes. It sits below the fuzzy/input gates so typing v into those
+		// prompts inserts text, but above the confirm/copier gates so it
+		// stays reachable during a copy or under the delete confirmation.
+		// Matched on the raw key (not String()/Lookup: String() returns the
+		// bare Text and drops modifier info, so ctrl+v would look like "v"
+		// and slip through). Ctrl/Alt combos never count.
+		if isPreviewToggleKey(msg) {
 			m.previewHidden = !m.previewHidden
+			return m, nil
+		}
+
+		// i only restores a hidden preview. There is deliberately no preview
+		// focus mode: focusing used to highlight the border and swallow every
+		// key until i was pressed again, which made v look dead and locked
+		// navigation. With no modal state, i is a harmless no-op while the
+		// preview is visible and every other key always reaches its normal
+		// handler. Matched on the raw key like v so terminal spellings of
+		// i/I cannot slip through.
+		if isPreviewShowKey(msg) {
 			if m.previewHidden {
-				// A hidden pane cannot stay focused; focusing again via i
-				// unhides it (see below), so this stays reversible.
-				m.previewFocused = false
+				m.previewHidden = false
 			}
 			return m, nil
 		}
@@ -706,17 +713,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.cancelCopy()
 			}
 			return m, nil
-		}
-
-		if m.previewFocused {
-			switch msg.String() {
-			case "i", "I", "esc":
-				m.previewFocused = false
-				return m, nil
-			}
-			// Focus only highlights the preview border; every other key
-			// falls through to normal handling so focus never locks
-			// navigation, pane switching, or quit.
 		}
 
 		switch action {
@@ -808,27 +804,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case nav.ActionDelete:
 			return m.handleDelete()
 		}
-
-		switch msg.String() {
-		case "i", "I":
-			if m.previewHidden {
-				// Focusing a hidden pane unhides it so i always restores
-				// what v hid instead of appearing to do nothing.
-				m.previewHidden = false
-			}
-			m.previewFocused = true
-			return m, nil
-		}
 	}
 	return m, nil
 }
 
-// isPreviewToggleKey reports a plain v/V press from the raw key event. Lookup
-// on the String form covers the common cases, but terminals disagree on how a
-// shifted or caps-locked v is spelled ("V" vs "shift+v"); the Text/Code below
-// is what the physical key actually produced. Modified combos (Ctrl/Alt/Meta)
-// never count so shortcuts keep their meaning.
+// isPreviewToggleKey reports a plain v/V press from the raw key event.
+// Terminals disagree on how a shifted or caps-locked v is spelled ("V" vs
+// "shift+v"); Text/Code/ShiftedCode/BaseCode below is what the physical key
+// actually produced. Modified combos (Ctrl/Alt/Meta) never count so shortcuts
+// keep their meaning.
 func isPreviewToggleKey(msg tea.KeyMsg) bool {
+	return isPlainKey(msg, 'v')
+}
+
+// isPreviewShowKey reports a plain i/I press. Same hardening as the v toggle:
+// match every spelling the terminal might produce so i always restores a
+// hidden preview instead of appearing to do nothing.
+func isPreviewShowKey(msg tea.KeyMsg) bool {
+	return isPlainKey(msg, 'i')
+}
+
+// isPlainKey reports a bare press of want (either case) with no Ctrl/Alt/Meta.
+// Shift is allowed so caps lock and Shift+letter still count.
+func isPlainKey(msg tea.KeyMsg, want rune) bool {
 	k := msg.Key()
 	if k.Mod.Contains(tea.ModCtrl) ||
 		k.Mod.Contains(tea.ModAlt) ||
@@ -837,10 +835,23 @@ func isPreviewToggleKey(msg tea.KeyMsg) bool {
 		k.Mod.Contains(tea.ModHyper) {
 		return false
 	}
-	if k.Text == "v" || k.Text == "V" {
-		return true
+	lower, upper := want, want
+	if lower >= 'A' && lower <= 'Z' {
+		lower = lower - 'A' + 'a'
+	} else if lower >= 'a' && lower <= 'z' {
+		upper = upper - 'a' + 'A'
 	}
-	return k.Text == "" && (k.Code == 'v' || k.Code == 'V')
+	for _, r := range k.Text {
+		if r == lower || r == upper {
+			return true
+		}
+	}
+	for _, c := range []rune{k.Code, k.ShiftedCode, k.BaseCode} {
+		if c == lower || c == upper {
+			return true
+		}
+	}
+	return msg.String() == string(lower) || msg.String() == string(upper)
 }
 
 // refilterFuzzy re-applies the query. While the walk is still running there is
@@ -1327,7 +1338,6 @@ func (m Model) View() tea.View {
 	if !m.previewHidden {
 		preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
 		preview = preview.SetPath(m.previewPath)
-		preview.Focused = m.previewFocused
 
 		switch {
 		case m.previewPath == "":

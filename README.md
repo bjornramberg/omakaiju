@@ -105,7 +105,7 @@ make clean    # rm -f omakaiju
 | Tab | Toggle active pane |
 | s | Stack file panes vertically / restore side by side |
 | v | Hide / show the file preview pane (width goes back to the file panes) |
-| i | Focus preview highlight (press `i`/`Esc` to unfocus; `i` also restores a hidden preview; navigation stays active while focused) |
+| i | Show the file preview pane if hidden (otherwise no-op; never locks navigation) |
 | y | Yank (copy) entry under cursor |
 | m | Mark / unmark entry (repeat to select several) |
 | p | Move marked entries to the other pane, else paste yanked entry |
