@@ -57,9 +57,13 @@ func (k KeyList) BoxWidth() int {
 	return w
 }
 
-// contentWidth is the space inside the border and padding.
+// contentWidth is the space inside the border and padding. Empirically the
+// style's Width() sizes the whole block including the border (a panel built
+// at 90 cells renders a 90-cell outer box with 84 content cells inside), so
+// both are subtracted here — omitting the border showed up as phantom wraps
+// on rows two cells "inside" what the math had promised.
 func (k KeyList) contentWidth() int {
-	w := k.BoxWidth() - 2 /*border*/ - 4 /*padding*/
+	w := k.BoxWidth() - 8 /*border + padding, see comment*/
 	if w < 1 {
 		w = 1
 	}
@@ -228,9 +232,12 @@ func (k KeyList) Render() string {
 	// The key column stays anchored on the unfiltered widths so the
 	// description column does not dance between keystrokes.
 	keyCol := keyColumnWidth(k.baseRows())
-	descCol := k.contentWidth() - 1 /*marker*/ - keyCol - 2 /*gap*/
-	if descCol < 1 {
-		descCol = 1
+	// One spare cell keeps the composed row clear of the style's internal
+	// padding arithmetic — the widest line stays one cell inside the
+	// content edge rather than riding it, so nothing ever re-wraps.
+	descW := k.contentWidth() - 3 - keyCol
+	if descW < 1 {
+		descW = 1
 	}
 
 	cursor := k.Cursor
@@ -257,7 +264,7 @@ func (k KeyList) Render() string {
 			rowLines = append(rowLines, k.Theme.StatusText().Render("  ..."))
 		}
 		for i := start; i < end; i++ {
-			rowLines = append(rowLines, k.renderRow(rows[i], i == cursor, keyCol, descCol, search))
+			rowLines = append(rowLines, k.renderRow(rows[i], i == cursor, keyCol, descW, search))
 		}
 		if below {
 			rowLines = append(rowLines, k.Theme.StatusText().Render("  ..."))
@@ -305,11 +312,12 @@ func (k KeyList) Render() string {
 		Render(strings.Join(lines, "\n"))
 }
 
-// renderRow shows the key prominent with the description riding right after —
-// the same two-part row shape as the finder, cells budgeted so the row
-// cannot wrap. The cursor row uses the fileitem-active treatment
-// (selection background + bold); inactive rows stay plain.
-func (k KeyList) renderRow(row KeyRow, active bool, keyCol, descCol int, query string) string {
+// renderRow shows the key prominent with the description right-aligned
+// along the panel's right edge. The cursor row uses the fileitem-active
+// treatment (selection background + bold), and the inner segment styles
+// carry that background themselves so the highlight paints continuously
+// through the description rather than stopping at the style boundaries.
+func (k KeyList) renderRow(row KeyRow, active bool, keyCol, descW int, query string) string {
 	keys := row.Keys
 	if d := DisplayWidth(keys); d > keyCol {
 		keys = TruncateEnd(keys, keyCol)
@@ -317,14 +325,21 @@ func (k KeyList) renderRow(row KeyRow, active bool, keyCol, descCol int, query s
 		keys += strings.Repeat(" ", keyCol-d+1)
 	}
 	desc := row.Desc
-	if d := DisplayWidth(desc); d > descCol {
-		desc = TruncateEnd(desc, descCol)
+	if d := DisplayWidth(desc); d > descW {
+		desc = TruncateEnd(desc, descW)
 	} else {
-		desc += strings.Repeat(" ", descCol-d)
+		desc = strings.Repeat(" ", descW-d) + desc
 	}
 
-	keysPart := emphasizeText(keys, query, k.Theme.Text(), k.Theme.AccentText())
-	descPart := emphasizeText(desc, query, k.Theme.StatusText(), k.Theme.AccentText())
+	keyBase, descBase, accent := k.Theme.Text(), k.Theme.StatusText(), k.Theme.AccentText()
+	if active {
+		bg := lipgloss.Color(k.Theme.SelectionBG)
+		keyBase = keyBase.Bold(true).Background(bg)
+		descBase = descBase.Background(bg)
+		accent = accent.Background(bg)
+	}
+	keysPart := emphasizeText(keys, query, keyBase, accent)
+	descPart := emphasizeText(desc, query, descBase, accent)
 
 	style := k.Theme.FileItem()
 	if active {
