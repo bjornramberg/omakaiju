@@ -104,21 +104,42 @@ func (k KeyList) Render() string {
 	}
 
 	rows := k.rows()
-	header := k.Theme.AccentText().Bold(true).Render(" key list ")
 	contentWidth := k.contentWidth()
 	keyCol := keyColumnWidth(rows)
 
+	// The header shares the same left edge as the key column so the title
+	// and the table read as one block rather than two indent levels.
+	header := k.Theme.AccentText().Bold(true).Render("key list")
+
+	// Descriptions right-align against a line that sits descGap cells from
+	// the panel's right edge, so the kept space reads as a deliberate
+	//   clean margin rather than a run-on sentence.
+	const descGap = 25
+	descEnd := contentWidth - descGap
+	// Narrow panels cannot afford the gap: keep a small but readable
+	// description slot instead, still ending short of the content width.
+	if descEnd < keyCol+11 {
+		descEnd = min(keyCol+11, contentWidth-1)
+	}
+	descCell := descEnd - keyCol - 1 // one gap column after the key text
+
 	lines := []string{header, ""}
 	for _, row := range rows {
-		// The keys column is cell-padded so descriptions line up like a
-		// table instead of butting straight into the key text.
-		gap := keyCol - DisplayWidth(row.Keys)
-		if gap < 1 {
-			gap = 1
+		// Keys fill the key column cell-padded; the extra one-column gutter
+		// keeps the two columns from ever touching.
+		keys := row.Keys
+		if overflow := DisplayWidth(keys) - keyCol; overflow >= 0 {
+			keys = TruncateEnd(keys, keyCol)
 		}
-		keys := k.Theme.AccentText().Render(TruncateEnd(row.Keys, keyCol) + strings.Repeat(" ", gap))
-		desc := k.Theme.StatusText().Render(TruncateEnd(row.Desc, contentWidth-keyCol-2))
-		lines = append(lines, keys+desc)
+		pad := keyCol - DisplayWidth(keys)
+		keysRendered := k.Theme.AccentText().Render(keys + strings.Repeat(" ", pad+1))
+
+		desc := row.Desc
+		if overflow := DisplayWidth(desc) - descCell; overflow > 0 {
+			desc = TruncateEnd(desc, descCell)
+		}
+		descRendered := k.Theme.StatusText().Render(strings.Repeat(" ", descCell-DisplayWidth(desc)) + desc)
+		lines = append(lines, keysRendered+descRendered)
 	}
 
 	footer := k.Theme.StatusText().Render("ctrl+k/esc:close")
