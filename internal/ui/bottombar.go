@@ -16,10 +16,7 @@ type BottomBar struct {
 	Prompt      string
 	PromptInput string
 	Progress    *Progress
-	// PanesStacked switches the toggle hint to the action pressing s will
-	// take, rather than a fixed label.
-	PanesStacked bool
-	// Splash is pre-rendered version text placed flush right on the help
+	// Splash is pre-rendered version text placed flush right on the hints
 	// row while a version splash is fading. Empty means no splash.
 	Splash string
 	Theme  config.Theme
@@ -61,12 +58,8 @@ func (b BottomBar) Render() string {
 		return b.line(b.Theme.AccentText().Render(" " + b.OpResult))
 	}
 
-	stack := "s:stack"
-	if b.PanesStacked {
-		stack = "s:side-by-side"
-	}
-	help := b.Theme.StatusText().Render("h/j/k/l:nav  y:yank  m:move  p:paste  d:delete  /:filter  o:sort  " + stack + "  q:quit")
-	return b.line(b.joinSplash(help))
+	hints := b.Theme.StatusText().Render("ctrl+k:keys  q:quit")
+	return b.line(b.joinSplash(hints))
 }
 
 // joinSplash pads the help text so a fading version splash lands flush

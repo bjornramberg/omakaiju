@@ -103,20 +103,18 @@ func TestStackedViewKeepsPreview(t *testing.T) {
 	}
 }
 
-// The bar under a stacked layout names the way back.
-func TestStackedViewBarNamesRestoreAction(t *testing.T) {
+// With the long help gone, the stack toggle is discoverable from the
+// key overlay rather than the bar; the bar only shows minimal hints.
+func TestStackedViewBarStaysMinimal(t *testing.T) {
 	m, _ := fixture(t)
 	m.width, m.height = 100, 30
 	m.panesStacked = true
 	view := plainView.ReplaceAllString(m.View().Content, "")
 
-	if !strings.Contains(view, "s:side-by-side") {
-		t.Errorf("expected the restore hint in the bar, got:\n%s", view)
+	if strings.Contains(view, "s:side-by-side") || strings.Contains(view, "s:stack") {
+		t.Errorf("stack hints should be gone from the bar, got:\n%s", view)
 	}
-
-	m.panesStacked = false
-	view = plainView.ReplaceAllString(m.View().Content, "")
-	if !strings.Contains(view, "s:stack") {
-		t.Errorf("expected the stack hint in the bar, got:\n%s", view)
+	if !strings.Contains(view, "ctrl+k:keys") || !strings.Contains(view, "q:quit") {
+		t.Errorf("minimal hints missing from the bar, got:\n%s", view)
 	}
 }

@@ -171,6 +171,10 @@ type Model struct {
 	// splashStep counts the version-splash frames drawn since startup; the
 	// bar renders the corresponding mix level until the splash fades out.
 	splashStep int
+
+	// keyListActive pins the key overlay up; every key press is absorbed
+	// while it is open (see handleKeyListKeys).
+	keyListActive bool
 	// fuzzySpinning records whether the animation loop is running. It only
 	// starts once the user types, so a walk that finishes immediately does not
 	// flash a spinner for results nobody has had time to see.
@@ -714,6 +718,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleFuzzyKeys(msg)
 		}
 
+		if m.keyListActive {
+			return m.handleKeyListKeys(msg)
+		}
+
 		if m.mode != inputNone {
 			return m.handleInputKeys(msg)
 		}
@@ -824,6 +832,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.inputBuf = ""
 			m.loadErr = nil
 			return m, nil
+		case nav.ActionKeyList:
+			m.keyListActive = !m.keyListActive
+			return m, nil
 		}
 	}
 	return m, nil
@@ -865,6 +876,18 @@ func (m *Model) clearFuzzy() {
 	m.fuzzyLoading = false
 	m.fuzzyRoot = ""
 	go debug.FreeOSMemory()
+}
+
+// handleKeyListKeys runs while the key overlay is pinned up. It closes on
+// its own toggle, esc, or q, and absorbs everything else: navigation,
+// filtering, and pane actions must not move things behind the user's back
+// just because the panel is up.
+func (m Model) handleKeyListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch nav.Lookup(msg.String()) {
+	case nav.ActionKeyList, nav.ActionClear, nav.ActionQuit:
+		m.keyListActive = false
+	}
+	return m, nil
 }
 
 func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1356,7 +1379,6 @@ func (m Model) View() tea.View {
 	}
 
 	bottomBar := ui.NewBottomBar(m.width, m.theme)
-	bottomBar.PanesStacked = m.panesStacked
 	bottomBar.Splash = ui.Splash(m.theme, m.splashStep)
 	switch m.mode {
 	case inputFilter:
@@ -1400,6 +1422,12 @@ func (m Model) View() tea.View {
 		finder.Root = m.fuzzyRoot
 		finder.Spinner = m.fuzzySpinner
 		view = ui.OverlayCentered(view, finder.Render(), m.width)
+	}
+
+	if m.keyListActive {
+		keyList := ui.NewKeyList(m.width, m.height, m.theme)
+		keyList.Focused = true
+		view = ui.OverlayCentered(view, keyList.Render(), m.width)
 	}
 
 	return tea.NewView(view)

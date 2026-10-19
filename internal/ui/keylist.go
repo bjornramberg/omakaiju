@@ -1,0 +1,153 @@
+package ui
+
+import (
+	"strings"
+
+	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/nav"
+)
+
+// KeyRow is one line of the key-list overlay: the key or key alias joined
+// with "/", and what it does.
+type KeyRow struct {
+	Keys string
+	Desc string
+}
+
+// KeyList is the floating panel that lists every shortcut, styled after the
+// fuzzy finder: same margin box, accent frame when focused, accented keys
+// column beside muted descriptions. It is purely informational and
+// keyboard-driven, so it carries no animation or cursor state.
+type KeyList struct {
+	// Focused selects the accent frame instead of the neutral one.
+	Focused bool
+	Width   int
+	Height  int
+	Theme   config.Theme
+	// Rows override the entries derived from nav.Keybinds; nil means the
+	// table itself is the content.
+	Rows []KeyRow
+}
+
+func NewKeyList(width, height int, theme config.Theme) KeyList {
+	return KeyList{Width: width, Height: height, Theme: theme}
+}
+
+// BoxWidth matches the fuzzy finder's margins so the two overlays feel like
+// the same window system. Content narrower than the key column plus some
+// description is not worth rendering, hence the floor.
+func (k KeyList) BoxWidth() int {
+	w := k.Width - 8
+	if w > 100 {
+		w = 100
+	}
+	if w < 24 {
+		w = 24
+	}
+	if w > k.Width {
+		w = k.Width
+	}
+	return w
+}
+
+// contentWidth is the space inside the border and padding.
+func (k KeyList) contentWidth() int {
+	w := k.BoxWidth() - 2 /*border*/ - 4 /*padding*/
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
+// rows falls back to the live keybind table when the caller has not injected
+// content, so the overlay can never render hypothetically rather than
+// documenting what actually dispatches.
+func (k KeyList) rows() []KeyRow {
+	if k.Rows != nil {
+		return k.Rows
+	}
+	var rows []KeyRow
+	for _, r := range nav.KeyRows() {
+		rows = append(rows, KeyRow{Keys: r.Keys, Desc: r.Desc})
+	}
+	return rows
+}
+
+// The key column tracks the widest alias in the rows, clamped so very long
+// custom entries cannot push descriptions off panel in a two-column table.
+// Somewhere between single letters and ctrl-combos: aliases top out at six
+// cells ("ctrl+r"), hence the ceiling.
+func keyColumnWidth(rows []KeyRow) int {
+	widest := 0
+	for _, row := range rows {
+		if w := DisplayWidth(row.Keys); w > widest {
+			widest = w
+		}
+	}
+	if widest < 8 {
+		widest = 8
+	}
+	if widest > 16 {
+		widest = 16
+	}
+	return widest
+}
+
+// Render draws the panel, meant to be overlaid on the live layout. Rows are
+// all shown; the ~20 bindings fit any terminal tall enough to run the rest
+// of the UI, and overflow simply degrades gracefully via the panel's own
+// height clamping.
+func (k KeyList) Render() string {
+	style := k.Theme.PreviewPanel()
+	if k.Focused {
+		style = k.Theme.PreviewPanelFocused()
+	}
+
+	rows := k.rows()
+	header := k.Theme.AccentText().Bold(true).Render(" key list ")
+	contentWidth := k.contentWidth()
+	keyCol := keyColumnWidth(rows)
+
+	lines := []string{header, ""}
+	for _, row := range rows {
+		// The keys column is cell-padded so descriptions line up like a
+		// table instead of butting straight into the key text.
+		gap := keyCol - DisplayWidth(row.Keys)
+		if gap < 1 {
+			gap = 1
+		}
+		keys := k.Theme.AccentText().Render(TruncateEnd(row.Keys, keyCol) + strings.Repeat(" ", gap))
+		desc := k.Theme.StatusText().Render(TruncateEnd(row.Desc, contentWidth-keyCol-2))
+		lines = append(lines, keys+desc)
+	}
+
+	footer := k.Theme.StatusText().Render("ctrl+k/esc:close")
+	lines = append(lines, "", footer)
+
+	// Same graceful degradation as the finder: on a short terminal the blank
+	// separators go first so header, rows, and footer stay in view.
+	budget := k.Height - 4
+	if budget < 1 {
+		budget = 1
+	}
+	for len(lines) > budget {
+		dropped := false
+		for i := len(lines) - 2; i >= 0; i-- {
+			if lines[i] == "" {
+				lines = append(lines[:i], lines[i+1:]...)
+				dropped = true
+				break
+			}
+		}
+		if !dropped {
+			break
+		}
+	}
+
+	// The border adds two columns over the styled content width, mirroring
+	// the finder so the outer box cannot exceed the terminal.
+	return style.
+		Width(k.BoxWidth() - 2).
+		MaxWidth(k.BoxWidth() - 2).
+		Render(strings.Join(lines, "\n"))
+}
