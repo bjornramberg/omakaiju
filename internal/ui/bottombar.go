@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"strings"
+
 	"github.com/bjornramberg/omakaiju/internal/config"
 )
 
@@ -17,7 +19,10 @@ type BottomBar struct {
 	// PanesStacked switches the toggle hint to the action pressing s will
 	// take, rather than a fixed label.
 	PanesStacked bool
-	Theme        config.Theme
+	// Splash is pre-rendered version text placed flush right on the help
+	// row while a version splash is fading. Empty means no splash.
+	Splash string
+	Theme  config.Theme
 }
 
 func NewBottomBar(width int, theme config.Theme) BottomBar {
@@ -61,7 +66,21 @@ func (b BottomBar) Render() string {
 		stack = "s:side-by-side"
 	}
 	help := b.Theme.StatusText().Render("h/j/k/l:nav  y:yank  m:move  p:paste  d:delete  /:filter  o:sort  " + stack + "  q:quit")
-	return b.line(help)
+	return b.line(b.joinSplash(help))
+}
+
+// joinSplash pads the help text so a fading version splash lands flush
+// against the content area's right edge. A splash that would not fit beside
+// the help is dropped rather than wrapping the row.
+func (b BottomBar) joinSplash(help string) string {
+	if b.Splash == "" {
+		return help
+	}
+	gap := b.contentWidth() - DisplayWidth(help) - DisplayWidth(b.Splash)
+	if gap < 1 {
+		return help
+	}
+	return help + strings.Repeat(" ", gap) + b.Splash
 }
 
 // line renders the bar bounded to the terminal width, so a long message can

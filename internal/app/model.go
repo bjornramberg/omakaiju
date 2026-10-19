@@ -72,6 +72,9 @@ type themeReloadedMsg struct {
 // and cannot hold it itself.
 type fuzzyTickMsg struct{}
 
+// splashTickMsg advances the version splash animation in the bottom bar.
+type splashTickMsg struct{}
+
 type fuzzyFilesLoadedMsg struct {
 	files []string
 	// root identifies which walk produced files. A walk from a directory the
@@ -110,15 +113,15 @@ type Model struct {
 	panesStacked bool
 	// leftSort/rightSort hold the per-pane sort cycle:
 	// name -> size↓ -> size↑ -> name. Zero value is SortByName (default).
-	leftSort  fs.SortMode
-	rightSort fs.SortMode
-	leftPath     string
-	leftFiles    []fs.Entry
-	leftCursor   int
-	rightPath    string
-	rightFiles   []fs.Entry
-	rightCursor  int
-	loadErr      error
+	leftSort    fs.SortMode
+	rightSort   fs.SortMode
+	leftPath    string
+	leftFiles   []fs.Entry
+	leftCursor  int
+	rightPath   string
+	rightFiles  []fs.Entry
+	rightCursor int
+	loadErr     error
 
 	clipboard     Clipboard
 	clipboardOn   bool
@@ -141,9 +144,9 @@ type Model struct {
 	leftRestore  string
 	rightRestore string
 
-	themeWatcher   *fs.Watcher
-	previewPath    string
-	previewHidden  bool
+	themeWatcher  *fs.Watcher
+	previewPath   string
+	previewHidden bool
 
 	previewCache            []string
 	previewCachePath        string
@@ -164,6 +167,10 @@ type Model struct {
 	fuzzyRoot string
 	// fuzzySpinner is the current animation frame.
 	fuzzySpinner int
+
+	// splashStep counts the version-splash frames drawn since startup; the
+	// bar renders the corresponding mix level until the splash fades out.
+	splashStep int
 	// fuzzySpinning records whether the animation loop is running. It only
 	// starts once the user types, so a walk that finishes immediately does not
 	// flash a spinner for results nobody has had time to see.
@@ -296,6 +303,15 @@ func fuzzyTickCmd() tea.Cmd {
 	})
 }
 
+// splashTickCmd advances the version splash one frame. Update re-issues it
+// until the splash has fully faded out, then lets the loop end so no ticker
+// outlives the animation.
+func splashTickCmd() tea.Cmd {
+	return tea.Tick(ui.SplashTick, func(time.Time) tea.Msg {
+		return splashTickMsg{}
+	})
+}
+
 // waitThemeCmd blocks until the next palette-relevant fsnotify event and
 // reports it. It is deliberately one-shot: Update re-issues it after handling
 // each message, so the watcher survives every reload instead of stopping after
@@ -361,6 +377,7 @@ func (m Model) Init() tea.Cmd {
 		loadDirCmd(0, m.leftPath),
 		loadDirCmd(1, m.rightPath),
 		m.waitThemeCmd(),
+		splashTickCmd(),
 	)
 }
 
@@ -663,6 +680,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fuzzySpinner++
 		return m, fuzzyTickCmd()
 
+	case splashTickMsg:
+		m.splashStep++
+		if ui.SplashActive(m.splashStep) {
+			return m, splashTickCmd()
+		}
+		return m, nil
+
 	case fuzzyFilesLoadedMsg:
 		// A walk started elsewhere, or from a session already abandoned, must
 		// not replace the current results.
@@ -750,10 +774,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fuzzyInput = ""
 			m.fuzzyResults = nil
 			m.fuzzyCursor = 0
-		// The previous tree is dropped rather than shown while the new
-		// walk runs, so results never appear to belong to the wrong root.
-		m.fuzzyAllFiles = nil
-		m.fuzzyLoading = true
+			// The previous tree is dropped rather than shown while the new
+			// walk runs, so results never appear to belong to the wrong root.
+			m.fuzzyAllFiles = nil
+			m.fuzzyLoading = true
 			m.fuzzyRoot = root
 			m.fuzzySpinner = 0
 			m.fuzzySpinning = false
@@ -1333,6 +1357,7 @@ func (m Model) View() tea.View {
 
 	bottomBar := ui.NewBottomBar(m.width, m.theme)
 	bottomBar.PanesStacked = m.panesStacked
+	bottomBar.Splash = ui.Splash(m.theme, m.splashStep)
 	switch m.mode {
 	case inputFilter:
 		bottomBar.Prompt = "filter"

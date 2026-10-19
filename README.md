@@ -15,6 +15,7 @@ Built in Go with Bubble Tea + Lipgloss. Both panes start in the directory where 
 - Fuzzy finder (recursive, ranked) plus live `/` filter
 - Yank/paste with progress bar and cancel, mark/move across panes, trash (XDG) or force delete, add/rename
 - Asynchronous I/O so the UI never blocks on filesystem work
+- Version splash on the bottom-right: fades in on launch, fades out after three seconds
 
 ## Requirements
 
