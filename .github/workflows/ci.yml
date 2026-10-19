@@ -26,3 +26,14 @@ jobs:
 
       - name: Build
         run: make build
+
+      - name: Shellcheck installer
+        run: shellcheck install.sh
+
+      - name: Upload binary artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: omakaiju-linux-binary
+          path: omakaiju
+          retention-days: 14

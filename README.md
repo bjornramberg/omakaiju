@@ -18,21 +18,26 @@ Built in Go with Bubble Tea + Lipgloss. Both panes start in the directory where 
 
 ## Requirements
 
-- Go 1.27+
+- Linux (for prebuilt binaries; the source also builds fine on Unix-likes)
 - A Nerd Font (optional, for icons)
 
 ## Install
 
+Install the latest prebuilt release with one command:
+
 ```bash
-go install github.com/bjornramberg/omakaiju/cmd/omakaiju@latest
+curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.sh | sh
 ```
 
-Or download a prebuilt Linux (amd64/arm64) tarball from
-[GitHub Releases](https://github.com/bjornramberg/omakaiju/releases), then:
+The installer detects your architecture (amd64/arm64), downloads the Linux
+binary from GitHub Releases, verifies it against the published
+`checksums.txt`, and installs it into `~/.local/bin`.
+
+To pin a specific release or change the install location:
 
 ```bash
-tar xzf omakaiju_Linux_x86_64.tar.gz
-./omakaiju
+curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.sh | sh -s -- v0.8.0     # pin a version
+OMAKAIJU_PREFIX=/usr/local curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.sh | sh
 ```
 
 ## Use as the Omarchy file manager
@@ -40,14 +45,10 @@ tar xzf omakaiju_Linux_x86_64.tar.gz
 omakaiju is a drop-in replacement for Omarchy's default file manager binding.
 These steps target **Omarchy Quattro** (Hyprland, Lua-based config).
 
-**1. Make sure `omakaiju` is on your `PATH`.** If you installed with
-`go install`, the binary lands in `~/go/bin`; symlink it into `~/.local/bin`
-so both your shell and Hyprland can find it:
-
-```bash
-mkdir -p ~/.local/bin
-ln -sf "$(go env GOPATH)/bin/omakaiju" ~/.local/bin/omakaiju
-```
+**1. Make sure `omakaiju` is on your `PATH`.** If you picked a custom
+prefix with the installer (`OMAKAIJU_PREFIX=...`), make sure
+`$PREFIX/bin` is on your `PATH`. The default `~/.local/bin` is already
+on the path for most distros, but verify with `command -v omakaiju`.
 
 **2. Rebind `SUPER + SHIFT + F` in `~/.config/hypr/bindings.lua`.** The default
 launches nautilus, so unbind it first:
@@ -84,7 +85,12 @@ omarchy menu keybindings --print
 To revert everything, remove the two lines from step 2 and
 `omarchy refresh hyprland`.
 
-## Building
+## Development
+
+These paths are for hacking on the source or doing installs by hand; the
+[Install](#install) section is all most users need.
+
+Requires Go 1.27+ (Linux or any Unix-like).
 
 ```bash
 make build    # go build -o omakaiju ./cmd/omakaiju
@@ -93,6 +99,24 @@ make install  # install to /usr/local/bin (override with PREFIX=/path)
 make test     # go test ./...
 make lint     # go vet ./...
 make clean    # rm -f omakaiju
+```
+
+Or the classic one-liner, if you'd rather not clone:
+
+```bash
+go install github.com/bjornramberg/omakaiju/cmd/omakaiju@latest
+```
+
+### Manual asset downloads
+
+Every release on [GitHub Releases](https://github.com/bjornramberg/omakaiju/releases)
+ships tarballs (`omakaiju_linux_*.tar.gz` with LICENSE and README) and bare
+binaries (`omakaiju_linux_amd64` / `omakaiju_linux_arm64`), each accompanied by
+a `checksums.txt`:
+
+```bash
+curl -fsSL https://github.com/bjornramberg/omakaiju/releases/latest/download/omakaiju_linux_amd64 \
+  -o omakaiju && chmod +x omakaiju
 ```
 
 ## Keybindings

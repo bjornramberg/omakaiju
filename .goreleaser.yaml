@@ -21,5 +21,12 @@ archives:
       - LICENSE
       - README.md
 
+  # Bare binaries uploaded directly to the release, e.g.
+  # omakaiju_linux_amd64 — lets users curl-download without untarring.
+  - id: raw-binaries
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - binary
+
 checksum:
   name_template: checksums.txt
