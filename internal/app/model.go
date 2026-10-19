@@ -18,6 +18,23 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// expandPath expands ~ to home directory, $VAR/${VAR} to environment variables,
+// and resolves relative paths against the given base directory.
+func expandPath(path, base string) string {
+	// Expand ~
+	if strings.HasPrefix(path, "~") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, path[1:])
+	}
+	// Expand $VAR and ${VAR}
+	path = os.ExpandEnv(path)
+	// Relative to base
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	return filepath.Clean(path)
+}
+
 type dirLoadedMsg struct {
 	pane  int
 	path  string
@@ -69,7 +86,7 @@ type Clipboard struct {
 	Source string
 }
 
-// inputMode is the active single-line text prompt. Filter, add, and rename all
+// inputMode is the active single-line text prompt. Filter, add, rename, and goto all
 // share one capture path: type to edit, enter commits, esc cancels.
 type inputMode int
 
@@ -78,6 +95,7 @@ const (
 	inputFilter
 	inputAdd
 	inputRename
+	inputGoto
 )
 
 type Model struct {
@@ -777,6 +795,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case nav.ActionTogglePreview:
 			m.previewHidden = !m.previewHidden
 			return m, nil
+		case nav.ActionGoto:
+			m.mode = inputGoto
+			m.inputBuf = ""
+			m.loadErr = nil
+			return m, nil
 		}
 	}
 	return m, nil
@@ -920,7 +943,7 @@ func (m Model) handleInputKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Movement stays available while the prompt is open; filtering is
 		// unaffected, so the user can walk the narrowed list and carry on
 		// typing.
-		if m.mode == inputFilter {
+		if m.mode == inputFilter || m.mode == inputGoto {
 			return m.handleNavAction(nav.Lookup(msg.String()))
 		}
 		return m, nil
@@ -936,6 +959,9 @@ func (m Model) handleInputKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.updatePreview()
 		return m, nil
 	case "enter":
+		if m.mode == inputGoto {
+			return m.commitGoto()
+		}
 		return m.commitInput()
 	case "backspace":
 		if m.inputBuf != "" {
@@ -1013,6 +1039,30 @@ func (m Model) commitInput() (tea.Model, tea.Cmd) {
 
 	m.mode = inputNone
 	m.inputBuf = ""
+	return m, nil
+}
+
+// commitGoto resolves the typed path and navigates the active pane to it.
+// On invalid path, keeps the prompt open and sets loadErr for display.
+func (m Model) commitGoto() (tea.Model, tea.Cmd) {
+	path := m.inputBuf
+	if path == "" {
+		m.mode = inputNone
+		m.inputBuf = ""
+		return m, nil
+	}
+
+	expanded := expandPath(path, m.rawPath(m.activePane))
+
+	if info, err := os.Stat(expanded); err == nil && info.IsDir() {
+		m.mode = inputNone
+		m.inputBuf = ""
+		m.setPath(m.activePane, expanded)
+		return m, loadDirCmd(m.activePane, expanded)
+	}
+
+	// Invalid - keep prompt open, show error
+	m.loadErr = fmt.Errorf("not a directory: %s", path)
 	return m, nil
 }
 
@@ -1292,6 +1342,9 @@ func (m Model) View() tea.View {
 		bottomBar.PromptInput = m.inputBuf
 	case inputRename:
 		bottomBar.Prompt = "rename"
+		bottomBar.PromptInput = m.inputBuf
+	case inputGoto:
+		bottomBar.Prompt = "goto"
 		bottomBar.PromptInput = m.inputBuf
 	default:
 		if m.copier != nil {
