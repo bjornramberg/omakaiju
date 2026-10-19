@@ -17,7 +17,11 @@ set -eu
 REPO="bjornramberg/omakaiju"
 BIN_NAME="omakaiju"
 
-VERSION="${OMAKAIJU_VERSION:-$1}"
+# NOTE: this must stay in the "${1:-...}" form -- under `set -u`, dash
+# evaluates $1 inside "${OMAKAIJU_VERSION:-$1}" even when the env var is
+# unset, which kills piped installs (`curl ... | sh`) with
+# "line 20: $1: unbound variable".
+VERSION="${1:-${OMAKAIJU_VERSION:-}}"
 PREFIX="${OMAKAIJU_PREFIX:-$HOME/.local}"
 
 if [ -n "$VERSION" ]; then
