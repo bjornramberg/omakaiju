@@ -33,13 +33,6 @@ The installer detects your architecture (amd64/arm64), downloads the Linux
 binary from GitHub Releases, verifies it against the published
 `checksums.txt`, and installs it into `~/.local/bin`.
 
-To pin a specific release or change the install location:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.sh | sh -s -- v0.8.0     # pin a version
-OMAKAIJU_PREFIX=/usr/local curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.sh | sh
-```
-
 ## Use as the Omarchy file manager
 
 omakaiju is a drop-in replacement for Omarchy's default file manager binding.
