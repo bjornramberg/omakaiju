@@ -63,43 +63,53 @@ func TestKeyListOpensOnCtrlK(t *testing.T) {
 	}
 }
 
-// While the overlay is up every dispatch key is absorbed: nothing behind the
-// user's back may move. Absorbed keys are freed once it closes.
-func TestKeyListAbsorbsKeysWhileOpen(t *testing.T) {
+// Typing while the overlay is open runs the search across keys and
+// descriptions, arrows move the cursor, and nothing reaches the panes
+// underneath — previewing keys does not act on files.
+func TestKeyListSearchesAndNavigates(t *testing.T) {
 	m := keyListModel(t, 120, 40)
 
 	m2, _ := m.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
 	m = m2.(Model)
-	if !m.keyListActive {
-		t.Fatal("overlay should open")
-	}
 
-	// Nav and action keys must not reach the panes.
-	for _, msg := range []tea.KeyMsg{
-		tea.KeyPressMsg{Code: tea.KeyDown},
-		tea.KeyPressMsg{Code: 'y'},
-		tea.KeyPressMsg{Code: 'a'},
-	} {
-		next, _ := m.Update(msg)
+	// Type "yank": the search fills and the view narrows to the copy row.
+	for _, r := range []rune{'y', 'a', 'n', 'k'} {
+		next, _ := m.Update(tea.KeyPressMsg{Code: r})
 		m = next.(Model)
 	}
-
-	if m.keyListActive != true {
-		t.Fatal("ordinary keys must not close the overlay")
+	if m.keyListQuery != "yank" {
+		t.Errorf("search input not captured, got %q", m.keyListQuery)
 	}
+
+	// The panes under the overlay must not have lost their cursor or run
+	// the keys as actions.
 	if m.leftCursor != 0 {
 		t.Errorf("cursor should not move while overlay is open, got %d", m.leftCursor)
 	}
 	if m.clipboard.Files != nil {
-		t.Error("yank key must be absorbed, not applied")
+		t.Error("yank key must be captured as search text, not applied")
 	}
 	if m.mode != inputNone {
-		t.Errorf("action keys must be absorbed, got input mode %d", m.mode)
+		t.Errorf("prompt modes must stay off, got input mode %d", m.mode)
 	}
 
-	// Closing with esc unblocks dispatch: the key reaching the pane after
-	// the escape must actually take effect.
-	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	view := plainView.ReplaceAllString(m.View().Content, "")
+	if !strings.Contains(view, "yank (copy)") {
+		t.Error("yank row should show for the yank search")
+	}
+	if strings.Contains(view, "switch pane") {
+		t.Error("unrelated rows should be filtered away")
+	}
+
+	// Backspace edits the query back off again.
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = next.(Model)
+	if m.keyListQuery != "yan" {
+		t.Errorf("backspace broke the query, got %q", m.keyListQuery)
+	}
+
+	// esc closes and the pane dispatch resumes right after.
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	if m.keyListActive {
 		t.Fatal("esc should close the overlay")
@@ -111,21 +121,77 @@ func TestKeyListAbsorbsKeysWhileOpen(t *testing.T) {
 	}
 }
 
-// q closes the key overlay like esc; no other key may dismiss it.
-func TestKeyListClosesOnQNotOnAction(t *testing.T) {
+// Arrows move the highlight across the full list, clamped at both ends.
+func TestKeyListArrowsNavigateBeforeFiltering(t *testing.T) {
 	m := keyListModel(t, 120, 40)
 
 	m2, _ := m.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
 	m = m2.(Model)
-	next, _ := m.Update(tea.KeyPressMsg{Code: 'l'})
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m = next.(Model)
-	if !m.keyListActive {
-		t.Fatal("an action key pushed through while open should be absorbed, not close")
+	if m.keyListCursor != 1 {
+		t.Errorf("down should move the cursor on the full list, got %d", m.keyListCursor)
+	}
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = next.(Model)
+	if m.keyListCursor != 0 {
+		t.Errorf("up should clamp at the top, got %d", m.keyListCursor)
+	}
+}
+
+// Description matches: a search for "pane" surfaces the pane-related
+// bindings, and their rows stay visible in the rendered panel.
+func TestKeyListSearchesDescriptions(t *testing.T) {
+	m := keyListModel(t, 120, 40)
+
+	m2, _ := m.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	m = m2.(Model)
+	for _, r := range []rune{'p', 'a', 'n', 'e'} {
+		next, _ := m.Update(tea.KeyPressMsg{Code: r})
+		m = next.(Model)
 	}
 
-	next, _ = m.Update(tea.KeyPressMsg{Code: 'q'})
+	view := stripKey(m.View().Content)
+	if !strings.Contains(view, "switch pane") || !strings.Contains(view, "stack panes") {
+		t.Errorf("pane rows missing from the view, got %q", view)
+	}
+	if strings.Contains(view, "rename") {
+		t.Errorf("unrelated rows should be filtered away, got %q", view)
+	}
+}
+
+// q is no longer a global quit while the panel is up: it falls into the
+// search. Only esc and ctrl+k close the overlay.
+func TestKeyListQGoesToSearch(t *testing.T) {
+	m := keyListModel(t, 120, 40)
+
+	m2, _ := m.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	m = m2.(Model)
+	next, _ := m.Update(tea.KeyPressMsg{Code: 'q'})
+	m = next.(Model)
+	if !m.keyListActive {
+		t.Fatal("q should feed the search, not close the overlay")
+	}
+	if m.keyListQuery != "q" {
+		t.Errorf("q should be in the query, got %q", m.keyListQuery)
+	}
+
+	// A real quit key is absorbed while the overlay pins the screen: the
+	// user has to get out of the panel first.
+	if strings.Contains(stripKey(m.View().Content), "bye") {
+		t.Error("q must not quit the app while the overlay is up")
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	if m.keyListActive {
-		t.Fatal("q should close the overlay")
+		t.Fatal("esc should close the overlay")
 	}
+}
+
+func stripKey(s string) string {
+	return plainView.ReplaceAllString(s, "")
 }

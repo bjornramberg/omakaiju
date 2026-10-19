@@ -14,10 +14,12 @@ func TestKeyListRendersRowsFromKeybinds(t *testing.T) {
 	if !strings.Contains(out, "key list") {
 		t.Errorf("header missing, got %q", out)
 	}
-	if !strings.Contains(out, "ctrl+k/esc:close") {
-		t.Errorf("footer missing, got %q", out)
+	// The footer mentions all the fuzzy-style affordances.
+	for _, want := range []string{"type to search", "up/down:move", "esc:close"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("footer hint %q missing, got %q", want, out)
+		}
 	}
-	// Aliases merge, so both the alias and one half of it appear once.
 	if !strings.Contains(out, "h/left") {
 		t.Errorf("merged motion aliases missing, got %q", out)
 	}
@@ -29,7 +31,58 @@ func TestKeyListRendersRowsFromKeybinds(t *testing.T) {
 	}
 }
 
-// Injected rows are honored so tests (and future tweaks) can override the
+// The search matches on both columns: "yank" finds the copy binding, and
+// "pane" finds everything mentioning panes.
+func TestFilterKeyRowsSearchesBothColumns(t *testing.T) {
+	rows := TableKeyRows()
+
+	yank := FilterKeyRows(rows, "yank")
+	if len(yank) != 1 || yank[0].Desc != "yank (copy)" {
+		t.Errorf("searching yank should leave one copy row, got %v", yank)
+	}
+
+	pane := FilterKeyRows(rows, "pane")
+	if len(pane) != 4 {
+		t.Fatalf("searching pane should find the four pane rows, got %v", pane)
+	}
+	for _, row := range pane {
+		if !strings.Contains(row.Desc, "pane") {
+			t.Errorf("unexpected pane row %q (%q)", row.Keys, row.Desc)
+		}
+	}
+
+	// Key text is searchable too, not only descriptions.
+	byKey := FilterKeyRows(rows, "ctrl+f")
+	if len(byKey) != 1 || byKey[0].Desc != "fuzzy find" {
+		t.Errorf("key-text search failed, got %v", byKey)
+	}
+}
+
+func TestKeyListSearchNarrowsRows(t *testing.T) {
+	k := NewKeyList(100, 40, config.DefaultTheme())
+	k.Input = "yank"
+	out := stripANSI(k.Render())
+
+	if !strings.Contains(out, "yank (copy)") {
+		t.Errorf("yank row missing: %q", out)
+	}
+	if strings.Contains(out, "switch pane") {
+		t.Errorf("unrelated rows should be filtered away: %q", out)
+	}
+	if !strings.Contains(out, "1/1") {
+		t.Errorf("position should read 1/1 after the filter, got %q", out)
+	}
+}
+
+func TestKeyListNoMatchesRendersHint(t *testing.T) {
+	k := NewKeyList(100, 40, config.DefaultTheme())
+	k.Input = "zzz"
+	if out := stripANSI(k.Render()); !strings.Contains(out, "no matching key") {
+		t.Errorf("empty result hint missing, got %q", out)
+	}
+}
+
+// Injected rows are honored so tests (and future panels) can override the
 // table without touching the dispatch path.
 func TestKeyListHonorsRowsOverride(t *testing.T) {
 	k := NewKeyList(100, 40, config.DefaultTheme())

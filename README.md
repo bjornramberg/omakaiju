@@ -133,12 +133,15 @@ curl -fsSL https://github.com/bjornramberg/omakaiju/releases/latest/download/oma
 | o | Cycle sort (per-pane): name → size↓ largest first → size↑ smallest first → name (dirs stay first) |
 | Ctrl+f | Fuzzy find (`j/k` navigate, type/backspace refines, `Enter` jumps, `Esc` exits) |
 | Ctrl+r | Refresh active pane |
-| Ctrl+k | Key list overlay (esc or `q` closes it) |
+| Ctrl+k | Key list overlay: search across keys and descriptions, arrow keys to browse, closes with esc/`ctrl+k` |
 | Esc | Context: cancel copy / dismiss prompt / clear filter |
 | q | Quit |
 
 The bottom bar stays minimal (`ctrl+k:keys  q:quit`); the full table lives
-behind the Ctrl+k overlay so shortcuts don't clutter the normal view.
+behind the Ctrl+k overlay so shortcuts don't clutter the normal view. The
+overlay searches across keys and descriptions (type "pane" to see every
+pane binding), and arrow keys walk the rows highlight-style like the fuzzy
+finder. Nothing fires from the panel — close it with esc or ctrl+k.
 
 Long copies show a progress bar; `Esc` cancels and removes only the partial file.
 

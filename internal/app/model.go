@@ -172,9 +172,13 @@ type Model struct {
 	// bar renders the corresponding mix level until the splash fades out.
 	splashStep int
 
-	// keyListActive pins the key overlay up; every key press is absorbed
-	// while it is open (see handleKeyListKeys).
+	// keyListActive pins the key overlay up; every key press feeds its
+	// search or moves its cursor (see handleKeyListKeys).
 	keyListActive bool
+	// keyListQuery is the live search over both the key and description
+	// columns; keyListCursor indexes the filtered rows.
+	keyListQuery  string
+	keyListCursor int
 	// fuzzySpinning records whether the animation loop is running. It only
 	// starts once the user types, so a walk that finishes immediately does not
 	// flash a spinner for results nobody has had time to see.
@@ -834,6 +838,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case nav.ActionKeyList:
 			m.keyListActive = !m.keyListActive
+			if m.keyListActive {
+				m.keyListQuery = ""
+				m.keyListCursor = 0
+			}
 			return m, nil
 		}
 	}
@@ -878,16 +886,51 @@ func (m *Model) clearFuzzy() {
 	go debug.FreeOSMemory()
 }
 
-// handleKeyListKeys runs while the key overlay is pinned up. It closes on
-// its own toggle, esc, or q, and absorbs everything else: navigation,
-// filtering, and pane actions must not move things behind the user's back
-// just because the panel is up.
+// handleKeyListKeys drives the key overlay, fuzzy-style: printable text
+// feeds the query (matched against both the key and the description),
+// arrows move the cursor with no side effects, backspace edits, and
+// esc/ctrl+k closes. Enter does nothing — the panel is a reference, not a
+// launcher.
 func (m Model) handleKeyListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch nav.Lookup(msg.String()) {
-	case nav.ActionKeyList, nav.ActionClear, nav.ActionQuit:
+	switch msg.String() {
+	case "ctrl+k", "esc":
 		m.keyListActive = false
+		m.keyListQuery = ""
+		m.keyListCursor = 0
+	case "backspace":
+		if r := []rune(m.keyListQuery); len(r) > 0 {
+			m.keyListQuery = string(r[:len(r)-1])
+			m.keyListCursor = 0
+		}
+	case "up":
+		m.moveKeyListCursor(-1)
+	case "down":
+		m.moveKeyListCursor(1)
+	default:
+		if key := msg.String(); len([]rune(key)) == 1 {
+			m.keyListQuery += key
+			m.keyListCursor = 0
+		}
 	}
 	return m, nil
+}
+
+// moveKeyListCursor walks within the filtered rows, stopping at the edges
+// rather than wrapping so the highlight never vanishes on a short list.
+func (m *Model) moveKeyListCursor(step int) {
+	rows := ui.FilterKeyRows(ui.TableKeyRows(), m.keyListQuery)
+	if len(rows) == 0 {
+		m.keyListCursor = 0
+		return
+	}
+	cursor := m.keyListCursor + step
+	if cursor >= len(rows) {
+		cursor = len(rows) - 1
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	m.keyListCursor = cursor
 }
 
 func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1427,6 +1470,8 @@ func (m Model) View() tea.View {
 	if m.keyListActive {
 		keyList := ui.NewKeyList(m.width, m.height, m.theme)
 		keyList.Focused = true
+		keyList.Input = m.keyListQuery
+		keyList.Cursor = m.keyListCursor
 		view = ui.OverlayCentered(view, keyList.Render(), m.width)
 	}
 
