@@ -134,7 +134,10 @@ func (k KeyList) Render() string {
 			keys = TruncateEnd(keys, keyCol)
 		}
 		pad := keyCol - DisplayWidth(keys)
-		keysRendered := k.Theme.AccentText().Render(keys + strings.Repeat(" ", pad+1))
+		// The keys carry the main foreground, like the fuzzy finder's
+		// filenames, so the accent colour stays on the title only — same
+		// fields, same colours across both overlays.
+		keysRendered := k.Theme.Text().Render(keys + strings.Repeat(" ", pad+1))
 
 		desc := row.Desc
 		if overflow := DisplayWidth(desc) - descCell; overflow > 0 {
