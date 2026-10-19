@@ -108,8 +108,10 @@ func (k KeyList) Render() string {
 	keyCol := keyColumnWidth(rows)
 
 	// The header shares the same left edge as the key column so the title
-	// and the table read as one block rather than two indent levels.
-	header := k.Theme.AccentText().Bold(true).Render("key list")
+	// and the table read as one block rather than two indent levels. The
+	// leading space mirrors the fuzzy findings' marker space so the two
+	// overlays breathe with the same left indentation.
+	header := k.Theme.AccentText().Bold(true).Render(" key list ")
 
 	// Descriptions right-align against a line that sits descGap cells from
 	// the panel's right edge, so the kept space reads as a deliberate
@@ -139,10 +141,10 @@ func (k KeyList) Render() string {
 			desc = TruncateEnd(desc, descCell)
 		}
 		descRendered := k.Theme.StatusText().Render(strings.Repeat(" ", descCell-DisplayWidth(desc)) + desc)
-		lines = append(lines, keysRendered+descRendered)
+		lines = append(lines, " "+keysRendered+descRendered)
 	}
 
-	footer := k.Theme.StatusText().Render("ctrl+k/esc:close")
+	footer := k.Theme.StatusText().Render(" ctrl+k/esc:close")
 	lines = append(lines, "", footer)
 
 	// Same graceful degradation as the finder: on a short terminal the blank
