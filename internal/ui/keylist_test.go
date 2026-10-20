@@ -5,10 +5,12 @@ import (
 	"testing"
 
 	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/nav"
 )
 
 func TestKeyListRendersRowsFromKeybinds(t *testing.T) {
-	k := NewKeyList(100, 40, config.DefaultTheme())
+	// Use larger height to accommodate section headers, separators, and blank lines
+	k := NewKeyList(100, 80, config.DefaultTheme())
 	out := stripANSI(k.Render())
 
 	if !strings.Contains(out, "key list") {
@@ -20,25 +22,22 @@ func TestKeyListRendersRowsFromKeybinds(t *testing.T) {
 			t.Errorf("footer hint %q missing, got %q", want, out)
 		}
 	}
-	if !strings.Contains(out, "h/left") {
-		t.Errorf("merged motion aliases missing, got %q", out)
-	}
 	// Every action that dispatches shows up.
-	for _, want := range []string{"yank", "rename", "fuzzy find", "key list"} {
+	for _, want := range []string{"copy", "rename", "fuzzy find", "key list"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected desc %q in the overlay, got %q", want, out)
 		}
 	}
 }
 
-// The search matches on both columns: "yank" finds the copy binding, and
+// The search matches on both columns: "copy" finds the copy binding, and
 // "pane" finds everything mentioning panes.
 func TestFilterKeyRowsSearchesBothColumns(t *testing.T) {
 	rows := TableKeyRows()
 
-	yank := FilterKeyRows(rows, "yank")
-	if len(yank) != 1 || yank[0].Desc != "yank (copy)" {
-		t.Errorf("searching yank should leave one copy row, got %v", yank)
+	copy := FilterKeyRows(rows, "copy")
+	if len(copy) != 1 || copy[0].Desc != "copy (yank)" {
+		t.Errorf("searching copy should leave one copy row, got %v", copy)
 	}
 
 	pane := FilterKeyRows(rows, "pane")
@@ -52,7 +51,7 @@ func TestFilterKeyRowsSearchesBothColumns(t *testing.T) {
 	}
 
 	// Key text is searchable too, not only descriptions.
-	byKey := FilterKeyRows(rows, "ctrl+f")
+	byKey := FilterKeyRows(rows, "shift+f")
 	if len(byKey) != 1 || byKey[0].Desc != "fuzzy find" {
 		t.Errorf("key-text search failed, got %v", byKey)
 	}
@@ -60,11 +59,11 @@ func TestFilterKeyRowsSearchesBothColumns(t *testing.T) {
 
 func TestKeyListSearchNarrowsRows(t *testing.T) {
 	k := NewKeyList(100, 40, config.DefaultTheme())
-	k.Input = "yank"
+	k.Input = "copy"
 	out := stripANSI(k.Render())
 
-	if !strings.Contains(out, "yank (copy)") {
-		t.Errorf("yank row missing: %q", out)
+	if !strings.Contains(out, "copy (yank)") {
+		t.Errorf("copy row missing: %q", out)
 	}
 	if strings.Contains(out, "switch pane") {
 		t.Errorf("unrelated rows should be filtered away: %q", out)
@@ -86,9 +85,9 @@ func TestKeyListNoMatchesRendersHint(t *testing.T) {
 // table without touching the dispatch path.
 func TestKeyListHonorsRowsOverride(t *testing.T) {
 	k := NewKeyList(100, 40, config.DefaultTheme())
-	k.Rows = []KeyRow{{Keys: "x", Desc: "custom"}}
+	k.Rows = []KeyRow{{Keys: "x", Desc: "custom", Section: nav.SectionSystem}}
 	out := stripANSI(k.Render())
-	if !strings.Contains(out, "custom") || strings.Contains(out, "yank") {
+	if !strings.Contains(out, "custom") || strings.Contains(out, "copy") {
 		t.Errorf("override rows not respected, got %q", out)
 	}
 }
@@ -119,7 +118,7 @@ func TestKeyListOverlayKeepsExactFit(t *testing.T) {
 func TestKeyListClipsLongRows(t *testing.T) {
 	k := NewKeyList(60, 40, config.DefaultTheme())
 	k.Rows = []KeyRow{
-		{Keys: "z", Desc: "a " + strings.Repeat("very ", 40) + "long description"},
+		{Keys: "z", Desc: "a " + strings.Repeat("very ", 40) + "long description", Section: nav.SectionSystem},
 	}
 	out := k.Render()
 	for _, line := range strings.Split(out, "\n") {

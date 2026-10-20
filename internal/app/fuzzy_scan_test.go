@@ -46,7 +46,7 @@ func modelIn(t *testing.T, dir string) Model {
 	return m
 }
 
-// Pressing ctrl+f must not display the previous search's files while the new
+// Pressing Shift+F must not display the previous search's files while the new
 // walk is still running.
 func TestFuzzyOpenDoesNotShowStaleResults(t *testing.T) {
 	base := t.TempDir()
@@ -64,7 +64,7 @@ func TestFuzzyOpenDoesNotShowStaleResults(t *testing.T) {
 	m2.fuzzyAllFiles, _ = fs.WalkDir(dirA) // leftover from the previous search
 	m2.fuzzyActive = false
 
-	updated, _ := m2.Update(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
+	updated, _ := m2.Update(shiftKey('f'))
 	m2 = updated.(Model)
 
 	if !m2.fuzzyLoading {
@@ -164,7 +164,7 @@ func TestFuzzyEscapeRetiresSession(t *testing.T) {
 	m.fuzzyLoading = true
 	m.fuzzyAllFiles = []string{"leftover"}
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	m = updated.(Model)
 
 	if m.fuzzyRoot != "" || m.fuzzyLoading || len(m.fuzzyAllFiles) != 0 {
@@ -184,7 +184,7 @@ func TestFuzzyOpenDoesNotStartSpinner(t *testing.T) {
 	dir := t.TempDir()
 	m := modelIn(t, dir)
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
+	updated, _ := m.Update(shiftKey('f'))
 	m = updated.(Model)
 
 	if m.fuzzySpinning {
@@ -222,7 +222,7 @@ func TestFuzzyClearedQueryStopsSpinner(t *testing.T) {
 
 	updated, _ := m.Update(key('a'))
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
 	m = updated.(Model)
 
 	if m.fuzzyInput != "" {
@@ -295,7 +295,7 @@ func TestFuzzyTickStopsAfterEscape(t *testing.T) {
 	m.fuzzyInput = "a"
 	m.fuzzySpinning = true
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	m = updated.(Model)
 
 	before := m.fuzzySpinner

@@ -16,8 +16,8 @@ func TestKeybindsAllHaveDescriptions(t *testing.T) {
 }
 
 func TestLookup(t *testing.T) {
-	if got := Lookup("ctrl+k"); got != ActionKeyList {
-		t.Errorf("Lookup(ctrl+k) = %d, want ActionKeyList", got)
+	if got := Lookup("shift+k"); got != ActionKeyList {
+		t.Errorf("Lookup(shift+k) = %d, want ActionKeyList", got)
 	}
 	if got := Lookup("definitely-not-a-key"); got != ActionNone {
 		t.Errorf("unknown key should fall back to ActionNone, got %d", got)
@@ -34,21 +34,40 @@ func TestKeyRowsMergeAliases(t *testing.T) {
 		byDesc[row.Desc] = row.Keys
 	}
 	for desc, keys := range map[string]string{
-		"up":           "k/up",
-		"down":         "j/down",
-		"out / back":   "h/left",
-		"in / forward": "l/right",
+		"move up":            "up",
+		"move down":          "down",
+		"parent directory":   "left",
+		"enter directory":    "right",
+		"enter dir / open file": "enter",
+		"switch pane":        "tab",
+		"jump to file by first letter": "space+key",
+		"copy (yank)":        "shift+c",
+		"paste / move marked": "shift+v",
+		"delete":             "shift+d",
+		"mark / unmark":      "shift+m",
+		"add file / directory": "shift+a",
+		"rename":             "shift+r",
+		"stack / unstack panes": "shift+s",
+		"cycle sort order":   "shift+o",
+		"toggle preview":     "shift+i",
+		"fuzzy find":         "shift+f",
+		"filter pane":        "shift+/",
+		"goto path":          "shift+g",
+		"refresh pane":       "shift+e",
+		"key list overlay":   "shift+k",
+		"quit":               "shift+q",
+		"cancel / clear / back": "esc",
 	} {
 		if byDesc[desc] != keys {
 			t.Errorf("desc %q should merge into %q, got %q", desc, keys, byDesc[desc])
 		}
 	}
 
-	// First-seen order: k comes before j, and the list itself is last.
-	if rows[0].Keys != "k/up" || rows[1].Keys != "j/down" {
-		t.Errorf("unexpected opening rows %q, %q", rows[0].Keys, rows[1].Keys)
+	// First-seen order: navigation first, then jump, file ops, pane view, system
+	if len(rows) > 0 && rows[0].Keys != "up" {
+		t.Errorf("unexpected opening row %q", rows[0].Keys)
 	}
-	if last := rows[len(rows)-1]; last.Keys != "ctrl+k" {
-		t.Errorf("key-list binding should be last, got %q", last.Keys)
+	if last := rows[len(rows)-1]; !strings.Contains(last.Keys, "esc") {
+		t.Errorf("esc binding should be last, got %q", last.Keys)
 	}
 }

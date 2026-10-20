@@ -36,15 +36,14 @@ func keyListModel(t *testing.T, w, h int) Model {
 	return m
 }
 
-// ctrl+k lives on the ordinary nav dispatch path, so it opens the overlay;
-// the same key closes it again, mirroring the fuzzy panel.
-func TestKeyListOpensOnCtrlK(t *testing.T) {
+// Shift+K opens the overlay; the same key closes it again, mirroring the fuzzy panel.
+func TestKeyListOpensOnShiftK(t *testing.T) {
 	m := keyListModel(t, 120, 40)
 
-	m2, _ := m.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	m2, _ := m.Update(shiftKey('k'))
 	m = m2.(Model)
 	if !m.keyListActive {
-		t.Fatal("ctrl+k should open the key overlay")
+		t.Fatal("Shift+K should open the key overlay")
 	}
 
 	out := m.View().Content
@@ -53,10 +52,10 @@ func TestKeyListOpensOnCtrlK(t *testing.T) {
 	}
 
 	// The same key closes it, and the overlay leaves the view for good.
-	m3, _ := m.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	m3, _ := m.Update(shiftKey('k'))
 	m = m3.(Model)
 	if m.keyListActive {
-		t.Fatal("second ctrl+k should close the overlay")
+		t.Fatal("second Shift+K should close the overlay")
 	}
 	if strings.Contains(m.View().Content, "key list") {
 		t.Error("overlay should not render after closing")
@@ -69,15 +68,15 @@ func TestKeyListOpensOnCtrlK(t *testing.T) {
 func TestKeyListSearchesAndNavigates(t *testing.T) {
 	m := keyListModel(t, 120, 40)
 
-	m2, _ := m.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	m2, _ := m.Update(shiftKey('k'))
 	m = m2.(Model)
 
-	// Type "yank": the search fills and the view narrows to the copy row.
-	for _, r := range []rune{'y', 'a', 'n', 'k'} {
-		next, _ := m.Update(tea.KeyPressMsg{Code: r})
+	// Type "copy": the search fills and the view narrows to the copy row.
+	for _, r := range []rune{'c', 'o', 'p', 'y'} {
+		next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: r}))
 		m = next.(Model)
 	}
-	if m.keyListQuery != "yank" {
+	if m.keyListQuery != "copy" {
 		t.Errorf("search input not captured, got %q", m.keyListQuery)
 	}
 
@@ -94,27 +93,27 @@ func TestKeyListSearchesAndNavigates(t *testing.T) {
 	}
 
 	view := plainView.ReplaceAllString(m.View().Content, "")
-	if !strings.Contains(view, "yank (copy)") {
-		t.Error("yank row should show for the yank search")
+	if !strings.Contains(view, "copy (yank)") {
+		t.Error("copy row should show for the copy search")
 	}
 	if strings.Contains(view, "switch pane") {
 		t.Error("unrelated rows should be filtered away")
 	}
 
 	// Backspace edits the query back off again.
-	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
 	m = next.(Model)
-	if m.keyListQuery != "yan" {
+	if m.keyListQuery != "cop" {
 		t.Errorf("backspace broke the query, got %q", m.keyListQuery)
 	}
 
 	// esc closes and the pane dispatch resumes right after.
-	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	next, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	m = next.(Model)
 	if m.keyListActive {
 		t.Fatal("esc should close the overlay")
 	}
-	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	next, _ = m.Update(arrow(tea.KeyDown))
 	m = next.(Model)
 	if m.leftCursor != 1 {
 		t.Errorf("navigation should resume after close, cursor %d", m.leftCursor)
@@ -125,17 +124,17 @@ func TestKeyListSearchesAndNavigates(t *testing.T) {
 func TestKeyListArrowsNavigateBeforeFiltering(t *testing.T) {
 	m := keyListModel(t, 120, 40)
 
-	m2, _ := m.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	m2, _ := m.Update(shiftKey('k'))
 	m = m2.(Model)
 
-	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	next, _ := m.Update(arrow(tea.KeyDown))
 	m = next.(Model)
 	if m.keyListCursor != 1 {
 		t.Errorf("down should move the cursor on the full list, got %d", m.keyListCursor)
 	}
-	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	next, _ = m.Update(arrow(tea.KeyUp))
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	next, _ = m.Update(arrow(tea.KeyUp))
 	m = next.(Model)
 	if m.keyListCursor != 0 {
 		t.Errorf("up should clamp at the top, got %d", m.keyListCursor)
@@ -147,10 +146,10 @@ func TestKeyListArrowsNavigateBeforeFiltering(t *testing.T) {
 func TestKeyListSearchesDescriptions(t *testing.T) {
 	m := keyListModel(t, 120, 40)
 
-	m2, _ := m.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	m2, _ := m.Update(shiftKey('k'))
 	m = m2.(Model)
 	for _, r := range []rune{'p', 'a', 'n', 'e'} {
-		next, _ := m.Update(tea.KeyPressMsg{Code: r})
+		next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: r}))
 		m = next.(Model)
 	}
 
@@ -164,13 +163,13 @@ func TestKeyListSearchesDescriptions(t *testing.T) {
 }
 
 // q is no longer a global quit while the panel is up: it falls into the
-// search. Only esc and ctrl+k close the overlay.
+// search. Only esc and Shift+K close the overlay.
 func TestKeyListQGoesToSearch(t *testing.T) {
 	m := keyListModel(t, 120, 40)
 
-	m2, _ := m.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	m2, _ := m.Update(shiftKey('k'))
 	m = m2.(Model)
-	next, _ := m.Update(tea.KeyPressMsg{Code: 'q'})
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q'}))
 	m = next.(Model)
 	if !m.keyListActive {
 		t.Fatal("q should feed the search, not close the overlay")
@@ -185,7 +184,7 @@ func TestKeyListQGoesToSearch(t *testing.T) {
 		t.Error("q must not quit the app while the overlay is up")
 	}
 
-	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	next, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	m = next.(Model)
 	if m.keyListActive {
 		t.Fatal("esc should close the overlay")

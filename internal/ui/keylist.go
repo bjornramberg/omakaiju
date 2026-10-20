@@ -10,11 +10,33 @@ import (
 	"github.com/bjornramberg/omakaiju/internal/nav"
 )
 
+// sectionOrder defines the display order of sections in the key list overlay.
+var sectionOrder = []nav.Section{
+	nav.SectionNavigation,
+	nav.SectionFileOps,
+	nav.SectionPaneView,
+	nav.SectionJump,
+	nav.SectionSystem,
+}
+
+// sectionHeaders provides the display label for each section.
+var sectionHeaders = map[nav.Section]string{
+	nav.SectionNavigation: "Navigation",
+	nav.SectionFileOps:    "File operations",
+	nav.SectionPaneView:   "UI / View",
+	nav.SectionJump:       "Jump",
+	nav.SectionSystem:     "System",
+}
+
+// sectionSep is the separator line used under section headers.
+const sectionSep = "-------------------"
+
 // KeyRow is one line of the key-list overlay: the key or the merged key
 // aliases, and what the action does.
 type KeyRow struct {
-	Keys string
-	Desc string
+	Keys    string
+	Desc    string
+	Section nav.Section
 }
 
 // KeyList is the floating panel listing every shortcut, styled and driven
@@ -87,7 +109,7 @@ func (k KeyList) baseRows() []KeyRow {
 func TableKeyRows() []KeyRow {
 	rows := make([]KeyRow, 0, len(nav.Keybinds))
 	for _, r := range nav.KeyRows() {
-		rows = append(rows, KeyRow{Keys: r.Keys, Desc: r.Desc})
+		rows = append(rows, KeyRow{Keys: r.Keys, Desc: r.Desc, Section: r.Section})
 	}
 	return rows
 }
@@ -138,8 +160,8 @@ func keyColumnWidth(rows []KeyRow) int {
 // the extra prompt line: a short terminal scrolls rather than spills.
 func (k KeyList) maxShownRows() int {
 	quota := k.Height - 11
-	if quota > 24 {
-		quota = 24
+	if quota > 40 {
+		quota = 40
 	}
 	if quota < 1 {
 		quota = 1
@@ -218,6 +240,96 @@ func emphasizeText(text, query string, base, accent lipgloss.Style) string {
 	return strings.Join(out, "")
 }
 
+// renderItem represents a line in the rendered key list: a key row, a section
+// header, or a section separator. Only key rows are selectable.
+type renderItem struct {
+	kind     renderItemKind
+	row      KeyRow   // valid when kind == itemKeyRow
+	section  nav.Section // valid when kind == itemHeader
+}
+
+type renderItemKind int
+
+const (
+	itemKeyRow renderItemKind = iota
+	itemHeader
+	itemSeparator
+	itemBlank
+)
+
+// buildRenderItems constructs the flat list of render items from filtered rows,
+// grouping by section in sectionOrder and inserting headers/separators.
+func (k KeyList) buildRenderItems(rows []KeyRow) []renderItem {
+	// Group rows by section
+	bySection := make(map[nav.Section][]KeyRow)
+	for _, r := range rows {
+		bySection[r.Section] = append(bySection[r.Section], r)
+	}
+
+	var items []renderItem
+	firstSection := true
+	for _, sec := range sectionOrder {
+		secRows, ok := bySection[sec]
+		if !ok || len(secRows) == 0 {
+			continue
+		}
+		// Blank line before each section except the first
+		if !firstSection {
+			items = append(items, renderItem{kind: itemBlank})
+		}
+		firstSection = false
+		// Section header
+		items = append(items, renderItem{kind: itemHeader, section: sec})
+		// Separator
+		items = append(items, renderItem{kind: itemSeparator})
+		// Rows in this section
+		for _, r := range secRows {
+			items = append(items, renderItem{kind: itemKeyRow, row: r})
+		}
+	}
+	return items
+}
+
+// countSelectable returns the number of selectable (key row) items.
+func countSelectable(items []renderItem) int {
+	n := 0
+	for _, it := range items {
+		if it.kind == itemKeyRow {
+			n++
+		}
+	}
+	return n
+}
+
+// selectableIndexToItemIndex converts a selectable-row index (0-based) to
+// the corresponding index in the full items slice.
+func selectableIndexToItemIndex(items []renderItem, selIdx int) int {
+	count := 0
+	for i, it := range items {
+		if it.kind == itemKeyRow {
+			if count == selIdx {
+				return i
+			}
+			count++
+		}
+	}
+	return len(items) - 1
+}
+
+// itemIndexToSelectableIndex converts an items index to the selectable-row index.
+func itemIndexToSelectableIndex(items []renderItem, itemIdx int) int {
+	count := 0
+	for i, it := range items {
+		if i == itemIdx {
+			return count
+		}
+		if it.kind == itemKeyRow {
+			count++
+		}
+	}
+	return count
+}
+
 // Render draws the panel; the result is meant to be overlaid on the live
 // layout exactly like the finder's panel.
 func (k KeyList) Render() string {
@@ -226,8 +338,12 @@ func (k KeyList) Render() string {
 		style = k.Theme.PreviewPanelFocused()
 	}
 
-	rows := k.rows()
-	total := len(rows)
+	filteredRows := k.rows()
+
+	// Build render items (headers, separators, key rows)
+	items := k.buildRenderItems(filteredRows)
+	totalSelectable := countSelectable(items)
+	totalItems := len(items)
 
 	// The key column stays anchored on the unfiltered widths so the
 	// description column does not dance between keystrokes.
@@ -240,16 +356,22 @@ func (k KeyList) Render() string {
 		descW = 1
 	}
 
+	search := strings.TrimSpace(k.Input)
+
+	// Clamp cursor to selectable rows
 	cursor := k.Cursor
-	if cursor >= total {
-		cursor = total - 1
+	if cursor >= totalSelectable {
+		cursor = totalSelectable - 1
 	}
 	if cursor < 0 {
 		cursor = 0
 	}
 
-	search := strings.TrimSpace(k.Input)
-	start, end, above, below := k.visibleWindow(total)
+	// Convert selectable cursor to item index for visibleWindow
+	itemCursor := selectableIndexToItemIndex(items, cursor)
+
+	// visibleWindow on the full items list (headers/separators count as lines)
+	start, end, above, below := k.visibleWindowItems(totalItems, itemCursor)
 
 	header := k.Theme.AccentText().Bold(true).Render(" key list ")
 	prompt := k.Theme.AccentText().Render("> ")
@@ -257,14 +379,15 @@ func (k KeyList) Render() string {
 
 	var rowLines []string
 	switch {
-	case total == 0:
+	case totalSelectable == 0:
 		rowLines = append(rowLines, k.Theme.StatusText().Render("no matching key"))
 	default:
 		if above {
 			rowLines = append(rowLines, k.Theme.StatusText().Render("  ..."))
 		}
 		for i := start; i < end; i++ {
-			rowLines = append(rowLines, k.renderRow(rows[i], i == cursor, keyCol, descW, search))
+			active := (i == itemCursor)
+			rowLines = append(rowLines, k.renderItem(items[i], active, keyCol, descW, search))
 		}
 		if below {
 			rowLines = append(rowLines, k.Theme.StatusText().Render("  ..."))
@@ -274,8 +397,8 @@ func (k KeyList) Render() string {
 	// The footer keeps the same shape as the finder: position first, then
 	// hints, so a user fluent in one panel is fluent in the other.
 	var parts []string
-	if total > 0 {
-		parts = append(parts, fmt.Sprintf("%d/%d", cursor+1, total))
+	if totalSelectable > 0 {
+		parts = append(parts, fmt.Sprintf("%d/%d", cursor+1, totalSelectable))
 	}
 	parts = append(parts, "type to search", "up/down:move", "esc:close")
 	footer := k.Theme.StatusText().Render(strings.Join(parts, " | "))
@@ -310,6 +433,67 @@ func (k KeyList) Render() string {
 		Width(k.BoxWidth() - 2).
 		MaxWidth(k.BoxWidth() - 2).
 		Render(strings.Join(lines, "\n"))
+}
+
+// visibleWindowItems is like visibleWindow but operates on the full items list
+// (including headers/separators). The cursor is an item index.
+func (k KeyList) visibleWindowItems(total int, cursor int) (start, end int, above, below bool) {
+	quota := k.maxShownRows()
+	if total <= quota {
+		return 0, total, false, false
+	}
+
+	markers := 0
+	switch {
+	case quota >= 3:
+		markers = 2
+	case quota == 2:
+		markers = 1
+	}
+	capacity := quota - markers
+	if quota >= 3 && capacity < 1 {
+		capacity = 1
+	}
+
+	start = cursor - capacity/2
+	if start < 0 {
+		start = 0
+	}
+	if start > total-capacity {
+		start = total - capacity
+	}
+	end = start + capacity
+	if end > total {
+		end = total
+	}
+
+	above = start > 0
+	below = end < total
+	if markers == 1 && above && below {
+		above = false
+	}
+	if markers == 0 {
+		above, below = false, false
+	}
+	return start, end, above, below
+}
+
+// renderItem renders a single item (key row, header, or separator).
+func (k KeyList) renderItem(it renderItem, active bool, keyCol, descW int, query string) string {
+	switch it.kind {
+	case itemHeader:
+		label := sectionHeaders[it.section] + ":"
+		return k.Theme.AccentText().Bold(true).Render(" " + label)
+	case itemSeparator:
+		// Fixed-width separator matching the longest header (same tone as footer)
+		sep := sectionSep
+		return k.Theme.StatusText().Render(" " + sep)
+	case itemBlank:
+		return ""
+	case itemKeyRow:
+		return k.renderRow(it.row, active, keyCol, descW, query)
+	}
+	return ""
 }
 
 // renderRow shows the key prominent with the description right-aligned

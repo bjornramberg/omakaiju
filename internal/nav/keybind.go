@@ -10,82 +10,109 @@ const (
 	ActionRight
 	ActionEnter
 	ActionTab
-	ActionYank
-	ActionMove
-	ActionPaste
-	ActionDelete
-	ActionAdd
-	ActionRename
+	ActionQuit
+	ActionStack
 	ActionFilter
 	ActionFuzzyFind
 	ActionRefresh
 	ActionClear
-	ActionQuit
-	ActionStack
 	ActionSort
 	ActionTogglePreview
 	ActionGoto
 	ActionKeyList
+	ActionCopy
+	ActionPaste
+	ActionDelete
+	ActionMark
+	ActionAdd
+	ActionRename
+	ActionJump
+)
+
+// Section groups actions for the key-list overlay.
+type Section string
+
+const (
+	SectionNavigation Section = "navigation"
+	SectionJump       Section = "jump"
+	SectionFileOps    Section = "file_ops"
+	SectionPaneView   Section = "pane_view"
+	SectionSystem     Section = "system"
 )
 
 type ActionRow struct {
-	Keys string
-	Desc string
+	Keys    string
+	Desc    string
+	Section Section
 }
 
 type Keybind struct {
-	Key    string
-	Action Action
-	// Desc is the human-readable label shown in the key-list overlay. Every
-	// entry must carry one so the overlay built from this table stays
-	// self-explanatory.
-	Desc string
+	Key     string
+	Action  Action
+	Desc    string
+	Section Section
 }
 
 // Keybinds is the single source of truth for dispatch (Lookup) and
-// documentation (the key-list overlay). Equivalent keys for one action are
-// listed here separately and merged for display by KeyRows.
+// documentation (the key-list overlay).
 var Keybinds = []Keybind{
-	{"k", ActionUp, "up"},
-	{"up", ActionUp, "up"},
-	{"j", ActionDown, "down"},
-	{"down", ActionDown, "down"},
-	{"h", ActionLeft, "out / back"},
-	{"left", ActionLeft, "out / back"},
-	{"l", ActionRight, "in / forward"},
-	{"right", ActionRight, "in / forward"},
-	{"enter", ActionEnter, "enter dir, open file"},
-	{"tab", ActionTab, "switch pane"},
-	{"y", ActionYank, "yank (copy)"},
-	{"m", ActionMove, "mark / unmark"},
-	{"p", ActionPaste, "paste, else move marked"},
-	{"d", ActionDelete, "delete prompt"},
-	{"a", ActionAdd, "add file / dir"},
-	{"r", ActionRename, "rename"},
-	{"/", ActionFilter, "filter pane"},
-	{"ctrl+f", ActionFuzzyFind, "fuzzy find"},
-	{"ctrl+r", ActionRefresh, "refresh pane"},
-	{"esc", ActionClear, "cancel / back"},
-	{"q", ActionQuit, "quit"},
-	{"s", ActionStack, "stack panes"},
-	{"o", ActionSort, "sort order"},
-	{"i", ActionTogglePreview, "toggle preview"},
-	{"g", ActionGoto, "goto path"},
-	{"ctrl+k", ActionKeyList, "key list"},
+	// Navigation (direct keys)
+	{"up", ActionUp, "move up", SectionNavigation},
+	{"down", ActionDown, "move down", SectionNavigation},
+	{"left", ActionLeft, "parent directory", SectionNavigation},
+	{"right", ActionRight, "enter directory", SectionNavigation},
+	{"enter", ActionEnter, "enter dir / open file", SectionNavigation},
+	{"tab", ActionTab, "switch pane", SectionNavigation},
+
+	// Jump (Space + letter)
+	{" ", ActionJump, "jump to file by first letter", SectionJump},
+
+	// File Operations (Shift + key)
+	{"shift+c", ActionCopy, "copy (yank)", SectionFileOps},
+	{"shift+v", ActionPaste, "paste / move marked", SectionFileOps},
+	{"shift+d", ActionDelete, "delete", SectionFileOps},
+	{"shift+m", ActionMark, "mark / unmark", SectionFileOps},
+	{"shift+a", ActionAdd, "add file / directory", SectionFileOps},
+	{"shift+r", ActionRename, "rename", SectionFileOps},
+
+	// Pane / View (Shift + key)
+	{"shift+s", ActionStack, "stack / unstack panes", SectionPaneView},
+	{"shift+o", ActionSort, "cycle sort order", SectionPaneView},
+	{"shift+i", ActionTogglePreview, "toggle preview", SectionPaneView},
+	{"shift+f", ActionFuzzyFind, "fuzzy find", SectionPaneView},
+	{"F", ActionFuzzyFind, "fuzzy find", SectionPaneView},
+	{"shift+/", ActionFilter, "filter pane", SectionPaneView},
+	{"shift+g", ActionGoto, "goto path", SectionPaneView},
+	{"shift+e", ActionRefresh, "refresh pane", SectionPaneView},
+	{"shift+k", ActionKeyList, "key list overlay", SectionPaneView},
+	{"K", ActionKeyList, "key list overlay", SectionPaneView},
+
+	// System
+	{"q", ActionQuit, "quit", SectionSystem},
+	{"shift+q", ActionQuit, "quit", SectionSystem},
+	{"esc", ActionClear, "cancel / clear / back", SectionSystem},
 }
 
-// KeyRows complies the bindings into overlay rows: one row per action, keys
-// merged as "h/left", in first-seen order. Motion keys therefore collapse
-// naturally instead of reading as duplicates.
 func KeyRows() []ActionRow {
 	var rows []ActionRow
 	index := map[Action]int{}
 	for _, kb := range Keybinds {
-		if i, ok := index[kb.Action]; ok {
-			rows[i].Keys = rows[i].Keys + "/" + kb.Key
+		// Skip single uppercase letter aliases (F, K) and lowercase 'q'
+		// for display — they're just shortcuts for shift+f, shift+k, shift+q;
+		// the shift+ form is the canonical one shown in the key list.
+		if len(kb.Key) == 1 && (kb.Key[0] >= 'A' && kb.Key[0] <= 'Z' || kb.Key == "q") {
 			continue
 		}
-		rows = append(rows, ActionRow{Keys: kb.Key, Desc: kb.Desc})
+		// Display space as "space+key" for the jump action
+		key := kb.Key
+		if key == " " {
+			key = "space+key"
+		}
+		if i, ok := index[kb.Action]; ok {
+			rows[i].Keys = rows[i].Keys + "/" + key
+			continue
+		}
+		rows = append(rows, ActionRow{Keys: key, Desc: kb.Desc, Section: kb.Section})
 		index[kb.Action] = len(rows) - 1
 	}
 	return rows

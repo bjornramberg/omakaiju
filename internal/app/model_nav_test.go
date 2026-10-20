@@ -12,10 +12,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func key(r rune) tea.KeyMsg {
-	return tea.KeyPressMsg{Code: r}
-}
-
 func fixture(t *testing.T) (Model, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -44,30 +40,28 @@ func fixture(t *testing.T) (Model, string) {
 func TestCursorNavigationMovesCursor(t *testing.T) {
 	m, _ := fixture(t)
 
-	updated, _ := m.Update(key('j'))
+	updated, _ := m.Update(arrow(tea.KeyDown))
 	m = updated.(Model)
 	if m.leftCursor != 1 {
-		t.Fatalf("after j: leftCursor = %d, want 1", m.leftCursor)
+		t.Fatalf("after down: leftCursor = %d, want 1", m.leftCursor)
 	}
 
-	updated, _ = m.Update(key('j'))
+	updated, _ = m.Update(arrow(tea.KeyDown))
 	m = updated.(Model)
 	if m.leftCursor != 2 {
-		t.Fatalf("after jj: leftCursor = %d, want 2", m.leftCursor)
+		t.Fatalf("after down down: leftCursor = %d, want 2", m.leftCursor)
 	}
 
-	updated, _ = m.Update(key('k'))
+	updated, _ = m.Update(arrow(tea.KeyUp))
 	m = updated.(Model)
 	if m.leftCursor != 1 {
-		t.Fatalf("after k: leftCursor = %d, want 1", m.leftCursor)
+		t.Fatalf("after up: leftCursor = %d, want 1", m.leftCursor)
 	}
 }
 
 func TestEnteringDirectoryChangesPath(t *testing.T) {
 	m, dir := fixture(t)
 
-	// ReadDir returns raw directory order, so locate "subdir" rather than
-	// assuming an index.
 	files := m.visibleFiles(0)
 	target := -1
 	for i, f := range files {
@@ -80,14 +74,14 @@ func TestEnteringDirectoryChangesPath(t *testing.T) {
 	}
 
 	for i := 0; i < target; i++ {
-		updated, _ := m.Update(key('j'))
+		updated, _ := m.Update(arrow(tea.KeyDown))
 		m = updated.(Model)
 	}
 	if got := m.visibleFiles(0)[m.leftCursor].Name; got != "subdir" {
 		t.Fatalf("cursor not on subdir, got %q", got)
 	}
 
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(Model)
 	if want := filepath.Join(dir, "subdir"); m.leftPath != want {
 		t.Fatalf("after enter: leftPath = %q, want %q", m.leftPath, want)
@@ -101,42 +95,42 @@ func TestParentDirectoryNavigation(t *testing.T) {
 	m, dir := fixture(t)
 	m.leftPath = filepath.Join(dir, "subdir")
 
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'h'})
+	updated, cmd := m.Update(arrow(tea.KeyLeft))
 	m = updated.(Model)
 	if m.leftPath != dir {
-		t.Fatalf("after h: leftPath = %q, want %q", m.leftPath, dir)
+		t.Fatalf("after left: leftPath = %q, want %q", m.leftPath, dir)
 	}
 	if cmd == nil {
-		t.Fatal("h should return a load command")
+		t.Fatal("left should return a load command")
 	}
 }
 
 func TestTabSwitchesActivePane(t *testing.T) {
 	m, _ := fixture(t)
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
 	m = updated.(Model)
 	if m.activePane != 1 {
 		t.Fatalf("after tab: activePane = %d, want 1", m.activePane)
 	}
 
-	updated, _ = m.Update(key('j'))
+	updated, _ = m.Update(arrow(tea.KeyDown))
 	m = updated.(Model)
 	if m.rightCursor != 1 {
-		t.Fatalf("after tab+j: rightCursor = %d, want 1", m.rightCursor)
+		t.Fatalf("after tab+down: rightCursor = %d, want 1", m.rightCursor)
 	}
 	if m.leftCursor != 0 {
-		t.Fatalf("after tab+j: leftCursor = %d, want 0", m.leftCursor)
+		t.Fatalf("after tab+down: leftCursor = %d, want 0", m.leftCursor)
 	}
 }
 
 func TestFilterNarrowsVisibleFiles(t *testing.T) {
 	m, _ := fixture(t)
 
-	updated, _ := m.Update(key('/'))
+	updated, _ := m.Update(shiftKey('/'))
 	m = updated.(Model)
 	if m.mode != inputFilter {
-		t.Fatal("/ should enter filter mode")
+		t.Fatal("Shift+/ should enter filter mode")
 	}
 
 	for _, r := range "beta" {
@@ -151,7 +145,7 @@ func TestFilterNarrowsVisibleFiles(t *testing.T) {
 		t.Fatalf("visible files = %d, want 1", got)
 	}
 
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(Model)
 	if m.mode == inputFilter {
 		t.Fatal("enter should leave filter mode")
@@ -160,7 +154,7 @@ func TestFilterNarrowsVisibleFiles(t *testing.T) {
 		t.Fatal("filter should persist after enter")
 	}
 
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	m = updated.(Model)
 	if m.leftFilter != "" {
 		t.Fatalf("esc should clear filter, got %q", m.leftFilter)
@@ -173,11 +167,11 @@ func TestFilterNarrowsVisibleFiles(t *testing.T) {
 func TestFilterIsPerPane(t *testing.T) {
 	m, _ := fixture(t)
 
-	updated, _ := m.Update(key('/'))
+	updated, _ := m.Update(shiftKey('/'))
 	m = updated.(Model)
 	updated, _ = m.Update(key('a'))
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(Model)
 
 	if m.leftFilter == "" {
@@ -191,14 +185,12 @@ func TestFilterIsPerPane(t *testing.T) {
 func TestPreviewTracksCursor(t *testing.T) {
 	m, dir := fixture(t)
 
-	// Directories sort first, then alpha/beta; walk to beta.txt explicitly so
-	// the assertion does not depend on listing order.
 	idx := indexOf(m.visibleFiles(0), "beta.txt")
 	if idx < 0 {
 		t.Fatal("beta.txt missing from listing")
 	}
 	for i := 0; i < idx; i++ {
-		updated, _ := m.Update(key('j'))
+		updated, _ := m.Update(arrow(tea.KeyDown))
 		m = updated.(Model)
 	}
 
@@ -236,13 +228,12 @@ func TestPreviewIsHighlightedForSourceFile(t *testing.T) {
 	m.leftFiles = files
 	m.leftPath = dir
 
-	// Directories sort first, so walk the cursor onto main.go.
 	idx := indexOf(m.visibleFiles(0), "main.go")
 	if idx < 0 {
 		t.Fatal("main.go missing from listing")
 	}
 	for i := 0; i < idx; i++ {
-		updated, _ := m.Update(key('j'))
+		updated, _ := m.Update(arrow(tea.KeyDown))
 		m = updated.(Model)
 	}
 
@@ -260,7 +251,6 @@ func TestPreviewIsHighlightedForSourceFile(t *testing.T) {
 	}
 }
 
-// loadDir simulates the async directory load the model dispatches for a pane.
 func loadDir(t *testing.T, m Model, pane int) Model {
 	t.Helper()
 	path := m.rawPath(pane)
@@ -272,9 +262,6 @@ func loadDir(t *testing.T, m Model, pane int) Model {
 	return updated.(Model)
 }
 
-// twoDirFixture builds a parent holding two directories. Directories sort
-// first, so entering the second one means the correct restore index is 1 and a
-// missing restore shows up as 0.
 func twoDirFixture(t *testing.T) (Model, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -301,21 +288,19 @@ func twoDirFixture(t *testing.T) (Model, string) {
 func TestGoingUpRestoresCursorOnEnteredFolder(t *testing.T) {
 	m, dir := twoDirFixture(t)
 
-	// Enter "zzz", which is not the first entry in the parent listing.
 	m = moveCursorTo(t, m, "zzz")
 	if idx := indexOf(m.visibleFiles(0), "zzz"); idx != 1 {
 		t.Fatalf("setup: zzz is at index %d, want 1", idx)
 	}
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(Model)
 	m = loadDir(t, m, 0)
 	if m.leftPath != filepath.Join(dir, "zzz") {
 		t.Fatalf("leftPath = %q, want the zzz subdir", m.leftPath)
 	}
 
-	// Go back up: the cursor must land on zzz again, not at the top.
-	updated, _ = m.Update(tea.KeyPressMsg{Code: 'h'})
+	updated, _ = m.Update(arrow(tea.KeyLeft))
 	m = updated.(Model)
 	m = loadDir(t, m, 0)
 
@@ -331,16 +316,15 @@ func TestRestoreFallsBackToTopWhenFolderGone(t *testing.T) {
 	m, dir := fixture(t)
 
 	m = moveCursorTo(t, m, "subdir")
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(Model)
 	m = loadDir(t, m, 0)
 
-	// Remove the directory we are about to navigate out of.
 	if err := os.Remove(filepath.Join(dir, "subdir")); err != nil {
 		t.Fatal(err)
 	}
 
-	updated, _ = m.Update(tea.KeyPressMsg{Code: 'h'})
+	updated, _ = m.Update(arrow(tea.KeyLeft))
 	m = updated.(Model)
 	m = loadDir(t, m, 0)
 
@@ -353,8 +337,7 @@ func TestPlainReloadStillStartsAtTop(t *testing.T) {
 	m, _ := fixture(t)
 	m = moveCursorTo(t, m, "beta.txt")
 
-	// A refresh carries no restore target, so the cursor resets.
-	updated, _ := m.Update(tea.KeyPressMsg{Code: 'r'})
+	updated, _ := m.Update(shiftKey('e'))
 	m = updated.(Model)
 	m = loadDir(t, m, 0)
 
@@ -367,12 +350,11 @@ func TestRestoreIsPerPane(t *testing.T) {
 	m, dir := fixture(t)
 
 	m = moveCursorTo(t, m, "subdir")
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(Model)
 	m = loadDir(t, m, 0)
 
-	// Navigating up in the left pane must not disturb the right pane.
-	updated, _ = m.Update(tea.KeyPressMsg{Code: 'h'})
+	updated, _ = m.Update(arrow(tea.KeyLeft))
 	m = updated.(Model)
 	m = loadDir(t, m, 0)
 

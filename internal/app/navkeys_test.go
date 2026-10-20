@@ -19,7 +19,7 @@ func TestRightArrowOnFileDoesNotOpen(t *testing.T) {
 	pathBefore := m.leftPath
 	cursorBefore := m.rawCursor(m.activePane)
 
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	updated, cmd := m.Update(arrow(tea.KeyRight))
 	m = updated.(Model)
 
 	if cmd != nil {
@@ -41,7 +41,7 @@ func TestRightArrowEntersDirectory(t *testing.T) {
 	m, dir := fixture(t)
 	m = cursorOn(t, m, "subdir")
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	updated, _ := m.Update(arrow(tea.KeyRight))
 	m = updated.(Model)
 
 	if m.leftPath != filepath.Join(dir, "subdir") {
@@ -54,7 +54,7 @@ func TestEnterStillOpensFile(t *testing.T) {
 	m, _ := fixture(t)
 	m = cursorOn(t, m, "alpha.txt")
 
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if cmd == nil {
 		t.Fatal("enter on a file should dispatch an open command")
 	}
@@ -71,7 +71,7 @@ func TestArrowsNavigateWhileFilterPromptIsOpen(t *testing.T) {
 	m, _ := fixture(t)
 
 	// Open the filter prompt.
-	updated, _ := m.Update(key('/'))
+	updated, _ := m.Update(shiftKey('/'))
 	m = updated.(Model)
 	if m.mode != inputFilter {
 		t.Fatalf("mode = %v, want the filter prompt open", m.mode)
@@ -85,7 +85,7 @@ func TestArrowsNavigateWhileFilterPromptIsOpen(t *testing.T) {
 
 	before := m.rawCursor(m.activePane)
 
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	updated, _ = m.Update(arrow(tea.KeyDown))
 	m = updated.(Model)
 
 	if m.mode != inputFilter {
@@ -103,10 +103,10 @@ func TestArrowsNavigateWhileFilterPromptIsOpen(t *testing.T) {
 func TestTypingResetsCursorToTop(t *testing.T) {
 	m, _ := fixture(t)
 
-	updated, _ := m.Update(key('/'))
+	updated, _ := m.Update(shiftKey('/'))
 	m = updated.(Model)
 
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	updated, _ = m.Update(arrow(tea.KeyDown))
 	m = updated.(Model)
 	if m.rawCursor(m.activePane) == 0 {
 		t.Skip("nothing to move down to")
@@ -130,7 +130,7 @@ func TestStatusMessageClearsOnNextKeypress(t *testing.T) {
 		t.Fatal("setup: expected a status message after opening")
 	}
 
-	updated, _ = m.Update(key('j'))
+	updated, _ = m.Update(arrow(tea.KeyDown))
 	m = updated.(Model)
 
 	if m.opResult != "" {
@@ -144,15 +144,15 @@ func TestMessageFromCurrentKeypressSurvives(t *testing.T) {
 	m, _ := fixture(t)
 	m = cursorOn(t, m, "alpha.txt")
 
-	updated, _ := m.Update(key('y'))
+	updated, _ := m.Update(shiftKey('c'))
 	m = updated.(Model)
 
 	if m.opResult == "" {
-		t.Fatal("yank should report what it did")
+		t.Fatal("Shift+C should report what it did")
 	}
 	afterYank := m.opResult
 
-	updated, _ = m.Update(key('j'))
+	updated, _ = m.Update(arrow(tea.KeyDown))
 	m = updated.(Model)
 
 	if m.opResult != "" {
@@ -189,7 +189,7 @@ func TestLeftArrowLeavesDirectoryWhileFiltering(t *testing.T) {
 	m.mode = inputFilter
 	m.setFilter(0, "")
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	updated, _ := m.Update(arrow(tea.KeyLeft))
 	m = updated.(Model)
 
 	if m.leftPath != dir {

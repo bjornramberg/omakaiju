@@ -7,7 +7,7 @@ import (
 	"github.com/bjornramberg/omakaiju/internal/config"
 )
 
-// The default row is deliberately minimal: keys live behind ctrl+k's
+// The default row is deliberately minimal: keys live behind Shift+K's
 // overlay, so the bar only cares about the exit and the list both users can
 // find, plus the fading version splash on the right.
 func TestBottomBarMinimalHints(t *testing.T) {
@@ -15,7 +15,7 @@ func TestBottomBarMinimalHints(t *testing.T) {
 
 	bar := NewBottomBar(100, theme)
 	out := stripANSI(bar.Render())
-	if !strings.Contains(out, "ctrl+k:keys") || !strings.Contains(out, "q:quit") {
+	if !strings.Contains(out, "shift+k:keys") || !strings.Contains(out, "q:quit") {
 		t.Errorf("minimal hints missing from %q", out)
 	}
 	if strings.Contains(out, "yank") || strings.Contains(out, "paste") || strings.Contains(out, "filter") {

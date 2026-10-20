@@ -8,7 +8,7 @@ Built in Go with Bubble Tea + Lipgloss. Both panes start in the directory where 
 
 ## Features
 
-- Dual-pane navigation, dirs-first sorting, Vim-style (`h/j/k/l`) and arrow keys, per-pane filtering
+- Dual-pane navigation, dirs-first sorting, arrow keys, per-pane filtering
 - Dynamic Omarchy theme integration with hot-reloading
 - Nerd Font icons in panes and archive listings
 - Text previews with Chroma syntax highlighting, hex dump for binaries, entry listing for zip/tar/tgz (images show metadata only, no pixel rendering)
@@ -67,7 +67,7 @@ keys fall back to the Omarchy defaults:
 -- hl.unbind("SUPER + CTRL + F")
 ```
 
-Inside omakaiju, `Ctrl+f` is the fuzzy finder and only applies while omakaiju
+Inside omakaiju, `Shift+F` is the fuzzy finder and only applies while omakaiju
 has focus, so it no longer conflicts with the Hyprland binding.
 
 Check the result any time with:
@@ -115,33 +115,52 @@ curl -fsSL https://github.com/bjornramberg/omakaiju/releases/latest/download/oma
 
 ## Keybindings
 
+### Navigation
 | Key | Action |
 |-----|--------|
-| h/j/k/l or arrows | Navigate (cursor restores to exited dirname on `h`) |
-| Enter | Enter directory, or open file with the desktop handler (`gio open`, `xdg-open` fallback) |
-| Right / l | Enter directory only (never opens files) |
-| Tab | Toggle active pane |
-| s | Stack file panes vertically / restore side by side |
-| i | Focus preview (press `i`/`Esc` to unfocus) |
-| y | Yank (copy) entry under cursor |
-| m | Mark / unmark entry (repeat to select several) |
-| p | Move marked entries to the other pane, else paste yanked entry |
-| d | Delete prompt: `t`rash (default, also `y`/`Enter`), `f`orce delete, `n`/`Esc` cancel |
-| a | Add file/directory (trailing `/` creates a directory) |
-| r | Rename |
-| / | Filter (per-pane, arrows keep the prompt open) |
-| o | Cycle sort (per-pane): name → size↓ largest first → size↑ smallest first → name (dirs stay first) |
-| Ctrl+f | Fuzzy find (`j/k` navigate, type/backspace refines, `Enter` jumps, `Esc` exits) |
-| Ctrl+r | Refresh active pane |
-| Ctrl+k | Key list overlay: search across keys and descriptions, arrow keys to browse, closes with esc/`ctrl+k` |
-| Esc | Context: cancel copy / dismiss prompt / clear filter |
-| q | Quit |
+| `↑` / `↓` / `←` / `→` | Move cursor (cursor restores to exited dirname on `←`) |
+| `Enter` | Enter directory, or open file with the desktop handler (`gio open`, `xdg-open` fallback) |
+| `→` | Enter directory only (never opens files) |
+| `Tab` | Toggle active pane |
 
-The bottom bar stays minimal (`ctrl+k:keys  q:quit`); the full table lives
-behind the Ctrl+k overlay so shortcuts don't clutter the normal view. The
+### Jump (Space + letter)
+| Key | Action |
+|-----|--------|
+| `Space` + `a`–`z` | Jump to first file starting with letter (sorting-aware, wraps) |
+
+### File Operations (Shift + key)
+| Key | Action |
+|-----|--------|
+| `Shift+C` | Copy (yank) entry under cursor |
+| `Shift+V` | Paste / move marked entries |
+| `Shift+D` | Delete prompt: `t`rash (default, also `y`/`Enter`), `f`orce delete, `n`/`Esc` cancel |
+| `Shift+M` | Mark / unmark entry (repeat to select several for bulk move) |
+| `Shift+A` | Add file/directory (trailing `/` creates a directory) |
+| `Shift+R` | Rename entry under cursor |
+
+### Pane / View (Shift + key)
+| Key | Action |
+|-----|--------|
+| `Shift+S` | Stack file panes vertically / restore side by side |
+| `Shift+O` | Cycle sort order: name → size↓ → size↑ → name (dirs stay first) |
+| `Shift+I` | Toggle preview (press `Shift+I`/`Esc` to unfocus) |
+| `Shift+F` | Fuzzy find (`j/k` navigate, type/backspace refines, `Enter` jumps, `Esc` exits) |
+| `Shift+/` | Filter pane (per-pane, arrows keep the prompt open) |
+| `Shift+G` | Goto path |
+| `Shift+E` | Refresh active pane |
+| `Shift+K` | Key list overlay: search across keys and descriptions, arrow keys to browse, closes with `Esc`/`Shift+K` |
+
+### System
+| Key | Action |
+|-----|--------|
+| `q` / `Shift+Q` | Quit |
+| `Esc` | Cancel copy / dismiss prompt / clear filter / cancel leader |
+
+The bottom bar stays minimal (`Shift+K:keys  q:quit`); the full table lives
+behind the `Shift+K` overlay so shortcuts don't clutter the normal view. The
 overlay searches across keys and descriptions (type "pane" to see every
 pane binding), and arrow keys walk the rows highlight-style like the fuzzy
-finder. Nothing fires from the panel — close it with esc or ctrl+k.
+finder. Nothing fires from the panel — close it with `Esc` or `Shift+K`.
 
 Long copies show a progress bar; `Esc` cancels and removes only the partial file.
 

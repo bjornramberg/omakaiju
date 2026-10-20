@@ -58,7 +58,7 @@ func (b BottomBar) Render() string {
 		return b.line(b.Theme.AccentText().Render(" " + b.OpResult))
 	}
 
-	hints := b.Theme.StatusText().Render("ctrl+k:keys  q:quit")
+	hints := b.Theme.StatusText().Render("shift+k:keys  q:quit")
 	return b.line(b.joinSplash(hints))
 }
 

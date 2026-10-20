@@ -179,10 +179,15 @@ type Model struct {
 	// columns; keyListCursor indexes the filtered rows.
 	keyListQuery  string
 	keyListCursor int
-	// fuzzySpinning records whether the animation loop is running. It only
-	// starts once the user types, so a walk that finishes immediately does not
-	// flash a spinner for results nobody has had time to see.
-	fuzzySpinning bool
+
+// jumpActive marks that Space was pressed and we're waiting for a letter
+// to jump to the first file starting with that letter.
+jumpActive bool
+
+// fuzzySpinning records whether the animation loop is running. It only
+// starts once the user types, so a walk that finishes immediately does not
+// flash a spinner for results nobody has had time to see.
+fuzzySpinning bool
 
 	leftFilter  string
 	rightFilter string
@@ -739,7 +744,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		action := nav.Lookup(msg.String())
+		keyStr := msg.String()
+
+		// Handle jump mode: Space was pressed, now waiting for a letter
+		if m.jumpActive {
+			m.jumpActive = false
+			if len(keyStr) == 1 && keyStr[0] >= 'a' && keyStr[0] <= 'z' {
+				return m.handleJump(rune(keyStr[0]))
+			}
+			return m, nil
+		}
+
+		// Handle Space to activate jump mode
+		if keyStr == "space" {
+			m.jumpActive = true
+			return m, nil
+		}
+
+		// Handle all other keys via nav.Lookup (includes shift+key combos)
+		action := nav.Lookup(keyStr)
 		switch action {
 		case nav.ActionQuit:
 			if m.themeWatcher != nil {
@@ -820,9 +843,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.inputBuf = files[cursor].Name
 			m.renameTarget = files[cursor].Path
 			return m, nil
-		case nav.ActionYank:
+		case nav.ActionCopy:
 			return m.handleYank()
-		case nav.ActionMove:
+		case nav.ActionMark:
 			return m.handleMove()
 		case nav.ActionPaste:
 			return m.handlePaste()
@@ -889,11 +912,11 @@ func (m *Model) clearFuzzy() {
 // handleKeyListKeys drives the key overlay, fuzzy-style: printable text
 // feeds the query (matched against both the key and the description),
 // arrows move the cursor with no side effects, backspace edits, and
-// esc/ctrl+k closes. Enter does nothing — the panel is a reference, not a
+// esc/shift+k closes. Enter does nothing — the panel is a reference, not a
 // launcher.
 func (m Model) handleKeyListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+k", "esc":
+	case "shift+k", "esc":
 		m.keyListActive = false
 		m.keyListQuery = ""
 		m.keyListCursor = 0
@@ -976,6 +999,27 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.fuzzyInput += keyStr
 		if m.refilterFuzzy() {
 			return m, fuzzyTickCmd()
+		}
+	}
+	return m, nil
+}
+
+// handleJump moves the cursor to the first visible file whose name starts
+// with the given letter (case-insensitive). The search wraps around.
+func (m Model) handleJump(c rune) (tea.Model, tea.Cmd) {
+	files := m.visibleFiles(m.activePane)
+	if len(files) == 0 {
+		return m, nil
+	}
+	target := byte(c)
+	if target >= 'a' && target <= 'z' {
+		target -= 'a' - 'A' // also match uppercase
+	}
+	for i, f := range files {
+		if len(f.Name) > 0 && (f.Name[0] == byte(c) || f.Name[0] == target) {
+			m.setCursor(m.activePane, i)
+			m.updatePreview()
+			return m, nil
 		}
 	}
 	return m, nil

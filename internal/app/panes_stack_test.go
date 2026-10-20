@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	"github.com/bjornramberg/omakaiju/internal/ui"
-
-	tea "charm.land/bubbletea/v2"
 )
 
 // Stacking is off until asked for.
@@ -17,7 +15,7 @@ func TestPanesDefaultToSideBySide(t *testing.T) {
 	}
 }
 
-// The s key flips the orientation without disturbing anything else.
+// The Shift+S key flips the orientation without disturbing anything else.
 func TestStackTogglePreservesState(t *testing.T) {
 	m, _ := fixture(t)
 	m.width, m.height = 100, 30
@@ -25,10 +23,10 @@ func TestStackTogglePreservesState(t *testing.T) {
 	cursorBefore := m.rawCursor(m.activePane)
 	pathBefore := m.leftPath
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: 's'})
+	updated, _ := m.Update(shiftKey('s'))
 	m = updated.(Model)
 	if !m.panesStacked {
-		t.Fatal("s should enable stacking")
+		t.Fatal("Shift+S should enable stacking")
 	}
 	if m.rawCursor(m.activePane) != cursorBefore {
 		t.Error("toggling must not move the cursor")
@@ -37,10 +35,10 @@ func TestStackTogglePreservesState(t *testing.T) {
 		t.Error("toggling must not change the path")
 	}
 
-	updated, _ = m.Update(tea.KeyPressMsg{Code: 's'})
+	updated, _ = m.Update(shiftKey('s'))
 	m = updated.(Model)
 	if m.panesStacked {
-		t.Error("s again should restore side by side")
+		t.Error("Shift+S again should restore side by side")
 	}
 	if m.rawCursor(m.activePane) != cursorBefore {
 		t.Error("toggling back must not move the cursor")
@@ -53,7 +51,7 @@ func TestStackToggleRefusesShortTerminal(t *testing.T) {
 	m := modelIn(t, t.TempDir())
 	m.width, m.height = 100, 15 // main area 9, below the floor of 10
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: 's'})
+	updated, _ := m.Update(shiftKey('s'))
 	m = updated.(Model)
 
 	if m.panesStacked {
@@ -114,7 +112,7 @@ func TestStackedViewBarStaysMinimal(t *testing.T) {
 	if strings.Contains(view, "s:side-by-side") || strings.Contains(view, "s:stack") {
 		t.Errorf("stack hints should be gone from the bar, got:\n%s", view)
 	}
-	if !strings.Contains(view, "ctrl+k:keys") || !strings.Contains(view, "q:quit") {
+	if !strings.Contains(view, "shift+k:keys") || !strings.Contains(view, "q:quit") {
 		t.Errorf("minimal hints missing from the bar, got:\n%s", view)
 	}
 }

@@ -24,23 +24,23 @@ func typeString(t *testing.T, m Model, s string) Model {
 
 func enter(t *testing.T, m Model) (Model, tea.Cmd) {
 	t.Helper()
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	return updated.(Model), cmd
 }
 
 func esc(t *testing.T, m Model) Model {
 	t.Helper()
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	return updated.(Model)
 }
 
 func TestAddCreatesFile(t *testing.T) {
 	m, dir := fixture(t)
 
-	updated, _ := m.Update(key('a'))
+	updated, _ := m.Update(shiftKey('a'))
 	m = updated.(Model)
 	if m.mode != inputAdd {
-		t.Fatal("a should enter add mode")
+		t.Fatal("Shift+A should enter add mode")
 	}
 
 	m = typeString(t, m, "newfile.txt")
@@ -63,7 +63,7 @@ func TestAddCreatesFile(t *testing.T) {
 func TestAddCreatesDirectoryWithTrailingSlash(t *testing.T) {
 	m, dir := fixture(t)
 
-	updated, _ := m.Update(key('a'))
+	updated, _ := m.Update(shiftKey('a'))
 	m = updated.(Model)
 	m = typeString(t, m, "newdir/")
 	m, _ = enter(t, m)
@@ -93,7 +93,7 @@ func TestAddCreatesDirectoryWithTrailingSlash(t *testing.T) {
 func TestAddEmptyNameIsNoOp(t *testing.T) {
 	m, dir := fixture(t)
 
-	updated, _ := m.Update(key('a'))
+	updated, _ := m.Update(shiftKey('a'))
 	m = updated.(Model)
 	m, cmd := enter(t, m)
 
@@ -115,7 +115,7 @@ func TestAddEmptyNameIsNoOp(t *testing.T) {
 func TestAddEscapeCancels(t *testing.T) {
 	m, dir := fixture(t)
 
-	updated, _ := m.Update(key('a'))
+	updated, _ := m.Update(shiftKey('a'))
 	m = updated.(Model)
 	m = typeString(t, m, "should-not-exist")
 	m = esc(t, m)
@@ -136,14 +136,14 @@ func TestRenameRenamesEntry(t *testing.T) {
 		t.Fatal("alpha.txt missing from listing")
 	}
 	for i := 0; i < idx; i++ {
-		updated, _ := m.Update(key('j'))
+		updated, _ := m.Update(arrow(tea.KeyDown))
 		m = updated.(Model)
 	}
 
-	updated, _ := m.Update(key('r'))
+	updated, _ := m.Update(shiftKey('r'))
 	m = updated.(Model)
 	if m.mode != inputRename {
-		t.Fatal("r should enter rename mode")
+		t.Fatal("Shift+R should enter rename mode")
 	}
 	if m.inputBuf != "alpha.txt" {
 		t.Errorf("inputBuf = %q, want the current name pre-filled", m.inputBuf)
@@ -151,7 +151,7 @@ func TestRenameRenamesEntry(t *testing.T) {
 
 	// Clear the pre-filled name, then type a new one.
 	for i := 0; i < len("alpha.txt"); i++ {
-		updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+		updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
 		m = updated.(Model)
 	}
 	m = typeString(t, m, "renamed.txt")
@@ -179,13 +179,13 @@ func TestRenameEscapeCancels(t *testing.T) {
 
 	idx := indexOf(m.visibleFiles(0), "alpha.txt")
 	for i := 0; i < idx; i++ {
-		updated, _ := m.Update(key('j'))
+		updated, _ := m.Update(arrow(tea.KeyDown))
 		m = updated.(Model)
 	}
-	updated, _ := m.Update(key('r'))
+	updated, _ := m.Update(shiftKey('r'))
 	m = updated.(Model)
 	for i := 0; i < len("alpha.txt"); i++ {
-		updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+		updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
 		m = updated.(Model)
 	}
 	m = typeString(t, m, "nope.txt")
@@ -204,10 +204,10 @@ func TestRenameSameNameIsNoOp(t *testing.T) {
 
 	idx := indexOf(m.visibleFiles(0), "alpha.txt")
 	for i := 0; i < idx; i++ {
-		updated, _ := m.Update(key('j'))
+		updated, _ := m.Update(arrow(tea.KeyDown))
 		m = updated.(Model)
 	}
-	updated, _ := m.Update(key('r'))
+	updated, _ := m.Update(shiftKey('r'))
 	m = updated.(Model)
 	m, cmd := enter(t, m)
 
@@ -222,13 +222,13 @@ func TestRenameSameNameIsNoOp(t *testing.T) {
 func TestAddAndRenameTargetActivePaneOnly(t *testing.T) {
 	m, dir := fixture(t)
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
 	m = updated.(Model)
 	if m.activePane != 1 {
 		t.Fatal("tab should activate the right pane")
 	}
 
-	updated, _ = m.Update(key('a'))
+	updated, _ = m.Update(shiftKey('a'))
 	m = updated.(Model)
 	m = typeString(t, m, "right-only.txt")
 	m, _ = enter(t, m)
@@ -289,7 +289,7 @@ func moveCursorTo(t *testing.T, m Model, name string) Model {
 		t.Fatalf("%s missing from listing", name)
 	}
 	for i := 0; i < idx; i++ {
-		updated, _ := m.Update(key('j'))
+		updated, _ := m.Update(arrow(tea.KeyDown))
 		m = updated.(Model)
 	}
 	return m
@@ -318,7 +318,7 @@ func TestMarkTogglesOnAndOff(t *testing.T) {
 	m, dir := fixture(t)
 	m = moveCursorTo(t, m, "alpha.txt")
 
-	updated, _ := m.Update(key('m'))
+	updated, _ := m.Update(shiftKey('m'))
 	m = updated.(Model)
 	if len(m.marked) != 1 {
 		t.Fatalf("marked = %d, want 1", len(m.marked))
@@ -327,10 +327,10 @@ func TestMarkTogglesOnAndOff(t *testing.T) {
 		t.Error("alpha.txt should be marked")
 	}
 
-	updated, _ = m.Update(key('m'))
+	updated, _ = m.Update(shiftKey('m'))
 	m = updated.(Model)
 	if len(m.marked) != 0 {
-		t.Fatalf("second m should unmark, marked = %d", len(m.marked))
+		t.Fatalf("second Shift+M should unmark, marked = %d", len(m.marked))
 	}
 }
 
@@ -339,7 +339,7 @@ func TestMarksAccumulate(t *testing.T) {
 
 	for _, name := range []string{"alpha.txt", "beta.txt"} {
 		m = moveCursorTo(t, m, name)
-		updated, _ := m.Update(key('m'))
+		updated, _ := m.Update(shiftKey('m'))
 		m = updated.(Model)
 	}
 
@@ -353,11 +353,11 @@ func TestPasteMovesMarkedSetToOtherPane(t *testing.T) {
 
 	for _, name := range []string{"alpha.txt", "beta.txt"} {
 		m = moveCursorTo(t, m, name)
-		updated, _ := m.Update(key('m'))
+		updated, _ := m.Update(shiftKey('m'))
 		m = updated.(Model)
 	}
 
-	updated, cmd := m.Update(key('p'))
+	updated, cmd := m.Update(shiftKey('v'))
 	m = updated.(Model)
 	if cmd == nil {
 		t.Fatal("paste should return move commands")
@@ -387,10 +387,10 @@ func TestPasteSkipsStaleMarks(t *testing.T) {
 	m, src, dst := twoPaneFixture(t)
 
 	m = moveCursorTo(t, m, "alpha.txt")
-	updated, _ := m.Update(key('m'))
+	updated, _ := m.Update(shiftKey('m'))
 	m = updated.(Model)
 	m = moveCursorTo(t, m, "beta.txt")
-	updated, _ = m.Update(key('m'))
+	updated, _ = m.Update(shiftKey('m'))
 	m = updated.(Model)
 
 	// Delete one marked file behind the model's back.
@@ -398,7 +398,7 @@ func TestPasteSkipsStaleMarks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	updated, cmd := m.Update(key('p'))
+	updated, cmd := m.Update(shiftKey('v'))
 	m = updated.(Model)
 
 	if m.opResult != "moved 1, skipped 1" {
@@ -414,14 +414,14 @@ func TestPasteSkipsEntryAlreadyInTarget(t *testing.T) {
 	m, src, _ := twoPaneFixture(t)
 
 	m = moveCursorTo(t, m, "alpha.txt")
-	updated, _ := m.Update(key('m'))
+	updated, _ := m.Update(shiftKey('m'))
 	m = updated.(Model)
 
 	// Point the destination at the same directory as the source so the
 	// marked entry is already in place.
 	m.rightPath = src
 
-	updated, _ = m.Update(key('p'))
+	updated, _ = m.Update(shiftKey('v'))
 	m = updated.(Model)
 
 	if m.opResult != "nothing to move" {
@@ -433,10 +433,10 @@ func TestYankPasteStillWorksWithoutMarks(t *testing.T) {
 	m, _, dst := twoPaneFixture(t)
 
 	m = moveCursorTo(t, m, "alpha.txt")
-	updated, _ := m.Update(key('y'))
+	updated, _ := m.Update(shiftKey('c'))
 	m = updated.(Model)
 
-	updated, cmd := m.Update(key('p'))
+	updated, cmd := m.Update(shiftKey('v'))
 	m = updated.(Model)
 
 	if m.opResult != "pasted 1 file(s)" {
@@ -517,7 +517,7 @@ func TestArchivePreviewIsCached(t *testing.T) {
 func yankCopy(t *testing.T, m Model, name string) Model {
 	t.Helper()
 	m = moveCursorTo(t, m, name)
-	updated, _ := m.Update(key('y'))
+	updated, _ := m.Update(shiftKey('c'))
 	return updated.(Model)
 }
 
@@ -536,7 +536,7 @@ func TestSmallCopyUsesBlockingPath(t *testing.T) {
 	m.leftFiles = files
 
 	m = yankCopy(t, m, "small.bin")
-	updated, cmd := m.Update(key('p'))
+	updated, cmd := m.Update(shiftKey('v'))
 	m = updated.(Model)
 
 	if m.copier != nil {
@@ -563,7 +563,7 @@ func TestLargeCopyStartsProgressJob(t *testing.T) {
 	m.leftFiles = files
 
 	m = yankCopy(t, m, "big.bin")
-	updated, cmd := m.Update(key('p'))
+	updated, cmd := m.Update(shiftKey('v'))
 	m = updated.(Model)
 
 	if m.copier != nil {
@@ -648,7 +648,7 @@ func TestEscapeCancelsCopyAndRemovesPartial(t *testing.T) {
 		t.Fatalf("partial file should exist mid-copy: %v", err)
 	}
 
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	m = updated.(Model)
 
 	if m.copier != nil {
@@ -680,7 +680,7 @@ func TestKeysIgnoredWhileCopying(t *testing.T) {
 	m = updated.(Model)
 
 	before := m.leftCursor
-	updated, _ = m.Update(key('j'))
+	updated, _ = m.Update(arrow(tea.KeyDown))
 	m = updated.(Model)
 	if m.leftCursor != before {
 		t.Error("navigation should be ignored while a copy runs")
@@ -696,10 +696,10 @@ func stageDelete(t *testing.T, m Model, name string) Model {
 	}
 	m.leftFiles = files
 	m = moveCursorTo(t, m, name)
-	updated, _ := m.Update(key('d'))
+	updated, _ := m.Update(shiftKey('d'))
 	m = updated.(Model)
 	if !m.confirmDelete {
-		t.Fatalf("d should open the delete prompt for %s", name)
+		t.Fatalf("Shift+D should open the delete prompt for %s", name)
 	}
 	return m
 }
@@ -760,7 +760,7 @@ func TestDeleteCancelKeepsFile(t *testing.T) {
 	target := filepath.Join(dir, "alpha.txt")
 	m = stageDelete(t, m, "alpha.txt")
 
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	m = updated.(Model)
 
 	if cmd != nil {
@@ -851,7 +851,7 @@ func TestEnterOnFileDispatchesOpen(t *testing.T) {
 	m, _ := fixture(t)
 	m = cursorOn(t, m, "alpha.txt")
 
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(Model)
 
 	if cmd == nil {
@@ -913,7 +913,7 @@ func TestEnterOnDirectoryStillNavigates(t *testing.T) {
 	m, dir := fixture(t)
 	m = cursorOn(t, m, "subdir")
 
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(Model)
 
 	if cmd == nil {
@@ -946,7 +946,7 @@ func TestEnterOnSymlinkToDirectoryNavigates(t *testing.T) {
 	m.leftFiles = files
 	m = cursorOn(t, m, "linkdir")
 
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(Model)
 
 	if cmd == nil {
@@ -982,7 +982,7 @@ func TestRightOnSymlinkToDirectoryEnters(t *testing.T) {
 	m.leftFiles = files
 	m = cursorOn(t, m, "linkdir")
 
-	updated, cmd := m.Update(key('l'))
+	updated, cmd := m.Update(arrow(tea.KeyRight))
 	m = updated.(Model)
 
 	if cmd == nil {
