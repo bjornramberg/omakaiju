@@ -145,6 +145,30 @@ func noLinesOverf(t *testing.T, out string, w, h int) bool {
 	return true
 }
 
+// Every frame must stay in the alternate screen so quitting restores the
+// terminal instead of leaving the app's last frame behind. That includes the
+// placeholder and crash frames: leaving the alternate screen mid-session
+// would restore the terminal while the app keeps running.
+func TestViewKeepsAlternateScreenForEveryFrame(t *testing.T) {
+	m := viewFixture(t)
+	m.width, m.height = 120, 40
+	if !m.View().AltScreen {
+		t.Error("the normal frame must use the alternate screen")
+	}
+
+	m.width, m.height = 1, 1
+	if !m.View().AltScreen {
+		t.Error("the too-small placeholder must use the alternate screen")
+	}
+
+	m = viewFixture(t)
+	m.width, m.height = 120, 40
+	m.viewHook = func() { panic("boom") }
+	if !m.View().AltScreen {
+		t.Error("the crash frame must keep the alternate screen")
+	}
+}
+
 // Every intermediate size must also fit, not just the sampled ones.
 func TestViewFitsAcrossResizeSweep(t *testing.T) {
 	m := viewFixture(t)

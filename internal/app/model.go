@@ -1654,15 +1654,18 @@ func (m Model) handleConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() (v tea.View) {
 	defer func() {
 		r := recover()
-		if r == nil {
-			return
+		if r != nil {
+			report := newCrashReport("view", r)
+			// View cannot hand a model back, so a state created here would be
+			// discarded. The constructor always sets one, so the history is kept
+			// in every real session.
+			m.crashStateFor().record(report)
+			v = m.crashView(report)
 		}
-		report := newCrashReport("view", r)
-		// View cannot hand a model back, so a state created here would be
-		// discarded. The constructor always sets one, so the history is kept
-		// in every real session.
-		m.crashStateFor().record(report)
-		v = m.crashView(report)
+		// Every frame, including the crash fallback, stays in the alternate
+		// screen. Quitting then restores what the terminal showed before the
+		// app started instead of leaving the last frame behind.
+		v.AltScreen = true
 	}()
 	return m.view()
 }
