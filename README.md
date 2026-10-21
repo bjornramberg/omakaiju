@@ -167,6 +167,10 @@ curl -fsSL https://github.com/bjornramberg/omakaiju/releases/latest/download/oma
 |-----|--------|
 | `Space` + `a`–`z` | Jump to first file starting with letter (sorting-aware, wraps) |
 
+The shifted key is the whole binding: `Shift+G` opens the goto prompt and
+the unshifted `g` does nothing. Only `q`, `Esc`, `Tab`, `Enter`, the arrows
+and `Space` work without a modifier — every other binding needs the shift.
+
 ### File Operations (Shift + key)
 | Key | Action |
 |-----|--------|
