@@ -110,6 +110,8 @@ func modelForDir(t *testing.T, dir, entry string) Model {
 			m.leftCursor = i
 		}
 	}
-	m.updatePreview()
+	// The preview is gathered in the background now, so the test has to
+	// wait for it before it can look at the result.
+	m = settlePreview(t, m)
 	return m
 }

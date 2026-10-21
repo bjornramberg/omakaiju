@@ -60,17 +60,24 @@ func (p Preview) header(name string) string {
 
 // panel renders the preview frame with a MaxWidth backstop, so even a
 // miscalculated budget cannot bleed into the adjacent pane.
+//
+// Height pads a short preview out to its allocation, the way the file
+// panes do, so a panel with little to say — "loading…", or a file's
+// metadata — still has the full frame rather than a stub with a border
+// around three rows. MaxHeight clips one that somehow still runs long.
 func (p Preview) panel(content string) string {
 	if p.Focused {
 		return p.Theme.PreviewPanelFocused().
 			Width(p.Width).
 			MaxWidth(p.Width).
+			Height(p.Height).
 			MaxHeight(p.Height).
 			Render(content)
 	}
 	return p.Theme.PreviewPanel().
 		Width(p.Width).
 		MaxWidth(p.Width).
+		Height(p.Height).
 		MaxHeight(p.Height).
 		Render(content)
 }
@@ -94,6 +101,75 @@ func (p Preview) RenderFile(path string, fileType fs.FileType) string {
 	default:
 		return p.RenderMetadata(path)
 	}
+}
+
+// RenderContent draws a preview from content that was gathered away from the
+// render path.
+//
+// Nothing here touches the disk. The panel is a renderer now: it frames
+// what it is given, and the reading and the colouring happen in the
+// background where a slow disk cannot stall the cursor.
+func (p Preview) RenderContent(c Content) string {
+	switch c.Kind {
+	case KindEmpty:
+		return p.panel(p.Theme.StatusText().Render("no file selected"))
+	case KindLoading:
+		return p.panel(p.Theme.StatusText().Render("loading…"))
+	case KindError:
+		return p.RenderError(c.Err)
+	case KindText:
+		return p.RenderText(c.Text, c.Highlighted)
+	case KindBinary:
+		return p.renderBinaryContent(c)
+	case KindImage:
+		return p.renderImageContent(c)
+	case KindArchive:
+		return p.RenderArchive(ArchiveLines(c.Archive, c.ArchiveTruncated, p.Theme, p.ContentWidth()))
+	case KindDirectory:
+		return p.renderDirectoryContent(c)
+	default:
+		return p.renderMetadataContent(c)
+	}
+}
+
+// renderBinaryContent frames a hex dump that was produced elsewhere.
+//
+// A hex row is a fixed 76 cells, which is wider than a narrow preview
+// column, so each row is clipped before it reaches the frame. Clipping
+// happens here rather than where the dump was built because it depends on
+// the panel's width, and the panel can be resized without the preview
+// being reloaded.
+func (p Preview) renderBinaryContent(c Content) string {
+	header := p.header(filepath.Base(p.path))
+	hex := p.Theme.Text().Render(strings.Join(
+		clipLines(strings.Split(c.Hex, "\n"), p.ContentWidth()), "\n"))
+	footer := p.Theme.StatusText().Render("binary file")
+	return p.panel(header + "\n\n" + hex + "\n\n" + footer)
+}
+
+// renderImageContent frames an image's metadata. Images are not rendered as
+// pixels; the panel says what the file is.
+func (p Preview) renderImageContent(c Content) string {
+	header := p.header(filepath.Base(p.path))
+	size := p.Theme.StatusText().Render(fmt.Sprintf("Size: %d bytes", c.Meta.Size))
+	footer := p.Theme.StatusText().Render("image preview not available")
+	return p.panel(header + "\n\n" + size + "\n\n" + footer)
+}
+
+// renderDirectoryContent frames a directory's item count.
+func (p Preview) renderDirectoryContent(c Content) string {
+	header := p.header(filepath.Base(p.path) + "/")
+	count := p.Theme.StatusText().Render(fmt.Sprintf("%d items", c.Count))
+	return p.panel(header + "\n\n" + count)
+}
+
+// renderMetadataContent frames a file by size, permissions and time.
+func (p Preview) renderMetadataContent(c Content) string {
+	header := p.header(filepath.Base(p.path))
+	size := p.Theme.StatusText().Render(fmt.Sprintf("Size: %d bytes", c.Meta.Size))
+	perms := p.Theme.StatusText().Render(fmt.Sprintf("Permissions: %s", c.Meta.Perms))
+	modTime := p.Theme.StatusText().Render(fmt.Sprintf("Modified: %s", c.Meta.ModTime))
+	return p.panel(header + "\n\n" + size + "\n" + perms + "\n" + modTime)
 }
 
 // RenderText renders pre-highlighted content. lines carries the raw source for

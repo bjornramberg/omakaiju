@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/icons"
 )
 
 // noLineExceeds reports whether every rendered line fits within max. This is
@@ -46,6 +47,29 @@ func TestTopBarAlwaysKeepsAppName(t *testing.T) {
 	}
 }
 
+// The app name carries a Nerd Font glyph in front of it, but the glyph is
+// decoration: a narrow bar keeps the readable name and drops the icon.
+func TestTopBarPrefixesAppNameWithIcon(t *testing.T) {
+	theme := config.DefaultTheme()
+
+	wide := NewTopBar(80, theme)
+	wide.Path = "/tmp"
+	out := stripANSI(wide.Render())
+	if !strings.Contains(out, icons.AppIcon+" omakaiju") {
+		t.Errorf("wide bar should prefix the name with the icon: %q", out)
+	}
+
+	narrow := NewTopBar(13, theme)
+	narrow.Path = "/tmp"
+	narrowOut := stripANSI(narrow.Render())
+	if !strings.Contains(narrowOut, "omakaiju") {
+		t.Errorf("narrow bar should keep the app name: %q", narrowOut)
+	}
+	if strings.Contains(narrowOut, icons.AppIcon) {
+		t.Errorf("narrow bar should drop the icon: %q", narrowOut)
+	}
+}
+
 func TestTopBarShowsRealPath(t *testing.T) {
 	bar := NewTopBar(120, config.DefaultTheme())
 	bar.Path = "/home/user/projects/omakaiju"
@@ -66,7 +90,7 @@ func TestTopBarDropsHostnameWhenTight(t *testing.T) {
 
 	wide := NewTopBar(200, theme)
 	wide.Path = "/tmp"
-	if !strings.Contains(stripANSI(wide.Render()), "│") {
+	if !strings.Contains(stripANSI(wide.Render()), icons.Separator) {
 		t.Error("a wide bar should show separators")
 	}
 

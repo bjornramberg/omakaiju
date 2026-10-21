@@ -2,12 +2,27 @@ package ui
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
 )
 
 // ellipsis is the single-cell truncation marker.
 const ellipsis = "…"
+
+// validText normalises a string so that measuring it and slicing it agree.
+//
+// Measuring a string's width and slicing it are two different operations,
+// and on invalid UTF-8 they disagree: the width calculation sees the raw
+// bytes, while a rune conversion sees replacement characters. A name cut to
+// a budget could then come out wider than the budget, and the surplus bled
+// into the neighbouring column.
+//
+// The replacement character is what the terminal would have drawn for the
+// invalid bytes anyway, so nothing is lost.
+func validText(s string) string {
+	return strings.ToValidUTF8(s, string(utf8.RuneError))
+}
 
 // DisplayWidth returns the rendered cell width of s, ignoring any styling.
 // Cell measurement rather than rune counting matters because Nerd Font glyphs
@@ -24,6 +39,7 @@ func TruncateName(name string, maxCells int) string {
 	if maxCells <= 0 {
 		return ""
 	}
+	name = validText(name)
 	if ansi.StringWidth(name) <= maxCells {
 		return name
 	}
@@ -52,6 +68,7 @@ func TrimPathLeft(path string, maxCells int) string {
 	if maxCells <= 0 {
 		return ""
 	}
+	path = validText(path)
 	if ansi.StringWidth(path) <= maxCells {
 		return path
 	}
@@ -78,6 +95,12 @@ func TrimPathLeft(path string, maxCells int) string {
 	if ansi.StringWidth(head) == 0 {
 		return TruncateEnd("/"+tail, maxCells)
 	}
+	// The first component and its separator may not fit on their own. The
+	// path is then cut to the budget rather than allowed to overflow into
+	// the neighbouring column.
+	if ansi.StringWidth(head) > maxCells {
+		return TruncateEnd(head, maxCells)
+	}
 	return head
 }
 
@@ -88,6 +111,7 @@ func TruncateEnd(s string, maxCells int) string {
 	if maxCells <= 0 {
 		return ""
 	}
+	s = validText(s)
 	if ansi.StringWidth(s) <= maxCells {
 		return s
 	}

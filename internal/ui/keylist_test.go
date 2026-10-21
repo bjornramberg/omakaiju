@@ -52,7 +52,7 @@ func TestFilterKeyRowsSearchesBothColumns(t *testing.T) {
 
 	// Key text is searchable too, not only descriptions.
 	byKey := FilterKeyRows(rows, "shift+f")
-	if len(byKey) != 1 || byKey[0].Desc != "fuzzy find" {
+	if len(byKey) != 1 || byKey[0].Desc != "filter pane" {
 		t.Errorf("key-text search failed, got %v", byKey)
 	}
 }

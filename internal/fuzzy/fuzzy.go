@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 type Result struct {
@@ -12,22 +14,48 @@ type Result struct {
 	Positions []int
 }
 
+// Match scores pattern against text and reports where it matched.
+//
+// The reported positions are byte offsets into the original text, so a
+// caller can slice the text with them directly.
+//
+// The match folds the two sides rune by rune rather than lowering the
+// strings first. Lowering a whole string can change its byte length — the
+// Kelvin sign is three bytes and folds to one — which would leave the
+// positions addressing the lowercased text rather than the original, and
+// sometimes outside it entirely.
 func Match(pattern, text string) (Result, bool) {
-	pattern = strings.ToLower(pattern)
-	text = strings.ToLower(text)
-
-	if pattern == "" {
+	patternRunes := []rune(strings.ToLower(pattern))
+	if len(patternRunes) == 0 {
 		return Result{Score: 0, Index: 0}, true
 	}
 
-	positions := make([]int, 0, len(pattern))
+	// Walk the original text rune by rune, keeping each rune's true byte
+	// offset and its folded form.
+	//
+	// Decoding the text rather than converting it matters: a conversion
+	// replaces invalid bytes with a three-byte character, so offsets taken
+	// from the converted text would not address the original string — and
+	// could point past its end.
+	orig := make([]rune, 0, len(text))
+	lower := make([]rune, 0, len(text))
+	offsets := make([]int, 0, len(text))
+	for offset := 0; offset < len(text); {
+		r, size := utf8.DecodeRuneInString(text[offset:])
+		orig = append(orig, r)
+		lower = append(lower, unicode.ToLower(r))
+		offsets = append(offsets, offset)
+		offset += size
+	}
+
+	positions := make([]int, 0, len(patternRunes))
 	score := 0
 	prevMatch := -1
 
 	pi := 0
-	for ti := 0; ti < len(text) && pi < len(pattern); ti++ {
-		if text[ti] == pattern[pi] {
-			positions = append(positions, ti)
+	for ti := 0; ti < len(lower) && pi < len(patternRunes); ti++ {
+		if lower[ti] == patternRunes[pi] {
+			positions = append(positions, offsets[ti])
 
 			charScore := 10
 
@@ -37,11 +65,11 @@ func Match(pattern, text string) (Result, bool) {
 
 			if ti == 0 {
 				charScore += 10
-			} else if ti > 0 && (text[ti-1] == '/' || text[ti-1] == '-' || text[ti-1] == '_' || text[ti-1] == ' ') {
+			} else if ti > 0 && isWordSeparator(lower[ti-1]) {
 				charScore += 8
 			}
 
-			if ti > 0 && text[ti-1] >= 'a' && text[ti-1] <= 'z' && text[ti] >= 'A' && text[ti] <= 'Z' {
+			if ti > 0 && lower[ti-1] >= 'a' && lower[ti-1] <= 'z' && orig[ti] >= 'A' && orig[ti] <= 'Z' {
 				charScore += 5
 			}
 
@@ -56,15 +84,22 @@ func Match(pattern, text string) (Result, bool) {
 		}
 	}
 
-	if pi < len(pattern) {
+	if pi < len(patternRunes) {
 		return Result{}, false
 	}
 
-	if len(pattern) == len(text) {
+	if len(patternRunes) == len(orig) {
 		score += 20
 	}
 
 	return Result{Score: score, Index: positions[0], Positions: positions}, true
+}
+
+// isWordSeparator reports whether a rune separates words in a path or a
+// filename. A match right after one scores higher, because it is easier to
+// read.
+func isWordSeparator(r rune) bool {
+	return r == '/' || r == '-' || r == '_' || r == ' '
 }
 
 // Filter matches pattern against the basename of each path so typing more

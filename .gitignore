@@ -13,6 +13,13 @@ omakaiju
 *.swp
 *.swo
 *~
+*~
+
+# Local design notes. The tracked design document is the README: it is
+# what users read on GitHub and in the release tarball, and it is checked
+# against the code by the tests. These are scratch files kept out of the
+# repository.
 designdoc.md
 omakaiju - TUI File Manager Design Document.md
+
 .DS_Store

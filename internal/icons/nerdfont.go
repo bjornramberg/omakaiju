@@ -21,6 +21,11 @@ var (
 	PDFIcon      = "\uf1c1"
 	TextIcon     = "\uf15c"
 	UnknownIcon  = "\uf15b"
+	// Separator divides the top bar's cells: name, path, hostname.
+	Separator = "\uf101"
+	// AppIcon is the Nerd Font leaf glyph that prefixes the app name in the
+	// top bar.
+	AppIcon = "\uf1d6"
 )
 
 func ForExtension(ext string) string {

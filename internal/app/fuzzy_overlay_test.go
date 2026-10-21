@@ -45,7 +45,8 @@ func fuzzyModel(t *testing.T, w, h int, query string) Model {
 
 	m.fuzzyActive = true
 	m.fuzzyInput = query
-	m.fuzzyAllFiles, _ = fs.WalkDir(dir)
+	walk, _ := fs.WalkDir(dir)
+	m.fuzzyAllFiles = walk.Files
 	m.fuzzyResults = fuzzy.Filter(query, m.fuzzyAllFiles)
 	return m
 }

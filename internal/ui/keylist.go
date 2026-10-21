@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 
@@ -216,36 +217,67 @@ func (k KeyList) visibleWindow(total int) (start, end int, above, below bool) {
 // occurrence of the query accented, restoring the finder's
 // matched-character treatment inside the key column and the descriptions
 // alike.
+//
+// The match is done rune by rune rather than by slicing bytes. A case fold
+// can change a string's byte length without changing its rune count — the
+// Kelvin sign is three bytes and folds to one — so a byte offset into the
+// lowercased text does not address the same character in the original. The
+// old byte-based version sliced the original text with the original query's
+// length and ran off the end of the string, which ended the session.
 func emphasizeText(text, query string, base, accent lipgloss.Style) string {
 	if query == "" {
 		return base.Render(text)
 	}
-	lower := strings.ToLower(text)
-	lq := strings.ToLower(query)
+
+	textRunes := []rune(text)
+	queryRunes := []rune(query)
 
 	var out []string
-	for lower != "" {
-		if i := strings.Index(lower, lq); i >= 0 {
-			out = append(out,
-				base.Render(text[:i]),
-				accent.Render(text[i:i+len(query)]),
-			)
-			text = text[i+len(query):]
-			lower = strings.ToLower(text)
+	// pending is the start of the run of unmatched characters. It is flushed
+	// as one segment so the common case emits a handful of styled pieces
+	// rather than one per character.
+	pending := 0
+
+	for i := 0; i < len(textRunes); {
+		end, ok := matchRunes(textRunes, queryRunes, i)
+		if !ok {
+			i++
 			continue
 		}
-		out = append(out, base.Render(text))
-		break
+		if pending < i {
+			out = append(out, base.Render(string(textRunes[pending:i])))
+		}
+		out = append(out, accent.Render(string(textRunes[i:end])))
+		i = end
+		pending = i
+	}
+	if pending < len(textRunes) {
+		out = append(out, base.Render(string(textRunes[pending:])))
 	}
 	return strings.Join(out, "")
+}
+
+// matchRunes reports whether query matches text at position i, comparing
+// rune by rune so a case fold that changes the byte length cannot shift the
+// match out of bounds. It returns the position just past the match.
+func matchRunes(text, query []rune, i int) (int, bool) {
+	if len(query) == 0 || i+len(query) > len(text) {
+		return i, false
+	}
+	for k, q := range query {
+		if unicode.ToLower(text[i+k]) != unicode.ToLower(q) {
+			return i, false
+		}
+	}
+	return i + len(query), true
 }
 
 // renderItem represents a line in the rendered key list: a key row, a section
 // header, or a section separator. Only key rows are selectable.
 type renderItem struct {
-	kind     renderItemKind
-	row      KeyRow   // valid when kind == itemKeyRow
-	section  nav.Section // valid when kind == itemHeader
+	kind    renderItemKind
+	row     KeyRow      // valid when kind == itemKeyRow
+	section nav.Section // valid when kind == itemHeader
 }
 
 type renderItemKind int

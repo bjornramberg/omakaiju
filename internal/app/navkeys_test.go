@@ -71,7 +71,7 @@ func TestArrowsNavigateWhileFilterPromptIsOpen(t *testing.T) {
 	m, _ := fixture(t)
 
 	// Open the filter prompt.
-	updated, _ := m.Update(shiftKey('/'))
+	updated, _ := m.Update(shiftKey('f'))
 	m = updated.(Model)
 	if m.mode != inputFilter {
 		t.Fatalf("mode = %v, want the filter prompt open", m.mode)
@@ -103,7 +103,7 @@ func TestArrowsNavigateWhileFilterPromptIsOpen(t *testing.T) {
 func TestTypingResetsCursorToTop(t *testing.T) {
 	m, _ := fixture(t)
 
-	updated, _ := m.Update(shiftKey('/'))
+	updated, _ := m.Update(shiftKey('f'))
 	m = updated.(Model)
 
 	updated, _ = m.Update(arrow(tea.KeyDown))

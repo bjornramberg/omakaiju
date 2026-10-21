@@ -1,12 +1,14 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime/debug"
+	"runtime"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/bjornramberg/omakaiju/internal/config"
 	"github.com/bjornramberg/omakaiju/internal/fs"
@@ -52,6 +54,13 @@ type copyProgressMsg struct {
 	copier *fs.Copier
 	done   bool
 	err    error
+	// gen identifies the copy this message belongs to.
+	//
+	// A copy that was cancelled still has a step in flight, and its message
+	// arrives after the user has moved on. Without a generation to check it
+	// against, the message would adopt its dead copier, block the keys
+	// again and report a copy that never finished.
+	gen int
 }
 
 // openMsg reports the result of opening a file with the desktop handler. It is
@@ -75,12 +84,36 @@ type fuzzyTickMsg struct{}
 // splashTickMsg advances the version splash animation in the bottom bar.
 type splashTickMsg struct{}
 
+// previewLoadedMsg carries a preview that was gathered in the background.
+type previewLoadedMsg struct {
+	// path is the file the preview belongs to. A preview for a file the
+	// cursor has already left is stale and is dropped.
+	path    string
+	content ui.Content
+}
+
+// fuzzyFilesLoadedMsg reports the files a walk found.
 type fuzzyFilesLoadedMsg struct {
 	files []string
+	// truncated reports that the walk stopped at its limit and the tree
+	// holds more than was collected.
+	truncated bool
 	// root identifies which walk produced files. A walk from a directory the
 	// user has since left can finish after the current one, and applying it
 	// would replace the live results with a stale tree.
 	root string
+}
+
+// fuzzyResultsMsg carries results that were filtered in the background.
+type fuzzyResultsMsg struct {
+	// query is the query the results belong to. Results for a query the
+	// user has since changed are dropped.
+	query string
+	// results are the matching paths, best first.
+	results []string
+	// gen identifies the filter run. A slow run that finishes after a
+	// faster one must not overwrite the faster one's results.
+	gen int
 }
 
 type Clipboard struct {
@@ -137,6 +170,10 @@ type Model struct {
 	// cancelled. Small copies skip this and use the blocking path.
 	copier    *fs.Copier
 	copyFiles int
+	// copyGen identifies the current copy. It changes whenever a copy
+	// starts or ends, so a message from a copy that has been cancelled is
+	// recognised as stale and dropped.
+	copyGen int
 
 	// leftRestore/rightRestore hold the directory name the cursor should return
 	// to after going up a level, so leaving and re-entering a folder keeps the
@@ -148,11 +185,20 @@ type Model struct {
 	previewPath   string
 	previewHidden bool
 
-	previewCache            []string
-	previewCachePath        string
-	previewHL               []string
-	previewArchive          []fs.ArchiveEntry
-	previewArchiveTruncated bool
+	// previewContent is the gathered preview for previewPath. It is built
+	// in the background so the render path never waits for the disk.
+	previewContent ui.Content
+	// previewCachePath is the file previewContent belongs to.
+	previewCachePath string
+	// previewVersion counts the changes to the preview. The render cache
+	// uses it to tell a changed preview from an unchanged one.
+	previewVersion int
+	// previewLoading marks the window between asking for a preview and
+	// it arriving.
+	previewLoading bool
+	// previewRender remembers the last drawn preview so an unchanged one
+	// is not redrawn on every frame.
+	previewRender *previewRenderCache
 
 	fuzzyActive   bool
 	fuzzyInput    string
@@ -165,6 +211,13 @@ type Model struct {
 	fuzzyLoading bool
 	// fuzzyRoot is the directory the live walk belongs to.
 	fuzzyRoot string
+	// fuzzyGen identifies the current filter run. It changes on every
+	// query, so a slow run that finishes after a faster one is dropped
+	// instead of overwriting the newer results.
+	fuzzyGen int
+	// fuzzyTruncated reports that the walk stopped at its limit, so the
+	// results cover only part of the tree.
+	fuzzyTruncated bool
 	// fuzzySpinner is the current animation frame.
 	fuzzySpinner int
 
@@ -180,14 +233,14 @@ type Model struct {
 	keyListQuery  string
 	keyListCursor int
 
-// jumpActive marks that Space was pressed and we're waiting for a letter
-// to jump to the first file starting with that letter.
-jumpActive bool
+	// jumpActive marks that Space was pressed and we're waiting for a letter
+	// to jump to the first file starting with that letter.
+	jumpActive bool
 
-// fuzzySpinning records whether the animation loop is running. It only
-// starts once the user types, so a walk that finishes immediately does not
-// flash a spinner for results nobody has had time to see.
-fuzzySpinning bool
+	// fuzzySpinning records whether the animation loop is running. It only
+	// starts once the user types, so a walk that finishes immediately does not
+	// flash a spinner for results nobody has had time to see.
+	fuzzySpinning bool
 
 	leftFilter  string
 	rightFilter string
@@ -195,6 +248,20 @@ fuzzySpinning bool
 	mode         inputMode
 	inputBuf     string
 	renameTarget string
+
+	// crash holds the session's panic history. It is a pointer because Model
+	// is copied by value on every update, and a crash recorded during a
+	// render must be visible to the next render.
+	crash *crashState
+	// crashErr is the one-line summary of the most recent crash, shown in
+	// the bottom bar until the next keypress.
+	crashErr error
+
+	// updateHook and viewHook inject a fault into the update and render
+	// paths. They exist so the panic recovery can be exercised without
+	// waiting for a real bug to trip it; both are nil in production.
+	updateHook func()
+	viewHook   func()
 }
 
 func NewModel(cfg config.Config) Model {
@@ -209,12 +276,14 @@ func NewModel(cfg config.Config) Model {
 	}
 
 	m := Model{
-		cfg:         cfg,
-		theme:       theme,
-		leftPath:    cwd,
-		rightPath:   cwd,
-		leftCursor:  0,
-		rightCursor: 0,
+		cfg:           cfg,
+		theme:         theme,
+		leftPath:      cwd,
+		rightPath:     cwd,
+		leftCursor:    0,
+		rightCursor:   0,
+		crash:         &crashState{},
+		previewRender: &previewRenderCache{},
 	}
 
 	// The watcher belongs to the model so it can be closed on quit and so the
@@ -236,17 +305,17 @@ func NewModel(cfg config.Config) Model {
 }
 
 func loadDirCmd(pane int, path string) tea.Cmd {
-	return func() tea.Msg {
+	return safeCmd("load-dir", func() tea.Msg {
 		files, err := fs.ReadDir(path)
 		return dirLoadedMsg{pane: pane, path: path, files: files, err: err}
-	}
+	})
 }
 
 func copyCmd(src, dst string) tea.Cmd {
-	return func() tea.Msg {
+	return safeCmd("copy", func() tea.Msg {
 		err := fs.CopyRecursive(src, dst)
 		return fileOpMsg{err: err}
-	}
+	})
 }
 
 // copyProgressThreshold is the size below which a copy runs synchronously.
@@ -255,74 +324,80 @@ func copyCmd(src, dst string) tea.Cmd {
 const copyProgressThreshold = 1 << 20
 
 // startCopyCmd builds the copier and performs the first step.
-func startCopyCmd(srcs []string, dstDir string) tea.Cmd {
-	return func() tea.Msg {
+func startCopyCmd(srcs []string, dstDir string, gen int) tea.Cmd {
+	return safeCmd("copy-start", func() tea.Msg {
 		copier, err := fs.NewCopier(srcs, dstDir)
 		if err != nil {
 			return fileOpMsg{err: err}
 		}
-		return copyProgressMsg{copier: copier}
-	}
+		return copyProgressMsg{copier: copier, gen: gen}
+	})
 }
 
 // stepCopyCmd advances the copier by one chunk.
-func stepCopyCmd(copier *fs.Copier) tea.Cmd {
-	return func() tea.Msg {
+func stepCopyCmd(copier *fs.Copier, gen int) tea.Cmd {
+	return safeCmd("copy-step", func() tea.Msg {
+		// A nil copier would dereference into a panic. It cannot happen
+		// today, but the guard costs nothing and turns a future mistake
+		// into a reported error instead of a dead session.
+		if copier == nil {
+			return fileOpMsg{err: errors.New("copy: no copier in flight")}
+		}
 		done, err := copier.Step()
-		return copyProgressMsg{copier: copier, done: done, err: err}
-	}
+		return copyProgressMsg{copier: copier, done: done, err: err, gen: gen}
+	})
 }
 
 func moveCmd(src, dst string) tea.Cmd {
-	return func() tea.Msg {
+	return safeCmd("move", func() tea.Msg {
 		err := fs.Move(src, dst)
 		return fileOpMsg{err: err}
-	}
+	})
 }
 
 func deleteCmd(path string) tea.Cmd {
-	return func() tea.Msg {
+	return safeCmd("delete", func() tea.Msg {
 		err := fs.Delete(path)
 		return fileOpMsg{err: err}
-	}
+	})
 }
 
 func openCmd(path, name string) tea.Cmd {
-	return func() tea.Msg {
+	return safeCmd("open", func() tea.Msg {
 		return openMsg{name: name, err: fs.OpenFile(path)}
-	}
+	})
 }
 
 func trashCmd(path string) tea.Cmd {
-	return func() tea.Msg {
+	return safeCmd("trash", func() tea.Msg {
 		_, err := fs.Trash(path)
 		return fileOpMsg{err: err}
-	}
+	})
 }
 
 func loadFuzzyFilesCmd(root string) tea.Cmd {
-	return func() tea.Msg {
-		files, _ := fs.WalkDir(root)
-		return fuzzyFilesLoadedMsg{files: files, root: root}
-	}
+	return safeCmd("fuzzy-walk", func() tea.Msg {
+		result, _ := fs.WalkDir(root)
+		return fuzzyFilesLoadedMsg{files: result.Files, truncated: result.Truncated, root: root}
+	})
 }
 
 // fuzzyTickCmd advances the loading spinner. The loop stops on its own: a tick
 // that arrives once the walk has landed, the finder has been closed, or the
 // root has moved on is simply dropped rather than reissued.
 func fuzzyTickCmd() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+	return safeCmd("fuzzy-tick", tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 		return fuzzyTickMsg{}
-	})
+	}))
 }
 
 // splashTickCmd advances the version splash one frame. Update re-issues it
 // until the splash has fully faded out, then lets the loop end so no ticker
 // outlives the animation.
 func splashTickCmd() tea.Cmd {
-	return tea.Tick(ui.SplashTick, func(time.Time) tea.Msg {
+	return safeCmd("splash-tick", tea.Tick(ui.SplashTick, func(time.Time) tea.Msg {
 		return splashTickMsg{}
-	})
+	}))
 }
 
 // waitThemeCmd blocks until the next palette-relevant fsnotify event and
@@ -337,7 +412,7 @@ func (m Model) waitThemeCmd() tea.Cmd {
 	path := m.cfg.ThemePath
 	omarchyPath := m.cfg.OmarchyStateDir
 
-	return func() tea.Msg {
+	return safeCmd("theme-watch", func() tea.Msg {
 		for {
 			select {
 			case event, ok := <-watcher.Events():
@@ -360,13 +435,19 @@ func (m Model) waitThemeCmd() tea.Cmd {
 					return themeReloadedMsg{theme: theme}
 				}
 
-			case err := <-watcher.Errors():
+			case err, ok := <-watcher.Errors():
+				if !ok {
+					// The watcher was closed, which also closes the events
+					// channel. Returning here ends the wait cleanly instead
+					// of spinning on a closed channel.
+					return themeReloadedMsg{err: fmt.Errorf("theme watcher closed")}
+				}
 				if err != nil {
 					return themeReloadedMsg{err: err}
 				}
 			}
 		}
-	}
+	})
 }
 
 // relevantThemeEvent reports whether an fsnotify event concerns the palette.
@@ -537,7 +618,16 @@ func (m *Model) clampCursor(pane int) {
 	m.setCursor(pane, cursor)
 }
 
-func (m *Model) updatePreview() {
+// updatePreview points the preview at the file under the cursor and asks for
+// it to be loaded.
+//
+// The load happens in the background. Reading a file and colouring it is slow
+// enough to be felt — a thousand lines of source takes tens of milliseconds —
+// and the user pressed an arrow key to move the cursor. Doing it here would
+// make every keypress wait for the disk.
+//
+// The returned command must be dispatched by the caller.
+func (m *Model) updatePreview() tea.Cmd {
 	files := m.visibleFiles(m.activePane)
 	cursor := m.rawCursor(m.activePane)
 	if cursor < len(files) {
@@ -546,40 +636,92 @@ func (m *Model) updatePreview() {
 		m.previewPath = ""
 	}
 
-	if m.previewPath != m.previewCachePath {
-		m.previewCache = nil
-		m.previewHL = nil
-		m.previewArchive = nil
-		m.previewArchiveTruncated = false
-		m.previewCachePath = ""
-
-		if m.previewPath != "" {
-			fileType := fs.DetectFileType(m.previewPath)
-			switch fileType {
-			case fs.FileTypeText:
-				lines, _ := fs.ReadFileHead(m.previewPath, 1000)
-				// Clean at ingest so neither the highlighter nor the
-				// preview cache ever holds raw bytes from the file.
-				lines = ui.SanitizeLines(lines)
-				m.previewCache = lines
-				m.previewHL = ui.HighlightLines(m.previewPath, lines, m.theme)
-				m.previewCachePath = m.previewPath
-			case fs.FileTypeArchive:
-				entries, truncated, err := fs.ListArchive(m.previewPath)
-				if err == nil {
-					// Cache raw entries; formatting is width-dependent and
-					// must happen per render so resizes stay correct.
-					m.previewArchive = entries
-					m.previewArchiveTruncated = truncated
-					m.previewCachePath = m.previewPath
-				}
-			}
-		}
+	if m.previewPath == m.previewCachePath {
+		return nil
 	}
+
+	// The cached preview belongs to another file. Drop it so the panel
+	// shows something honest rather than the previous file's contents.
+	m.previewContent = ui.Content{}
+	m.previewCachePath = ""
+	m.previewVersion++
+	m.previewLoading = m.previewPath != ""
+
+	if m.previewPath == "" {
+		return nil
+	}
+	return loadPreviewCmd(m.previewPath, m.theme)
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+// loadPreviewCmd gathers a preview in the background.
+func loadPreviewCmd(path string, theme config.Theme) tea.Cmd {
+	return safeCmd("preview", func() tea.Msg {
+		return previewLoadedMsg{path: path, content: ui.Load(path, theme)}
+	})
+}
+
+// Update dispatches a message and survives a panic in the handler.
+//
+// A panic here is a bug in the app, not the user's fault, and ending the
+// session over one is the worst possible response: the terminal is restored
+// but the user loses their place, their panes and any pending work. The
+// failed update is discarded and the pre-update state is handed back, so the
+// app redraws and carries on.
+//
+// Model is a value type, so the copy this method holds is untouched by the
+// panic in update; returning it is exactly the state the user was in before
+// the keypress that triggered the fault.
+func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
+	model = m
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		report := newCrashReport("update", r)
+		m.ensureCrash()
+		m.crash.record(report)
+		m.crashErr = crashError(report, m.crash.count())
+		model = m
+		cmd = nil
+		// A spread of unrelated failures means the state is no longer
+		// trustworthy. Quitting cleanly beats limping along with a UI that
+		// may be showing nonsense.
+		if m.crash.exhausted() {
+			cmd = tea.Quit
+		}
+	}()
+	return m.update(msg)
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.updateHook != nil {
+		m.updateHook()
+	}
 	switch msg := msg.(type) {
+	case panicMsg:
+		// A command panicked. The command's work was abandoned; the session
+		// continues with the error reported in the bottom bar.
+		m.ensureCrash()
+		m.crash.record(msg.report)
+		m.crashErr = crashError(msg.report, m.crash.count())
+		if m.crash.exhausted() {
+			return m, tea.Quit
+		}
+		return m, nil
+	case previewLoadedMsg:
+		// The cursor may have moved on while the preview was being
+		// gathered. A preview for a file the user is no longer on is
+		// stale, and showing it would put the wrong file in the panel.
+		if msg.path != m.previewPath {
+			return m, nil
+		}
+		m.previewContent = msg.content
+		m.previewCachePath = msg.path
+		m.previewVersion++
+		m.previewLoading = false
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -616,10 +758,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.clampCursor(msg.pane)
 		}
-		m.updatePreview()
-		return m, nil
+		return m, m.updatePreview()
 
 	case copyProgressMsg:
+		// A message from a copy the user already cancelled belongs to a
+		// copy that no longer exists. Adopting its copier would resurrect
+		// the dead copy, block the keys again and report a copy that
+		// never finished.
+		if msg.gen != m.copyGen {
+			return m, nil
+		}
+
 		// The copier is owned by the model; adopt it and drive the next step.
 		m.copier = msg.copier
 
@@ -642,7 +791,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 
-		return m, stepCopyCmd(msg.copier)
+		return m, stepCopyCmd(msg.copier, msg.gen)
 
 	case fileOpMsg:
 		if msg.err != nil {
@@ -664,12 +813,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.theme = msg.theme
 		// Colours changed, so the highlighted preview must be rebuilt.
-		m.previewHL = nil
+		// Clearing the cached path makes updatePreview load it again, this
+		// time with the new palette.
 		m.previewCachePath = ""
-		m.updatePreview()
 		// Re-arm: the previous wait command has returned, so listening must be
 		// resumed or only the first reload would ever take effect.
-		return m, m.waitThemeCmd()
+		return m, tea.Batch(m.updatePreview(), m.waitThemeCmd())
 
 	case openMsg:
 		if msg.err != nil {
@@ -700,6 +849,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case fuzzyResultsMsg:
+		// A result for a query the user has since changed, or for a slower
+		// run that finished after a faster one, is stale. Applying it would
+		// show results that do not match what is typed.
+		if msg.gen != m.fuzzyGen || msg.query != m.fuzzyInput {
+			return m, nil
+		}
+		m.fuzzyResults = msg.results
+		m.fuzzyCursor = 0
+		return m, nil
+
 	case fuzzyFilesLoadedMsg:
 		// A walk started elsewhere, or from a session already abandoned, must
 		// not replace the current results.
@@ -707,9 +867,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.fuzzyAllFiles = msg.files
-		m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, msg.files)
 		m.fuzzyLoading = false
-		return m, nil
+		m.fuzzyTruncated = msg.truncated
+		// The tree has landed, so the query the user typed while it was
+		// running can be applied now.
+		cmd, _ := m.refilterFuzzy()
+		return m, cmd
 
 	case tea.KeyMsg:
 		// A status message reports what just happened, so it stops being
@@ -718,6 +881,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the next one.
 		m.opResult = ""
 		m.loadErr = nil
+		m.crashErr = nil
 
 		if m.confirmDelete {
 			return m.handleConfirmDelete(msg)
@@ -771,8 +935,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case nav.ActionTab:
 			m.activePane = 1 - m.activePane
-			m.updatePreview()
-			return m, nil
+			return m, m.updatePreview()
 		case nav.ActionStack:
 			// The layout object lives in View, so the gate check builds a
 			// throwaway one from the current size.
@@ -785,8 +948,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case nav.ActionSort:
 			mode := m.cycleSort(m.activePane)
 			m.opResult = "sort: " + mode.Label()
-			m.updatePreview()
-			return m, nil
+			return m, m.updatePreview()
 		case nav.ActionUp, nav.ActionDown, nav.ActionLeft, nav.ActionRight:
 			return m.handleNavAction(action)
 		case nav.ActionEnter:
@@ -816,19 +978,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fuzzyRoot = root
 			m.fuzzySpinner = 0
 			m.fuzzySpinning = false
+			m.fuzzyGen++
 			return m, loadFuzzyFilesCmd(root)
 		case nav.ActionFilter:
 			m.mode = inputFilter
 			m.inputBuf = ""
 			m.setFilter(m.activePane, "")
 			m.setCursor(m.activePane, 0)
-			m.updatePreview()
-			return m, nil
+			return m, m.updatePreview()
 		case nav.ActionClear:
 			m.setFilter(m.activePane, "")
 			m.setCursor(m.activePane, 0)
-			m.updatePreview()
-			return m, nil
+			return m, m.updatePreview()
 		case nav.ActionAdd:
 			m.mode = inputAdd
 			m.inputBuf = ""
@@ -871,30 +1032,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// refilterFuzzy re-applies the query. While the walk is still running there is
-// nothing to filter, so the query is simply held until it lands.
-// refilterFuzzy re-applies the query and reports whether it started the
-// loading animation, which the caller then has to schedule.
-func (m *Model) refilterFuzzy() (started bool) {
+// refilterFuzzy re-applies the query in the background and reports whether
+// it started the loading animation, which the caller then has to schedule.
+//
+// Filtering a large tree is slow enough to be felt: every keystroke scanned
+// the whole tree on the UI thread, so the finder's input lagged behind the
+// user's typing. The work happens in a command now, and the results are
+// applied when they arrive.
+//
+// While the walk is still running there is nothing to filter, so the query
+// is simply held until it lands.
+func (m *Model) refilterFuzzy() (cmd tea.Cmd, started bool) {
 	m.fuzzyCursor = 0
 	if m.fuzzyLoading {
-		// Nothing to filter yet. The animation only starts once there is a
-		// query the user is actually waiting on.
+		// The animation only starts once there is a query the user is
+		// actually waiting on.
 		if m.fuzzyInput != "" && !m.fuzzySpinning {
 			m.fuzzySpinning = true
 			m.fuzzySpinner = 0
-			return true
+			return nil, true
 		}
-		return false
+		return nil, false
 	}
-	m.fuzzyResults = fuzzy.Filter(m.fuzzyInput, m.fuzzyAllFiles)
-	return false
+	m.fuzzyGen++
+	gen := m.fuzzyGen
+	query := m.fuzzyInput
+	files := m.fuzzyAllFiles
+	return filterFuzzyCmd(query, files, gen), false
+}
+
+// filterFuzzyCmd matches a query against a file list in the background.
+func filterFuzzyCmd(query string, files []string, gen int) tea.Cmd {
+	return safeCmd("fuzzy-filter", func() tea.Msg {
+		return fuzzyResultsMsg{
+			query:   query,
+			results: fuzzy.Filter(query, files),
+			gen:     gen,
+		}
+	})
 }
 
 // clearFuzzy drops the walk tree and filtered results and hands the memory
-// back to the OS in the background. The finder is allowed to be expensive
-// while it runs; nil-ing on close lets the GC reclaim the heap, and
-// FreeOSMemory returns RSS promptly instead of leaving the footprint high.
+// back to the runtime in the background. The finder is allowed to be
+// expensive while it runs; nil-ing on close lets the GC reclaim the heap.
 // Called on esc and on enter (selection), the two ways a search ends.
 func (m *Model) clearFuzzy() {
 	m.fuzzyActive = false
@@ -906,7 +1086,26 @@ func (m *Model) clearFuzzy() {
 	m.fuzzyAllFiles = nil
 	m.fuzzyLoading = false
 	m.fuzzyRoot = ""
-	go debug.FreeOSMemory()
+	reclaimFuzzyMemory()
+}
+
+// reclaimFuzzyMemory asks the runtime to collect the tree the finder walked.
+//
+// It runs on its own goroutine so the UI never waits for it, and it carries
+// its own recover: a goroutine the app owns sits outside Bubble Tea's panic
+// net, so a panic here would kill the process with the terminal still in raw
+// mode — the one failure mode that leaves the user with a broken shell.
+//
+// runtime.GC is preferred over debug.FreeOSMemory here. The latter also
+// madvises every region back to the OS, which is a long stop-the-world pause
+// the user would feel the instant the finder closes.
+func reclaimFuzzyMemory() {
+	go func() {
+		defer func() {
+			_ = recover()
+		}()
+		runtime.GC()
+	}()
 }
 
 // handleKeyListKeys drives the key overlay, fuzzy-style: printable text
@@ -930,12 +1129,29 @@ func (m Model) handleKeyListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down":
 		m.moveKeyListCursor(1)
 	default:
-		if key := msg.String(); len([]rune(key)) == 1 {
-			m.keyListQuery += key
+		if r, ok := printableRune(msg.String()); ok {
+			m.keyListQuery += string(r)
 			m.keyListCursor = 0
 		}
 	}
 	return m, nil
+}
+
+// printableRune returns the single printable rune a key press carries, and
+// whether it carried one at all.
+//
+// The check is rune-based on purpose. A byte-length test rejects every
+// non-ASCII character, and filenames are full of them: a file manager that
+// cannot type "café" into its own filter is not much use.
+func printableRune(key string) (rune, bool) {
+	runes := []rune(key)
+	if len(runes) != 1 {
+		return 0, false
+	}
+	if !unicode.IsPrint(runes[0]) {
+		return 0, false
+	}
+	return runes[0], true
 }
 
 // moveKeyListCursor walks within the filtered rows, stopping at the edges
@@ -985,21 +1201,28 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "backspace":
-		if len(m.fuzzyInput) > 0 {
-			m.fuzzyInput = m.fuzzyInput[:len(m.fuzzyInput)-1]
-			if m.refilterFuzzy() {
-				return m, fuzzyTickCmd()
+		// Runes, not bytes: cutting the last byte of a multi-byte
+		// character leaves invalid UTF-8 in the query, which then flows
+		// into the matcher and the width calculations.
+		if r := []rune(m.fuzzyInput); len(r) > 0 {
+			m.fuzzyInput = string(r[:len(r)-1])
+			cmd, started := m.refilterFuzzy()
+			if started {
+				return m, tea.Batch(cmd, fuzzyTickCmd())
 			}
+			return m, cmd
 		}
 		return m, nil
 	}
 
 	keyStr := msg.String()
-	if len(keyStr) == 1 && keyStr[0] >= 32 && keyStr[0] < 127 {
-		m.fuzzyInput += keyStr
-		if m.refilterFuzzy() {
-			return m, fuzzyTickCmd()
+	if r, ok := printableRune(keyStr); ok {
+		m.fuzzyInput += string(r)
+		cmd, started := m.refilterFuzzy()
+		if started {
+			return m, tea.Batch(cmd, fuzzyTickCmd())
 		}
+		return m, cmd
 	}
 	return m, nil
 }
@@ -1018,8 +1241,7 @@ func (m Model) handleJump(c rune) (tea.Model, tea.Cmd) {
 	for i, f := range files {
 		if len(f.Name) > 0 && (f.Name[0] == byte(c) || f.Name[0] == target) {
 			m.setCursor(m.activePane, i)
-			m.updatePreview()
-			return m, nil
+			return m, m.updatePreview()
 		}
 	}
 	return m, nil
@@ -1034,15 +1256,13 @@ func (m Model) handleNavAction(action nav.Action) (tea.Model, tea.Cmd) {
 		if cursor := m.rawCursor(m.activePane); cursor > 0 {
 			m.setCursor(m.activePane, cursor-1)
 		}
-		m.updatePreview()
-		return m, nil
+		return m, m.updatePreview()
 	case nav.ActionDown:
 		cursor := m.rawCursor(m.activePane)
 		if cursor < len(m.visibleFiles(m.activePane))-1 {
 			m.setCursor(m.activePane, cursor+1)
 		}
-		m.updatePreview()
-		return m, nil
+		return m, m.updatePreview()
 	case nav.ActionLeft:
 		currentPath := m.rawPath(m.activePane)
 		parent := filepath.Dir(currentPath)
@@ -1090,33 +1310,35 @@ func (m Model) handleInputKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.renameTarget = ""
 		m.setCursor(m.activePane, 0)
 		m.clampCursor(m.activePane)
-		m.updatePreview()
-		return m, nil
+		return m, m.updatePreview()
 	case "enter":
 		if m.mode == inputGoto {
 			return m.commitGoto()
 		}
 		return m.commitInput()
 	case "backspace":
-		if m.inputBuf != "" {
-			m.inputBuf = m.inputBuf[:len(m.inputBuf)-1]
+		// Runes, not bytes: cutting the last byte of a multi-byte
+		// character leaves invalid UTF-8 in the buffer, which then flows
+		// into the filter and the width calculations.
+		if r := []rune(m.inputBuf); len(r) > 0 {
+			m.inputBuf = string(r[:len(r)-1])
 			if m.mode == inputFilter {
 				m.setFilter(m.activePane, m.inputBuf)
 			}
 			m.setCursor(m.activePane, 0)
 			m.clampCursor(m.activePane)
-			m.updatePreview()
+			return m, m.updatePreview()
 		}
 		return m, nil
 	}
 
-	if key := msg.String(); len(key) == 1 && key[0] >= 32 && key[0] < 127 {
-		m.inputBuf += key
+	if r, ok := printableRune(msg.String()); ok {
+		m.inputBuf += string(r)
 		if m.mode == inputFilter {
 			m.setFilter(m.activePane, m.inputBuf)
 			m.setCursor(m.activePane, 0)
 		}
-		m.updatePreview()
+		return m, m.updatePreview()
 	}
 	return m, nil
 }
@@ -1254,9 +1476,14 @@ func (m Model) handleMove() (tea.Model, tea.Cmd) {
 }
 
 // finishCopy releases the copier and restores normal operation.
+//
+// The generation is bumped so a message still in flight from the copy that
+// just ended is recognised as stale and dropped rather than reviving the
+// copier.
 func (m *Model) finishCopy() {
 	m.copier = nil
 	m.copyFiles = 0
+	m.copyGen++
 }
 
 // cancelCopy aborts an in-flight copy, removing the partially written file.
@@ -1311,7 +1538,8 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 			}
 			m.clipboardOn = false
 			m.copyFiles = len(m.clipboard.Files)
-			return m, startCopyCmd(srcs, targetPath)
+			m.copyGen++
+			return m, startCopyCmd(srcs, targetPath, m.copyGen)
 		}
 	}
 
@@ -1401,7 +1629,33 @@ func (m Model) handleConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) View() tea.View {
+// View draws the screen and survives a panic in the renderer.
+//
+// The same reasoning as Update applies: a fault in one frame must not end
+// the session. The frame is replaced with a plain-text notice and the next
+// frame tries again, so a transient failure — a file that vanished between
+// the listing and the preview, say — costs the user one frame rather than
+// their whole session.
+func (m Model) View() (v tea.View) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		report := newCrashReport("view", r)
+		// View cannot hand a model back, so a state created here would be
+		// discarded. The constructor always sets one, so the history is kept
+		// in every real session.
+		m.crashStateFor().record(report)
+		v = m.crashView(report)
+	}()
+	return m.view()
+}
+
+func (m Model) view() tea.View {
+	if m.viewHook != nil {
+		m.viewHook()
+	}
 	layout := ui.NewLayout(m.width, m.height, m.theme)
 	layout.PanesStacked = m.panesStacked
 	layout.PreviewHidden = m.previewHidden
@@ -1448,20 +1702,29 @@ func (m Model) View() tea.View {
 
 	var previewRendered string
 	if !m.previewHidden {
-		preview := ui.NewPreview(layout.PreviewWidth(), layout.MainAreaHeight(), m.theme)
-		preview = preview.SetPath(m.previewPath)
+		previewWidth := layout.PreviewWidth()
+		previewHeight := layout.MainAreaHeight()
 
-		switch {
-		case m.previewPath == "":
-			previewRendered = preview.RenderMetadata("")
-		case m.previewCache != nil:
-			previewRendered = preview.RenderText(m.previewCache, m.previewHL)
-		case m.previewArchive != nil:
-			previewRendered = preview.RenderArchive(
-				ui.ArchiveLines(m.previewArchive, m.previewArchiveTruncated, m.theme, preview.Width-4),
-			)
-		default:
-			previewRendered = preview.RenderFile(m.previewPath, fs.DetectFileType(m.previewPath))
+		// An unchanged preview is not redrawn. Measuring a styled line is
+		// expensive, and the frame rate is wasted work when nothing about
+		// the preview changed.
+		if cached, ok := m.previewRender.get(m.previewPath, m.previewVersion, previewWidth, previewHeight); ok {
+			previewRendered = cached
+		} else {
+			preview := ui.NewPreview(previewWidth, previewHeight, m.theme)
+			preview = preview.SetPath(m.previewPath)
+
+			switch {
+			case m.previewPath == "":
+				previewRendered = preview.RenderContent(ui.Content{Kind: ui.KindEmpty})
+			case m.previewCachePath == m.previewPath:
+				previewRendered = preview.RenderContent(m.previewContent)
+			default:
+				// The preview for this file is still being gathered. The panel
+				// says so rather than showing the previous file's contents.
+				previewRendered = preview.RenderContent(ui.Content{Kind: ui.KindLoading})
+			}
+			m.previewRender.put(m.previewPath, m.previewVersion, previewWidth, previewHeight, previewRendered)
 		}
 	}
 
@@ -1486,6 +1749,10 @@ func (m Model) View() tea.View {
 			bottomBar.Progress = &progress
 		} else if m.confirmDelete {
 			bottomBar.Input = filepath.Base(m.deleteTarget) + "? (t)rash / (f)orce / (n)o"
+		} else if m.crashErr != nil {
+			// A recovered crash outranks a load error: it is the one thing
+			// the user needs to know about, and it may still be relevant.
+			bottomBar.Error = m.crashErr.Error()
 		} else if m.loadErr != nil {
 			bottomBar.Error = m.loadErr.Error()
 		} else if m.opResult != "" {
@@ -1508,6 +1775,7 @@ func (m Model) View() tea.View {
 		finder.Loading = m.fuzzyLoading
 		finder.Root = m.fuzzyRoot
 		finder.Spinner = m.fuzzySpinner
+		finder.Truncated = m.fuzzyTruncated
 		view = ui.OverlayCentered(view, finder.Render(), m.width)
 	}
 

@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -50,15 +49,11 @@ func SplashActive(step int) bool {
 	return step < splashTotalSteps-1
 }
 
-// splashLabel formats the release name. GoReleaser stamps the bare patch
-// number ("0.9.1"), while the Makefile stamps raw `git describe` output
-// ("v0.9.1-dirty"), so the leading v is normalised away rather than doubled.
+// splashLabel formats the release name. The formatting lives with the
+// version package so the splash, the --version flag and the installer all
+// say the same thing.
 func splashLabel() string {
-	name := version.Version
-	if name == "" || name == "dev" {
-		return "omakaiju dev"
-	}
-	return "omakaiju v" + strings.TrimPrefix(name, "v")
+	return "omakaiju " + version.Display()
 }
 
 // splashColor mixes the label colour from the bar's background toward its

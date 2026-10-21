@@ -55,16 +55,17 @@ func TestFuzzyOpenDoesNotShowStaleResults(t *testing.T) {
 
 	m := modelIn(t, dirA)
 	// Simulate a completed search over directory A.
-	m.fuzzyAllFiles, _ = fs.WalkDir(dirA)
+	walkA, _ := fs.WalkDir(dirA)
+	m.fuzzyAllFiles = walkA.Files
 	m.fuzzyResults = m.fuzzyAllFiles
 	m.fuzzyActive = true
 
 	// Move to directory B and open the finder there.
 	m2 := modelIn(t, dirB)
-	m2.fuzzyAllFiles, _ = fs.WalkDir(dirA) // leftover from the previous search
+	m2.fuzzyAllFiles = walkA.Files // leftover from the previous search
 	m2.fuzzyActive = false
 
-	updated, _ := m2.Update(shiftKey('f'))
+	updated, _ := m2.Update(shiftKey('p'))
 	m2 = updated.(Model)
 
 	if !m2.fuzzyLoading {
@@ -138,11 +139,12 @@ func TestFuzzyAppliesQueryTypedDuringScan(t *testing.T) {
 		t.Errorf("results produced before the walk finished: %v", m.fuzzyResults)
 	}
 
-	updated, _ := m.Update(fuzzyFilesLoadedMsg{files: []string{
+	updated, cmd := m.Update(fuzzyFilesLoadedMsg{files: []string{
 		filepath.Join(dir, "needle.go"),
 		filepath.Join(dir, "other.go"),
 	}, root: dir})
 	m = updated.(Model)
+	m = settleFuzzy(t, m, cmd)
 
 	if m.fuzzyLoading {
 		t.Error("loading should end once the walk lands")
@@ -155,7 +157,61 @@ func TestFuzzyAppliesQueryTypedDuringScan(t *testing.T) {
 	}
 }
 
-// Closing the finder retires the session so a late walk cannot revive it.
+// settleFuzzy runs a pending filter and feeds the results back, so a test
+// can assert on results that are now computed in the background.
+func settleFuzzy(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+	if cmd == nil {
+		return m
+	}
+	msg := cmd()
+	if msg == nil {
+		return m
+	}
+	updated, _ := m.Update(msg)
+	return updated.(Model)
+}
+
+// A slow filter that finishes after a faster one must not overwrite the
+// faster one's results: the user would see matches for a query they have
+// already typed past.
+func TestStaleFuzzyResultsAreDropped(t *testing.T) {
+	dir := t.TempDir()
+	m := modelIn(t, dir)
+	m.fuzzyActive = true
+	m.fuzzyRoot = dir
+	m.fuzzyLoading = false
+	m.fuzzyAllFiles = []string{
+		filepath.Join(dir, "alpha.go"),
+		filepath.Join(dir, "beta.go"),
+	}
+
+	// A run for an old query, still in flight.
+	stale := fuzzyResultsMsg{
+		query:   "a",
+		results: []string{filepath.Join(dir, "alpha.go")},
+		gen:     m.fuzzyGen,
+	}
+
+	// The user types on, which starts a newer run.
+	updated, cmd := m.Update(key('b'))
+	m = updated.(Model)
+	m = settleFuzzy(t, m, cmd)
+
+	if m.fuzzyGen == stale.gen {
+		t.Fatal("the new query should have started a new filter run")
+	}
+
+	// The old run lands late.
+	updated, _ = m.Update(stale)
+	m = updated.(Model)
+
+	for _, r := range m.fuzzyResults {
+		if strings.HasSuffix(r, "alpha.go") {
+			t.Errorf("a stale result was applied: %v", m.fuzzyResults)
+		}
+	}
+}
 func TestFuzzyEscapeRetiresSession(t *testing.T) {
 	dir := t.TempDir()
 	m := modelIn(t, dir)
@@ -184,7 +240,7 @@ func TestFuzzyOpenDoesNotStartSpinner(t *testing.T) {
 	dir := t.TempDir()
 	m := modelIn(t, dir)
 
-	updated, _ := m.Update(shiftKey('f'))
+	updated, _ := m.Update(shiftKey('p'))
 	m = updated.(Model)
 
 	if m.fuzzySpinning {

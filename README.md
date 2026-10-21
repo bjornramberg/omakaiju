@@ -12,10 +12,26 @@ Built in Go with Bubble Tea + Lipgloss. Both panes start in the directory where 
 - Dynamic Omarchy theme integration with hot-reloading
 - Nerd Font icons in panes and archive listings
 - Text previews with Chroma syntax highlighting, hex dump for binaries, entry listing for zip/tar/tgz (images show metadata only, no pixel rendering)
-- Fuzzy finder (recursive, ranked) plus live `/` filter
+- Fuzzy finder (recursive, ranked) plus a live per-pane filter
 - Yank/paste with progress bar and cancel, mark/move across panes, trash (XDG) or force delete, add/rename
-- Asynchronous I/O so the UI never blocks on filesystem work
+- Asynchronous I/O so the UI never blocks on filesystem work: previews, the fuzzy matcher and the walk all run in the background
+- Recovers from internal errors instead of dropping the session: a panic in the render or update path is caught, reported in the bottom bar and the app carries on
 - Version splash on the bottom-right: fades in on launch, fades out after three seconds
+
+### Footprint
+
+One static binary, no runtime dependencies and no daemon.
+
+| | |
+|---|---|
+| Binary | ~9.4 MB (stripped) |
+| Resident | ~23 MB |
+| Startup | ~35 ms |
+| Config | one theme file; everything else is a default |
+
+The bulk of the binary is Chroma's syntax highlighting and the Go runtime.
+Dropping the highlighting would save a couple of megabytes and the previews
+with it, which is not a trade this app makes.
 
 ## Requirements
 
@@ -33,6 +49,10 @@ curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.
 The installer detects your architecture (amd64/arm64), downloads the Linux
 binary from GitHub Releases, verifies it against the published
 `checksums.txt`, and installs it into `~/.local/bin`.
+
+The install is atomic: the new binary is staged beside the old one and
+renamed into place, so the binary is never missing and a failed install
+leaves the working one in place.
 
 ## Use as the Omarchy file manager
 
@@ -67,7 +87,7 @@ keys fall back to the Omarchy defaults:
 -- hl.unbind("SUPER + CTRL + F")
 ```
 
-Inside omakaiju, `Shift+F` is the fuzzy finder and only applies while omakaiju
+Inside omakaiju, `Shift+P` is the fuzzy finder and only applies while omakaiju
 has focus, so it no longer conflicts with the Hyprland binding.
 
 Check the result any time with:
@@ -81,6 +101,12 @@ To revert everything, remove the two lines from step 2 and
 
 ## Development
 
+This README is the design document. It is what users read on GitHub and in
+the release tarball, and the tests check it against the code: the keybinding
+table is compared with the keybind table, and the claims it makes about the
+installer and the release are checked against those files. A change to the
+app that makes the README wrong fails the build.
+
 These paths are for hacking on the source or doing installs by hand; the
 [Install](#install) section is all most users need.
 
@@ -91,9 +117,22 @@ make build    # go build -o omakaiju ./cmd/omakaiju
 make run      # build + ./omakaiju
 make install  # install to /usr/local/bin (override with PREFIX=/path)
 make test     # go test ./...
+make race     # go test -race ./...   (catches data races; CI runs it too)
 make lint     # go vet ./...
 make clean    # rm -f omakaiju
 ```
+
+The text-handling code is fuzzed. The fuzzers cover the key-list matcher, the
+sanitiser, the truncation helpers and the fuzzy finder — the functions that
+take text from the user or from the filesystem. They have found real bugs: a
+matcher that sliced past the end of a string, and a name that came out wider
+than its budget.
+
+```bash
+go test -run=XXX -fuzz=FuzzEmphasizeText -fuzztime=60s ./internal/ui/...
+```
+
+A crash is written to `testdata/fuzz/` and replayed on every later run.
 
 Or the classic one-liner, if you'd rather not clone:
 
@@ -143,18 +182,18 @@ curl -fsSL https://github.com/bjornramberg/omakaiju/releases/latest/download/oma
 |-----|--------|
 | `Shift+S` | Stack file panes vertically / restore side by side |
 | `Shift+O` | Cycle sort order: name → size↓ → size↑ → name (dirs stay first) |
-| `Shift+I` | Toggle preview (press `Shift+I`/`Esc` to unfocus) |
-| `Shift+F` | Fuzzy find (`j/k` navigate, type/backspace refines, `Enter` jumps, `Esc` exits) |
-| `Shift+/` | Filter pane (per-pane, arrows keep the prompt open) |
-| `Shift+G` | Goto path |
+| `Shift+I` | Toggle preview |
+| `Shift+P` / `P` | Fuzzy find (`j/k` navigate, type/backspace refines, `Enter` jumps, `Esc` exits) |
+| `Shift+F` / `F` | Filter pane (per-pane, arrows keep the prompt open) |
+| `Shift+G` / `G` | Goto path |
 | `Shift+E` | Refresh active pane |
-| `Shift+K` | Key list overlay: search across keys and descriptions, arrow keys to browse, closes with `Esc`/`Shift+K` |
+| `Shift+K` / `K` | Key list overlay: search across keys and descriptions, arrow keys to browse, closes with `Esc`/`Shift+K` |
 
 ### System
 | Key | Action |
 |-----|--------|
 | `q` / `Shift+Q` | Quit |
-| `Esc` | Cancel copy / dismiss prompt / clear filter / cancel leader |
+| `Esc` | Cancel copy / dismiss prompt / clear filter |
 
 The bottom bar stays minimal (`Shift+K:keys  q:quit`); the full table lives
 behind the `Shift+K` overlay so shortcuts don't clutter the normal view. The

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -154,46 +155,169 @@ func SortEntriesBy(entries []Entry, mode SortMode) {
 	})
 }
 
+// Copy copies a single file, keeping its permission bits.
+//
+// A symlink is recreated as a symlink rather than followed: copying a link
+// to a directory would otherwise fail with "is a directory", and copying a
+// link to a file would silently duplicate the target's contents instead of
+// the link the user pointed at.
 func Copy(src, dst string) error {
-	source, err := os.Open(src)
+	info, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
-	defer source.Close()
-
-	destination, err := os.Create(dst)
-	if err != nil {
-		return err
+	if info.Mode()&os.ModeSymlink != 0 {
+		return copySymlink(src, dst)
 	}
-	defer destination.Close()
-
-	_, err = io.Copy(destination, source)
-	return err
+	return copyFile(src, dst, info.Mode())
 }
 
+// copyMaxDepth bounds the recursion. A tree nested deeper than this is
+// pathological rather than useful, and the bound keeps a runaway from
+// consuming the stack.
+const copyMaxDepth = 256
+
+// CopyRecursive copies src to dst, recursing into directories.
+//
+// Symlinks are copied as symlinks and never followed. Following them is
+// what turns a copy into a runaway: a link to an ancestor makes the copy
+// recurse into its own output, and a link to the root of the filesystem
+// makes it duplicate the whole disk. Copying the link itself is also what
+// "copy this" means to the user.
+//
+// A directory cannot be copied into its own subtree, because the copy would
+// keep discovering the directories it is creating and nest without end.
 func CopyRecursive(src, dst string) error {
-	info, err := os.Stat(src)
+	return copyRecursive(src, dst, nil, 0)
+}
+
+// copyRecursive does the work for CopyRecursive.
+//
+// visited holds the directories already copied on the current path, so a
+// tree that reaches itself is reported rather than followed. It is the
+// current path only: the same directory legitimately reachable by two
+// different routes is copied twice, as the tree describes it.
+func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
+	if depth > copyMaxDepth {
+		return fmt.Errorf("copy: %s is nested more than %d levels deep", src, copyMaxDepth)
+	}
+
+	info, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() {
-		return Copy(src, dst)
+
+	// A symlink is copied as a link. Following it is the whole bug.
+	if info.Mode()&os.ModeSymlink != 0 {
+		return copySymlink(src, dst)
 	}
-	if err := os.MkdirAll(dst, info.Mode()); err != nil {
+
+	if !info.IsDir() {
+		return copyFile(src, dst, info.Mode())
+	}
+
+	// Copying a directory into its own subtree would make the copy
+	// discover the directories it is creating and nest forever.
+	if inside, err := isInside(src, dst); err == nil && inside {
+		return fmt.Errorf("copy: cannot copy %s into itself", src)
+	}
+
+	// A directory that is already on the path is a cycle.
+	for _, seen := range visited {
+		if os.SameFile(seen, info) {
+			return fmt.Errorf("copy: %s is a directory cycle", src)
+		}
+	}
+	visited = append(visited, info)
+
+	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
 		return err
 	}
+
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-		if err := CopyRecursive(srcPath, dstPath); err != nil {
+		err := copyRecursive(
+			filepath.Join(src, entry.Name()),
+			filepath.Join(dst, entry.Name()),
+			visited,
+			depth+1,
+		)
+		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// copyFile copies a regular file's contents, keeping its permission bits.
+//
+// The setuid, setgid and sticky bits are deliberately dropped: a copied
+// setuid binary in a world-writable directory is a privilege escalation
+// waiting to happen, and no file manager should hand one out by accident.
+func copyFile(src, dst string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode.Perm())
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	// OpenFile masks the mode with the umask, so the exact bits are set
+	// here. A copied script that loses its executable bit is a surprise
+	// the user would not expect from a file manager.
+	return os.Chmod(dst, mode.Perm())
+}
+
+// copySymlink recreates a symlink at dst with the same target.
+func copySymlink(src, dst string) error {
+	target, err := os.Readlink(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	// os.Symlink fails if the path exists, and the destination may be
+	// left over from an earlier copy.
+	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Symlink(target, dst)
+}
+
+// isInside reports whether child is parent or lies beneath it.
+func isInside(parent, child string) (bool, error) {
+	pAbs, err := filepath.Abs(parent)
+	if err != nil {
+		return false, err
+	}
+	cAbs, err := filepath.Abs(child)
+	if err != nil {
+		return false, err
+	}
+	rel, err := filepath.Rel(pAbs, cAbs)
+	if err != nil {
+		return false, err
+	}
+	if rel == "." {
+		return true, nil
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }
 
 func Move(src, dst string) error {
@@ -328,12 +452,42 @@ func CountLines(path string) (int, error) {
 	return count, scanner.Err()
 }
 
-func WalkDir(root string) ([]string, error) {
-	// Deliberately recursive with no ignore list and no file cap: the finder
-	// must see the whole tree under root, including dot-dirs, vendored deps
-	// and caches. This is allowed to be expensive while the finder runs; the
-	// memory is released when the finder closes (see clearFuzzy).
+// walkLimit bounds how many files a single walk collects.
+//
+// The finder's walk has no ignore list, so it sees everything under the
+// root: vendored dependencies, caches, object stores. Each path is kept in
+// memory, and the matcher allocates several times that again, so an
+// unbounded walk of a very large tree can exhaust the machine's memory.
+// That is a fatal error rather than a panic, and nothing recovers from it:
+// the process dies with the terminal still in raw mode.
+//
+// The limit is high enough that no ordinary tree reaches it, and the finder
+// says so when it does.
+//
+// It is a variable so a test can lower it; nothing else changes it.
+var walkLimit = 200000
+
+// WalkResult is what a walk found.
+type WalkResult struct {
+	// Files are the paths found, sorted.
+	Files []string
+	// Truncated reports that the walk stopped at the limit and the tree
+	// holds more than was collected.
+	Truncated bool
+}
+
+// WalkDir collects the files under root, sorted by path.
+//
+// The walk stops at walkLimit and reports that it did, so the caller can
+// tell the user the results are partial rather than pretending the tree
+// ended there.
+func WalkDir(root string) (WalkResult, error) {
 	var files []string
+	truncated := false
+
+	// Deliberately recursive with no ignore list: the finder must see the
+	// whole tree under root, including dot-dirs, vendored deps and caches.
+	// It is allowed to be expensive while the finder runs.
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -341,9 +495,13 @@ func WalkDir(root string) ([]string, error) {
 		if d.IsDir() {
 			return nil
 		}
+		if len(files) >= walkLimit {
+			truncated = true
+			return filepath.SkipAll
+		}
 		files = append(files, path)
 		return nil
 	})
 	sort.Strings(files)
-	return files, err
+	return WalkResult{Files: files, Truncated: truncated}, err
 }

@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/bjornramberg/omakaiju/internal/config"
+	"github.com/bjornramberg/omakaiju/internal/icons"
 )
 
 type TopBar struct {
@@ -58,6 +59,19 @@ func joinCells(cells []string, sep string) string {
 	return out
 }
 
+// appName renders the app name, prefixed with a Nerd Font glyph and a space.
+// The glyph is decorative, so it is only shown when the bar has room for the
+// whole name plus the icon; a bar too narrow for that keeps the readable name
+// and drops the icon rather than clipping the name.
+func (t TopBar) appName(budget int) string {
+	name := "omakaiju"
+	prefixed := icons.AppIcon + " " + name
+	if budget < DisplayWidth(prefixed) {
+		return t.Theme.AccentText().Bold(true).Render(name)
+	}
+	return t.Theme.AccentText().Bold(true).Render(prefixed)
+}
+
 func (t TopBar) Render() string {
 	if t.Width <= 0 {
 		return ""
@@ -68,14 +82,14 @@ func (t TopBar) Render() string {
 		t.Path = "/"
 	}
 
-	sep := " │ "
+	sep := " " + icons.Separator + " "
 	// Padding and separators are chrome, not content.
 	budget := t.Width - 4
 	if budget < 1 {
 		budget = 1
 	}
 
-	name := t.Theme.AccentText().Bold(true).Render("omakaiju")
+	name := t.appName(budget)
 	path := t.Theme.PathText().Render(TrimPathLeft(SanitizeDisplay(t.Path), budget))
 	host := t.Theme.StatusText().Render(hostname)
 

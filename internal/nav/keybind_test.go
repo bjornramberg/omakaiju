@@ -19,6 +19,30 @@ func TestLookup(t *testing.T) {
 	if got := Lookup("shift+k"); got != ActionKeyList {
 		t.Errorf("Lookup(shift+k) = %d, want ActionKeyList", got)
 	}
+	if got := Lookup("shift+f"); got != ActionFilter {
+		t.Errorf("Lookup(shift+f) = %d, want ActionFilter", got)
+	}
+	if got := Lookup("shift+p"); got != ActionFuzzyFind {
+		t.Errorf("Lookup(shift+p) = %d, want ActionFuzzyFind", got)
+	}
+	if got := Lookup("P"); got != ActionFuzzyFind {
+		t.Errorf("Lookup(P) = %d, want ActionFuzzyFind (uppercase alias)", got)
+	}
+	if got := Lookup("shift+g"); got != ActionGoto {
+		t.Errorf("Lookup(shift+g) = %d, want ActionGoto", got)
+	}
+	if got := Lookup("G"); got != ActionGoto {
+		t.Errorf("Lookup(G) = %d, want ActionGoto (uppercase alias)", got)
+	}
+	if got := Lookup("shift+c"); got != ActionCopy {
+		t.Errorf("Lookup(shift+c) = %d, want ActionCopy", got)
+	}
+	if got := Lookup("shift+f"); got != ActionFilter {
+		t.Errorf("Lookup(shift+f) = %d, want ActionFilter", got)
+	}
+	if got := Lookup("K"); got != ActionKeyList {
+		t.Errorf("Lookup(K) = %d, want ActionKeyList (uppercase alias)", got)
+	}
 	if got := Lookup("definitely-not-a-key"); got != ActionNone {
 		t.Errorf("unknown key should fall back to ActionNone, got %d", got)
 	}
@@ -34,29 +58,29 @@ func TestKeyRowsMergeAliases(t *testing.T) {
 		byDesc[row.Desc] = row.Keys
 	}
 	for desc, keys := range map[string]string{
-		"move up":            "up",
-		"move down":          "down",
-		"parent directory":   "left",
-		"enter directory":    "right",
-		"enter dir / open file": "enter",
-		"switch pane":        "tab",
+		"move up":                      "up",
+		"move down":                    "down",
+		"parent directory":             "left",
+		"enter directory":              "right",
+		"enter dir / open file":        "enter",
+		"switch pane":                  "tab",
 		"jump to file by first letter": "space+key",
-		"copy (yank)":        "shift+c",
-		"paste / move marked": "shift+v",
-		"delete":             "shift+d",
-		"mark / unmark":      "shift+m",
-		"add file / directory": "shift+a",
-		"rename":             "shift+r",
-		"stack / unstack panes": "shift+s",
-		"cycle sort order":   "shift+o",
-		"toggle preview":     "shift+i",
-		"fuzzy find":         "shift+f",
-		"filter pane":        "shift+/",
-		"goto path":          "shift+g",
-		"refresh pane":       "shift+e",
-		"key list overlay":   "shift+k",
-		"quit":               "shift+q",
-		"cancel / clear / back": "esc",
+		"copy (yank)":                  "shift+c",
+		"paste / move marked":          "shift+v",
+		"delete":                       "shift+d",
+		"mark / unmark":                "shift+m",
+		"add file / directory":         "shift+a",
+		"rename":                       "shift+r",
+		"stack / unstack panes":        "shift+s",
+		"cycle sort order":             "shift+o",
+		"toggle preview":               "shift+i",
+		"fuzzy find":                   "shift+p",
+		"filter pane":                  "shift+f",
+		"goto path":                    "shift+g",
+		"refresh pane":                 "shift+e",
+		"key list overlay":             "shift+k",
+		"quit":                         "shift+q",
+		"cancel / clear / back":        "esc",
 	} {
 		if byDesc[desc] != keys {
 			t.Errorf("desc %q should merge into %q, got %q", desc, keys, byDesc[desc])

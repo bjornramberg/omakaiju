@@ -195,7 +195,7 @@ func TestWalkDirIsSorted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	files, err := WalkDir(dir)
+	result, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,12 +206,15 @@ func TestWalkDirIsSorted(t *testing.T) {
 		filepath.Join(nested, "inner.txt"),
 		filepath.Join(dir, "z.txt"),
 	}
-	if len(files) != len(want) {
-		t.Fatalf("got %v, want %v", files, want)
+	if len(result.Files) != len(want) {
+		t.Fatalf("got %v, want %v", result.Files, want)
 	}
 	for i := range want {
-		if files[i] != want[i] {
-			t.Fatalf("got %v, want %v", files, want)
+		if result.Files[i] != want[i] {
+			t.Fatalf("got %v, want %v", result.Files, want)
 		}
+	}
+	if result.Truncated {
+		t.Error("a small tree should not be reported as truncated")
 	}
 }

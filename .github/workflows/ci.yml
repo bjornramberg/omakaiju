@@ -24,6 +24,28 @@ jobs:
       - name: Test
         run: make test
 
+      # The race detector is the only thing that finds a data race, and
+      # `go test` without it will happily pass a program that corrupts its
+      # own state. The copy progress bar is the case in point: the render
+      # path reads the copy's counters on every frame while the copy runs
+      # on another goroutine, and nothing but -race noticed.
+      - name: Test with the race detector
+        run: go test -race ./...
+
+      # A short fuzz run. The fuzzers cover the functions that take text
+      # from the user or from the filesystem — the key-list matcher, the
+      # sanitiser, the truncation helpers and the fuzzy finder — and they
+      # have all found real bugs: a matcher that sliced past the end of a
+      # string, a name that came out wider than its budget.
+      - name: Fuzz
+        run: |
+          go test -run=XXX -fuzz=FuzzEmphasizeText -fuzztime=30s ./internal/ui/...
+          go test -run=XXX -fuzz=FuzzTruncate -fuzztime=30s ./internal/ui/...
+          go test -run=XXX -fuzz=FuzzTrimPathLeft -fuzztime=30s ./internal/ui/...
+          go test -run=XXX -fuzz=FuzzSanitizeDisplay -fuzztime=30s ./internal/ui/...
+          go test -run=XXX -fuzz=FuzzMatch -fuzztime=30s ./internal/fuzzy/...
+          go test -run=XXX -fuzz=FuzzFilter -fuzztime=30s ./internal/fuzzy/...
+
       - name: Build
         run: make build
 

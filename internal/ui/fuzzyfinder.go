@@ -23,6 +23,9 @@ type FuzzyFinder struct {
 	Loading bool
 	Root    string
 	Spinner int
+	// Truncated reports that the walk stopped at its limit, so the results
+	// cover only part of the tree.
+	Truncated bool
 }
 
 // spinnerFrames are braille glyphs that read as motion. They are widely
@@ -176,6 +179,12 @@ func (f FuzzyFinder) Render() string {
 	parts := []string{}
 	if pos := f.position(); pos != "" {
 		parts = append(parts, pos)
+	}
+	if f.Truncated {
+		// The walk stopped at its limit, so the results cover only part of
+		// the tree. Saying so is better than letting the user believe a
+		// missing file does not exist.
+		parts = append(parts, "partial results")
 	}
 	parts = append(parts, "j/k:nav", "enter:select", "esc:cancel")
 	footer := f.Theme.StatusText().Render(strings.Join(parts, " | "))

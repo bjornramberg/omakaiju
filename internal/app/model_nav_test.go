@@ -127,7 +127,7 @@ func TestTabSwitchesActivePane(t *testing.T) {
 func TestFilterNarrowsVisibleFiles(t *testing.T) {
 	m, _ := fixture(t)
 
-	updated, _ := m.Update(shiftKey('/'))
+	updated, _ := m.Update(shiftKey('f'))
 	m = updated.(Model)
 	if m.mode != inputFilter {
 		t.Fatal("Shift+/ should enter filter mode")
@@ -167,7 +167,7 @@ func TestFilterNarrowsVisibleFiles(t *testing.T) {
 func TestFilterIsPerPane(t *testing.T) {
 	m, _ := fixture(t)
 
-	updated, _ := m.Update(shiftKey('/'))
+	updated, _ := m.Update(shiftKey('f'))
 	m = updated.(Model)
 	updated, _ = m.Update(key('a'))
 	m = updated.(Model)
@@ -193,6 +193,7 @@ func TestPreviewTracksCursor(t *testing.T) {
 		updated, _ := m.Update(arrow(tea.KeyDown))
 		m = updated.(Model)
 	}
+	m = settlePreview(t, m)
 
 	want := filepath.Join(dir, "beta.txt")
 	if m.previewPath != want {
@@ -201,6 +202,18 @@ func TestPreviewTracksCursor(t *testing.T) {
 	if m.previewCachePath != want {
 		t.Fatalf("previewCachePath = %q, want %q", m.previewCachePath, want)
 	}
+}
+
+// settlePreview runs the pending preview load and feeds the result back, so
+// a test can assert on a preview that is now gathered in the background.
+func settlePreview(t *testing.T, m Model) Model {
+	t.Helper()
+	cmd := m.updatePreview()
+	if cmd == nil {
+		return m
+	}
+	updated, _ := m.Update(cmd())
+	return updated.(Model)
 }
 
 func indexOf(files []fs.Entry, name string) int {
@@ -236,17 +249,18 @@ func TestPreviewIsHighlightedForSourceFile(t *testing.T) {
 		updated, _ := m.Update(arrow(tea.KeyDown))
 		m = updated.(Model)
 	}
+	m = settlePreview(t, m)
 
 	if m.previewPath != goFile {
 		t.Fatalf("previewPath = %q, want %q", m.previewPath, goFile)
 	}
-	if len(m.previewCache) == 0 {
-		t.Fatal("expected raw preview cache to be populated")
+	if len(m.previewContent.Text) == 0 {
+		t.Fatal("expected raw preview content to be populated")
 	}
-	if len(m.previewHL) != len(m.previewCache) {
-		t.Fatalf("highlighted lines = %d, want %d", len(m.previewHL), len(m.previewCache))
+	if len(m.previewContent.Highlighted) != len(m.previewContent.Text) {
+		t.Fatalf("highlighted lines = %d, want %d", len(m.previewContent.Highlighted), len(m.previewContent.Text))
 	}
-	if !strings.Contains(strings.Join(m.previewHL, "\n"), "\x1b[") {
+	if !strings.Contains(strings.Join(m.previewContent.Highlighted, "\n"), "\x1b[") {
 		t.Error("expected ANSI sequences in highlighted preview")
 	}
 }

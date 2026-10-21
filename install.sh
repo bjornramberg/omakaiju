@@ -53,6 +53,10 @@ command -v curl >/dev/null 2>&1 || { echo "error: curl is required." >&2; exit 1
 
 echo "==> Fetching $BIN_NAME for linux/$ARCH (release: ${VERSION:-latest})"
 
+# The checksum file is fetched from the same release as the binary, so it
+# proves the download arrived intact but cannot prove the release is
+# authentic. Signing the releases would close that gap; for now the
+# checksum is what there is to check.
 curl -fsSL --retry 3 -o "$TMPDIR_DL/$TARBALL" "$TARBALL_URL"
 curl -fsSL --retry 3 -o "$TMPDIR_DL/checksums.txt" "$CHECKSUMS_URL"
 
@@ -65,10 +69,30 @@ echo "==> Verifying checksum"
 tar xzf "$TMPDIR_DL/$TARBALL" -C "$TMPDIR_DL" "$BIN_NAME"
 
 mkdir -p "$PREFIX/bin"
-rm -f "$PREFIX/bin/$BIN_NAME"
-install -m 0755 "$TMPDIR_DL/$BIN_NAME" "$PREFIX/bin/$BIN_NAME"
+
+# Stage the new binary beside the target and rename it into place. The
+# rename is atomic within a filesystem, so the binary is never missing: a
+# failed install leaves the old one working rather than leaving the user
+# with nothing.
+STAGED="$PREFIX/bin/.${BIN_NAME}.new.$$"
+trap 'rm -f "$STAGED"' EXIT INT TERM
+
+if ! install -m 0755 "$TMPDIR_DL/$BIN_NAME" "$STAGED"; then
+  echo "error: could not write to $PREFIX/bin. Check the permissions." >&2
+  exit 1
+fi
+mv -f "$STAGED" "$PREFIX/bin/$BIN_NAME"
+trap - EXIT INT TERM
 
 echo "==> Installed $PREFIX/bin/$BIN_NAME"
+
+# The binary is in place but might not run: a wrong architecture, a missing
+# loader, a truncated download. Saying so now beats the user finding out
+# when they try to launch it.
+if ! "$PREFIX/bin/$BIN_NAME" --version >/dev/null 2>&1; then
+  echo "    NB: $PREFIX/bin/$BIN_NAME is installed but did not run." >&2
+  echo "    Check that the release matches this machine's architecture." >&2
+fi
 
 case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;

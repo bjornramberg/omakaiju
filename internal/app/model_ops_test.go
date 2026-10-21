@@ -481,24 +481,27 @@ func TestArchivePreviewIsCached(t *testing.T) {
 	m.leftPath = dir
 
 	m = moveCursorTo(t, m, "bundle.zip")
+	m = settlePreview(t, m)
 	if m.previewPath != zipPath {
 		t.Fatalf("previewPath = %q, want %q", m.previewPath, zipPath)
 	}
-	if len(m.previewArchive) == 0 {
+	if len(m.previewContent.Archive) == 0 {
 		t.Fatal("expected a cached archive listing")
 	}
 	if m.previewCachePath != zipPath {
 		t.Errorf("previewCachePath = %q, want %q", m.previewCachePath, zipPath)
 	}
-	if len(m.previewArchive) == 0 || m.previewArchive[0].Name != "hello.txt" {
-		t.Errorf("cached entries = %v, want hello.txt", m.previewArchive)
+	if len(m.previewContent.Archive) == 0 || m.previewContent.Archive[0].Name != "hello.txt" {
+		t.Errorf("cached entries = %v, want hello.txt", m.previewContent.Archive)
 	}
 
 	// Re-running the preview update with the same selection must reuse the
 	// cached listing rather than re-listing the archive.
-	before := m.previewArchive[0].Name
-	m.updatePreview()
-	if len(m.previewArchive) == 0 || m.previewArchive[0].Name != before {
+	before := m.previewContent.Archive[0].Name
+	if cmd := m.updatePreview(); cmd != nil {
+		t.Error("an unchanged selection should not reload the preview")
+	}
+	if len(m.previewContent.Archive) == 0 || m.previewContent.Archive[0].Name != before {
 		t.Error("archive listing should be reused while the selection is unchanged")
 	}
 	if m.previewCachePath != zipPath {
@@ -508,7 +511,7 @@ func TestArchivePreviewIsCached(t *testing.T) {
 	// Rendering must not disturb the cache.
 	m.width, m.height = 120, 40
 	_ = m.View()
-	if len(m.previewArchive) == 0 || m.previewArchive[0].Name != before {
+	if len(m.previewContent.Archive) == 0 || m.previewContent.Archive[0].Name != before {
 		t.Error("View should not re-list the archive")
 	}
 }
@@ -583,14 +586,14 @@ func TestLargeCopyStartsProgressJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, _ = m.Update(copyProgressMsg{copier: copier})
+	updated, _ = m.Update(copyProgressMsg{copier: copier, gen: m.copyGen})
 	m = updated.(Model)
 	if m.copier == nil {
 		t.Error("model should adopt the copier")
 	}
 
 	for {
-		next := stepCopyCmd(m.copier)
+		next := stepCopyCmd(m.copier, m.copyGen)
 		msg, ok := next().(copyProgressMsg)
 		if !ok {
 			t.Fatal("expected progress messages while stepping")
@@ -636,11 +639,11 @@ func TestEscapeCancelsCopyAndRemovesPartial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, _ := m.Update(copyProgressMsg{copier: copier})
+	updated, _ := m.Update(copyProgressMsg{copier: copier, gen: m.copyGen})
 	m = updated.(Model)
 
 	// Take one step so a partial file exists.
-	msg := stepCopyCmd(m.copier)().(copyProgressMsg)
+	msg := stepCopyCmd(m.copier, m.copyGen)().(copyProgressMsg)
 	updated, _ = m.Update(msg)
 	m = updated.(Model)
 
@@ -659,6 +662,56 @@ func TestEscapeCancelsCopyAndRemovesPartial(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, "big.bin")); !os.IsNotExist(err) {
 		t.Error("cancel should remove the partial destination file")
+	}
+}
+
+// A copy that was cancelled still has a step in flight, and its message
+// arrives after the user has moved on. It must not resurrect the dead
+// copier: that would block the keys again and report a copy that never
+// finished.
+func TestStaleCopyMessageIsDropped(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+
+	big := filepath.Join(m.leftPath, "big.bin")
+	if err := os.WriteFile(big, make([]byte, 4<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.leftFiles, _ = fs.ReadDir(m.leftPath)
+	m = yankCopy(t, m, "big.bin")
+
+	copier, err := fs.NewCopier([]string{big}, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen := m.copyGen
+	updated, _ := m.Update(copyProgressMsg{copier: copier, gen: gen})
+	m = updated.(Model)
+
+	// A step is in flight. The user cancels.
+	inFlight := stepCopyCmd(m.copier, gen)().(copyProgressMsg)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	m = updated.(Model)
+
+	if m.copier != nil {
+		t.Fatal("cancel should release the copier")
+	}
+
+	// The in-flight message now arrives. It belongs to a copy that no
+	// longer exists.
+	updated, cmd := m.Update(inFlight)
+	m = updated.(Model)
+
+	if m.copier != nil {
+		t.Error("a stale message must not resurrect the cancelled copier")
+	}
+	if cmd != nil {
+		t.Error("a stale message must not dispatch another step")
+	}
+	if m.opResult != "copy cancelled" {
+		t.Errorf("opResult = %q, want the cancellation notice to survive", m.opResult)
+	}
+	if strings.Contains(m.opResult, "copied") {
+		t.Errorf("the stale message reported a copy that never finished: %q", m.opResult)
 	}
 }
 
