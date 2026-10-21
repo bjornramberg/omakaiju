@@ -902,13 +902,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// An in-flight copy claims esc, but only once the modal prompts above
 		// have had their chance.
 		if m.copier != nil {
-			if msg.String() == "esc" {
+			if keyID(msg) == "esc" {
 				return m.cancelCopy()
 			}
 			return m, nil
 		}
 
-		keyStr := msg.String()
+		keyStr := keyID(msg)
 
 		// Handle jump mode: Space was pressed, now waiting for a letter
 		if m.jumpActive {
@@ -1108,13 +1108,28 @@ func reclaimFuzzyMemory() {
 	}()
 }
 
+// keyID is the canonical identity of a key press: the modifiers and the base
+// key, e.g. "shift+d", "ctrl+r", "esc".
+//
+// It is not msg.String(). A terminal delivers a shifted letter as the
+// printable character ("D"), so String() hides the shift that the binding
+// table is written in, and a lookup for "shift+d" never matches. Keystroke()
+// keeps the modifier and reports the base key, so the identity is the same
+// whichever way the terminal delivered it.
+//
+// The text paths keep using String(): a prompt that takes a name has to
+// receive the character that was typed, not the key that produced it.
+func keyID(msg tea.KeyMsg) string {
+	return msg.Key().Keystroke()
+}
+
 // handleKeyListKeys drives the key overlay, fuzzy-style: printable text
 // feeds the query (matched against both the key and the description),
 // arrows move the cursor with no side effects, backspace edits, and
 // esc/shift+k closes. Enter does nothing — the panel is a reference, not a
 // launcher.
 func (m Model) handleKeyListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	switch keyID(msg) {
 	case "shift+k", "esc":
 		m.keyListActive = false
 		m.keyListQuery = ""
@@ -1292,13 +1307,13 @@ func (m Model) handleNavAction(action nav.Action) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleInputKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	switch keyID(msg) {
 	case "up", "down", "left", "right":
 		// Movement stays available while the prompt is open; filtering is
 		// unaffected, so the user can walk the narrowed list and carry on
 		// typing.
 		if m.mode == inputFilter || m.mode == inputGoto {
-			return m.handleNavAction(nav.Lookup(msg.String()))
+			return m.handleNavAction(nav.Lookup(keyID(msg)))
 		}
 		return m, nil
 	case "esc":

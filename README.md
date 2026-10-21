@@ -183,11 +183,11 @@ curl -fsSL https://github.com/bjornramberg/omakaiju/releases/latest/download/oma
 | `Shift+S` | Stack file panes vertically / restore side by side |
 | `Shift+O` | Cycle sort order: name → size↓ → size↑ → name (dirs stay first) |
 | `Shift+I` | Toggle preview |
-| `Shift+P` / `P` | Fuzzy find (`j/k` navigate, type/backspace refines, `Enter` jumps, `Esc` exits) |
-| `Shift+F` / `F` | Filter pane (per-pane, arrows keep the prompt open) |
-| `Shift+G` / `G` | Goto path |
+| `Shift+P` | Fuzzy find (`j/k` navigate, type/backspace refines, `Enter` jumps, `Esc` exits) |
+| `Shift+F` | Filter pane (per-pane, arrows keep the prompt open) |
+| `Shift+G` | Goto path |
 | `Shift+E` | Refresh active pane |
-| `Shift+K` / `K` | Key list overlay: search across keys and descriptions, arrow keys to browse, closes with `Esc`/`Shift+K` |
+| `Shift+K` | Key list overlay: search across keys and descriptions, arrow keys to browse, closes with `Esc`/`Shift+K` |
 
 ### System
 | Key | Action |

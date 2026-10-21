@@ -25,23 +25,20 @@ func TestLookup(t *testing.T) {
 	if got := Lookup("shift+p"); got != ActionFuzzyFind {
 		t.Errorf("Lookup(shift+p) = %d, want ActionFuzzyFind", got)
 	}
-	if got := Lookup("P"); got != ActionFuzzyFind {
-		t.Errorf("Lookup(P) = %d, want ActionFuzzyFind (uppercase alias)", got)
-	}
 	if got := Lookup("shift+g"); got != ActionGoto {
 		t.Errorf("Lookup(shift+g) = %d, want ActionGoto", got)
-	}
-	if got := Lookup("G"); got != ActionGoto {
-		t.Errorf("Lookup(G) = %d, want ActionGoto (uppercase alias)", got)
 	}
 	if got := Lookup("shift+c"); got != ActionCopy {
 		t.Errorf("Lookup(shift+c) = %d, want ActionCopy", got)
 	}
+	if got := Lookup("shift+d"); got != ActionDelete {
+		t.Errorf("Lookup(shift+d) = %d, want ActionDelete", got)
+	}
+	if got := Lookup("space"); got != ActionJump {
+		t.Errorf("Lookup(space) = %d, want ActionJump", got)
+	}
 	if got := Lookup("shift+f"); got != ActionFilter {
 		t.Errorf("Lookup(shift+f) = %d, want ActionFilter", got)
-	}
-	if got := Lookup("K"); got != ActionKeyList {
-		t.Errorf("Lookup(K) = %d, want ActionKeyList (uppercase alias)", got)
 	}
 	if got := Lookup("definitely-not-a-key"); got != ActionNone {
 		t.Errorf("unknown key should fall back to ActionNone, got %d", got)

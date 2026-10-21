@@ -65,7 +65,7 @@ var Keybinds = []Keybind{
 	{"tab", ActionTab, "switch pane", SectionNavigation},
 
 	// Jump (Space + letter)
-	{" ", ActionJump, "jump to file by first letter", SectionJump},
+	{"space", ActionJump, "jump to file by first letter", SectionJump},
 
 	// File Operations (Shift + key)
 	{"shift+c", ActionCopy, "copy (yank)", SectionFileOps},
@@ -80,14 +80,10 @@ var Keybinds = []Keybind{
 	{"shift+o", ActionSort, "cycle sort order", SectionPaneView},
 	{"shift+i", ActionTogglePreview, "toggle preview", SectionPaneView},
 	{"shift+p", ActionFuzzyFind, "fuzzy find", SectionPaneView},
-	{"P", ActionFuzzyFind, "fuzzy find", SectionPaneView},
 	{"shift+f", ActionFilter, "filter pane", SectionPaneView},
-	{"F", ActionFilter, "filter pane", SectionPaneView},
 	{"shift+g", ActionGoto, "goto path", SectionPaneView},
-	{"G", ActionGoto, "goto path", SectionPaneView},
 	{"shift+e", ActionRefresh, "refresh pane", SectionPaneView},
 	{"shift+k", ActionKeyList, "key list overlay", SectionPaneView},
-	{"K", ActionKeyList, "key list overlay", SectionPaneView},
 
 	// System
 	{"q", ActionQuit, "quit", SectionSystem},
@@ -99,15 +95,14 @@ func KeyRows() []ActionRow {
 	var rows []ActionRow
 	index := map[Action]int{}
 	for _, kb := range Keybinds {
-		// Skip single uppercase letter aliases (F, K) and lowercase 'q'
-		// for display — they're just shortcuts for shift+f, shift+k, shift+q;
+		// Skip lowercase 'q' for display: it is the same key as shift+q, and
 		// the shift+ form is the canonical one shown in the key list.
-		if len(kb.Key) == 1 && (kb.Key[0] >= 'A' && kb.Key[0] <= 'Z' || kb.Key == "q") {
+		if kb.Key == "q" {
 			continue
 		}
 		// Display space as "space+key" for the jump action
 		key := kb.Key
-		if key == " " {
+		if key == "space" {
 			key = "space+key"
 		}
 		if i, ok := index[kb.Action]; ok {

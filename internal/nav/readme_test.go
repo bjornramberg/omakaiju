@@ -209,12 +209,11 @@ func readmeKeyToken(cell string) string {
 	case "Esc":
 		return "esc"
 	case "Space":
-		return " "
+		return "space"
 	}
 
-	// Shift+X is written as shift+x in the keybind table. A bare key is
-	// left alone: the uppercase aliases are distinct bindings from their
-	// lower-case shift forms.
+	// Shift+X is written as shift+x in the keybind table, which is the
+	// canonical identity of the key: the modifier and the base key.
 	if rest, ok := strings.CutPrefix(token, "Shift+"); ok {
 		return "shift+" + strings.ToLower(rest)
 	}
