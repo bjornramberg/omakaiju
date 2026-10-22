@@ -190,3 +190,100 @@ func TestWatchDirsIncludeThemeAndState(t *testing.T) {
 		t.Errorf("watch dirs %v do not include the palette directory", cfg.ThemeWatchDirs)
 	}
 }
+
+// The blend is what turns the palette's own colours into the dimmed text and
+// the tinted pane background, so it has to read both hex spellings and
+// refuse anything it cannot mix rather than guessing.
+func TestBlendMixesHexColours(t *testing.T) {
+	got, ok := blend("#000000", "#ffffff", 0.5)
+	if !ok {
+		t.Fatal("two hex colours should blend")
+	}
+	if got != "#808080" {
+		t.Errorf("blend = %q, want #808080", got)
+	}
+}
+
+func TestBlendReadsShortHex(t *testing.T) {
+	got, ok := blend("#000", "#fff", 1)
+	if !ok {
+		t.Fatal("short hex should blend")
+	}
+	if got != "#ffffff" {
+		t.Errorf("blend = %q, want #ffffff", got)
+	}
+}
+
+func TestBlendRejectsColoursItCannotRead(t *testing.T) {
+	if _, ok := blend("red", "#ffffff", 0.5); ok {
+		t.Error("a named colour should not blend")
+	}
+	if _, ok := blend("#ffffff", "not-a-colour", 0.5); ok {
+		t.Error("a malformed colour should not blend")
+	}
+}
+
+// A palette that carries a colour the mixer cannot read falls back to the
+// plain colour rather than rendering something arbitrary.
+func TestDimmedColorFallsBackWhenThePaletteIsNotHex(t *testing.T) {
+	theme := DefaultTheme()
+	theme.Subtle = "orange"
+
+	if got := theme.DimmedColor(); got != "orange" {
+		t.Errorf("DimmedColor = %q, want the fallback %q", got, "orange")
+	}
+}
+
+// The dimmed colour sits between the main foreground and the subtle one: it
+// has to recede, but it still has to be readable.
+func TestDimmedColorSitsBetweenTheForegroundAndTheSubtle(t *testing.T) {
+	theme := DefaultTheme()
+
+	dim := theme.DimmedColor()
+	if dim == theme.FGMain {
+		t.Error("the dimmed colour should differ from the main foreground")
+	}
+	if dim == theme.Subtle {
+		t.Error("the dimmed colour should be brighter than the subtle foreground")
+	}
+}
+
+// The derived colours follow the palette, which is what makes them survive a
+// theme switch: they are re-derived from the live palette rather than fixed
+// at load time.
+func TestDerivedColoursFollowThePalette(t *testing.T) {
+	one := DefaultTheme()
+	two := DefaultTheme()
+	two.Primary = "#00ff00"
+	two.Subtle = "#0000ff"
+
+	if one.DimmedColor() == two.DimmedColor() {
+		t.Error("the dimmed colour should change with the palette")
+	}
+	if one.ActiveHeaderBG() == two.ActiveHeaderBG() {
+		t.Error("the focused pane's header band should change with the palette")
+	}
+}
+
+// The focused pane's band is the theme background blended toward the
+// primary colour, not a colour of its own.
+func TestActiveHeaderBGIsBlendedFromThePalette(t *testing.T) {
+	theme := DefaultTheme()
+
+	bg := theme.ActiveHeaderBG()
+	if bg == theme.BGDark {
+		t.Error("the focused pane's band should differ from the plain background")
+	}
+	if bg == theme.Primary {
+		t.Error("the focused pane's band should not be the primary colour itself")
+	}
+}
+
+func TestActiveHeaderBGFallsBackWhenThePaletteIsNotHex(t *testing.T) {
+	theme := DefaultTheme()
+	theme.BGDark = "black"
+
+	if got := theme.ActiveHeaderBG(); got != "black" {
+		t.Errorf("ActiveHeaderBG = %q, want the fallback %q", got, "black")
+	}
+}

@@ -79,8 +79,28 @@ func (p Pane) Render() string {
 		listRows = 1
 	}
 
-	pathStyle := p.Theme.PathText().UnsetPaddingLeft().UnsetPaddingRight()
-	header := pathStyle.Width(inner).MaxWidth(inner).Render(TruncateName(p.Path, inner))
+	// The header reserves a marker column in both panes, so the path starts
+	// in the same column either way and the marker is a shape cue first: it
+	// says which pane has focus even where the colours are too close to tell
+	// apart. A pane too narrow for a marker keeps the whole width for the
+	// path.
+	marker, sep, pathWidth := "", "", inner
+	if inner >= 3 {
+		marker = " "
+		if p.Active {
+			marker = "▸"
+		}
+		sep = " "
+		pathWidth = inner - 2
+	}
+
+	// The header is rendered as a single run, so the focused pane's band
+	// covers the marker cell along with the path.
+	headerStyle := p.Theme.PaneHeaderInactive()
+	if p.Active {
+		headerStyle = p.Theme.PaneHeaderActive()
+	}
+	header := headerStyle.Width(inner).MaxWidth(inner).Render(marker + sep + TruncateName(p.Path, pathWidth))
 
 	var body string
 	if len(p.Files) == 0 {
@@ -108,6 +128,7 @@ func (p Pane) Render() string {
 		rows := make([]string, 0, visibleHeight)
 		for i := start; i < end; i++ {
 			item := NewFileItem(p.Files[i], i == p.Cursor, p.Marked[p.Files[i].Path], p.Theme, inner)
+			item.Unfocused = !p.Active
 			rows = append(rows, item.Render())
 		}
 		// Pad short lists so the pane always occupies its full column height.

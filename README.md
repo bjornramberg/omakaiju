@@ -131,6 +131,18 @@ curl -fsSL https://github.com/bjornramberg/omakaiju/releases/latest/download/oma
 
 ---
 
+### Which pane has the focus
+
+The focused pane is marked three ways at once, so it stays obvious on a dim
+screen and where two colours are too close to tell apart:
+
+- a marker glyph in its header, the shape cue that needs no colour at all
+- a band across its header, the theme background blended toward the accent
+- a dimmed listing in the other pane, whose cursor row drops the selection bar
+
+All three are derived from the same palette the rest of the UI draws from, so
+they follow a theme switch along with everything else.
+
 ## License
 
 [MIT](LICENSE)
