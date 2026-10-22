@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -9,6 +10,8 @@ import (
 )
 
 // focusFixture builds a pane in the given focus state with a small listing.
+// The cursor sits on the second entry, so the first one is a plain row that
+// can be compared across the two panes.
 func focusFixture(t *testing.T, active bool, width int) Pane {
 	t.Helper()
 
@@ -19,7 +22,7 @@ func focusFixture(t *testing.T, active bool, width int) Pane {
 	pane := NewPane(width, 10, active, config.DefaultTheme())
 	pane.Path = "/home/user/projects"
 	pane.Files = files
-	pane.Cursor = 0
+	pane.Cursor = 1
 	return pane
 }
 
@@ -85,4 +88,76 @@ func TestMarkerIsDroppedWhenThePaneIsTooNarrow(t *testing.T) {
 			t.Errorf("line %d is %d cells wide, want at most 6", i, w)
 		}
 	}
+}
+
+// The unfocused pane used to draw the same selection bar as the focused one,
+// which made it the brighter of the two. The bar now belongs to the focused
+// pane alone; the unfocused cursor stays visible, but without it.
+func TestUnfocusedPaneDropsTheSelectionBar(t *testing.T) {
+	theme := config.DefaultTheme()
+	bar := ansiBackground(theme.SelectionBG)
+
+	focused := focusFixture(t, true, 40).Render()
+	unfocused := focusFixture(t, false, 40).Render()
+
+	if !strings.Contains(focused, bar) {
+		t.Fatal("the focused pane should keep the selection bar on its cursor row")
+	}
+	if strings.Contains(unfocused, bar) {
+		t.Error("the unfocused pane should not draw a selection bar")
+	}
+}
+
+// The unfocused pane's rows are dimmer than the focused pane's, which is
+// what makes the focused pane the one that stands out.
+func TestUnfocusedPaneRowsAreDimmer(t *testing.T) {
+	theme := config.DefaultTheme()
+
+	focusedRow := rawLineWith(focusFixture(t, true, 40).Render(), "alpha.txt")
+	unfocusedRow := rawLineWith(focusFixture(t, false, 40).Render(), "alpha.txt")
+
+	if focusedRow == "" || unfocusedRow == "" {
+		t.Fatal("both panes should list the same entry")
+	}
+	if !strings.Contains(focusedRow, ansiForeground(theme.FGMain)) {
+		t.Error("the focused pane should draw its rows in the main foreground")
+	}
+	if strings.Contains(unfocusedRow, ansiForeground(theme.FGMain)) {
+		t.Error("the unfocused pane should not draw its rows in the main foreground")
+	}
+	if !strings.Contains(unfocusedRow, ansiForeground(theme.DimmedColor())) {
+		t.Error("the unfocused pane should draw its rows in the dimmed colour")
+	}
+}
+
+// rawLineWith returns the first line of s that contains sub, escape codes
+// and all.
+func rawLineWith(s, sub string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if strings.Contains(stripANSI(line), sub) {
+			return line
+		}
+	}
+	return ""
+}
+
+// ansiForeground renders the escape sequence lipgloss emits for a hex
+// foreground colour.
+func ansiForeground(hex string) string {
+	return "38;2;" + ansiChannels(hex)
+}
+
+// ansiBackground renders the escape sequence lipgloss emits for a hex
+// background colour.
+func ansiBackground(hex string) string {
+	return "48;2;" + ansiChannels(hex)
+}
+
+// ansiChannels turns "#rrggbb" into the "r;g;b" lipgloss writes.
+func ansiChannels(hex string) string {
+	var r, g, b int
+	if _, err := fmt.Sscanf(hex, "#%02x%02x%02x", &r, &g, &b); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d;%d;%d", r, g, b)
 }

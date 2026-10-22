@@ -16,8 +16,13 @@ type FileItem struct {
 	Entry  fs.Entry
 	Active bool
 	Marked bool
-	Theme  config.Theme
-	Width  int
+	// Unfocused marks a row that belongs to the pane without the focus. Its
+	// rows recede so the focused pane is the one that stands out. The zero
+	// value is a focused row, so a caller that never sets it gets the plain
+	// rendering.
+	Unfocused bool
+	Theme     config.Theme
+	Width     int
 }
 
 func NewFileItem(entry fs.Entry, active bool, marked bool, theme config.Theme, width int) FileItem {
@@ -42,6 +47,16 @@ func (f FileItem) Render() string {
 		style = f.Theme.FileItem()
 	}
 
+	// The unfocused pane recedes: its rows lose their emphasis so the
+	// focused pane is the one that catches the eye.
+	if f.Unfocused {
+		if f.Entry.IsDir {
+			style = f.Theme.FileItemDirDimmed()
+		} else {
+			style = f.Theme.FileItemDimmed()
+		}
+	}
+
 	// A symlink takes the link glyph instead of the target's icon, so it reads
 	// as a link without widening the icon column. The trailing slash still
 	// follows IsDir, keeping a link to a directory marked as navigable.
@@ -56,7 +71,13 @@ func (f FileItem) Render() string {
 	}
 
 	if f.Active {
-		style = f.Theme.FileItemActive()
+		if f.Unfocused {
+			// The cursor stays visible in the unfocused pane, but without
+			// the selection bar that would out-shout the focused pane.
+			style = f.Theme.FileItemCursorUnfocused()
+		} else {
+			style = f.Theme.FileItemActive()
+		}
 	}
 
 	// Budget the row before rendering: marker, two spaces, and the icon (which

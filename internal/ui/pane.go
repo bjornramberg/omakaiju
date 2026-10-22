@@ -95,6 +95,9 @@ func (p Pane) Render() string {
 	}
 
 	pathStyle := p.Theme.PathText().UnsetPaddingLeft().UnsetPaddingRight()
+	if !p.Active {
+		pathStyle = p.Theme.PathTextUnfocused().UnsetPaddingLeft().UnsetPaddingRight()
+	}
 	header := marker + sep + pathStyle.Width(pathWidth).MaxWidth(pathWidth).Render(TruncateName(p.Path, pathWidth))
 
 	var body string
@@ -123,6 +126,7 @@ func (p Pane) Render() string {
 		rows := make([]string, 0, visibleHeight)
 		for i := start; i < end; i++ {
 			item := NewFileItem(p.Files[i], i == p.Cursor, p.Marked[p.Files[i].Path], p.Theme, inner)
+			item.Unfocused = !p.Active
 			rows = append(rows, item.Render())
 		}
 		// Pad short lists so the pane always occupies its full column height.

@@ -1,7 +1,10 @@
 package config
 
 import (
+	"fmt"
+	"math"
 	"os"
+	"strconv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -58,6 +61,64 @@ func first(def string, candidates ...string) string {
 		}
 	}
 	return def
+}
+
+// dimAmount is how far the unfocused pane's text is dimmed toward the
+// theme's subtle foreground.
+const dimAmount = 0.55
+
+// accentDimAmount is how far the unfocused pane's directory accent is dimmed
+// toward the dimmed text colour. The accent keeps a hint of its hue so the
+// listing stays readable, but it stops shouting.
+const accentDimAmount = 0.45
+
+// blend mixes two hex colours, t being the weight of b. It reports false
+// when either colour is not a hex value, so the caller can fall back to the
+// unblended colour instead of guessing at a mix.
+func blend(a, b string, t float64) (string, bool) {
+	ar, ag, ab, ok := parseHex(a)
+	if !ok {
+		return "", false
+	}
+	br, bg, bb, ok := parseHex(b)
+	if !ok {
+		return "", false
+	}
+	mix := func(x, y uint8) uint8 {
+		return uint8(math.Round(float64(x)*(1-t) + float64(y)*t))
+	}
+	return fmt.Sprintf("#%02x%02x%02x", mix(ar, br), mix(ag, bg), mix(ab, bb)), true
+}
+
+// blendColor blends two colours and falls back to def when the palette
+// carries a colour the mixer cannot read.
+func blendColor(a, b string, t float64, def string) string {
+	if c, ok := blend(a, b, t); ok {
+		return c
+	}
+	return def
+}
+
+// parseHex reads #rgb or #rrggbb into its three channels.
+func parseHex(c string) (r, g, b uint8, ok bool) {
+	c = strings.TrimSpace(c)
+	if !strings.HasPrefix(c, "#") {
+		return 0, 0, 0, false
+	}
+	h := c[1:]
+	switch len(h) {
+	case 3:
+		// #abc is #aabbcc.
+		h = string([]byte{h[0], h[0], h[1], h[1], h[2], h[2]})
+	case 6:
+	default:
+		return 0, 0, 0, false
+	}
+	v, err := strconv.ParseUint(h, 16, 32)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return uint8(v >> 16), uint8(v >> 8), uint8(v), true
 }
 
 func norm(v string) string {
@@ -118,6 +179,21 @@ func LoadTheme(path string) (Theme, error) {
 		// Status bars follow the theme background rather than a fixed black.
 		BGDark: norm(background),
 	}, nil
+}
+
+// DimmedColor is the unfocused pane's text colour: the main foreground
+// dimmed toward the theme's subtle foreground, so the unfocused pane recedes
+// without its listings becoming unreadable.
+//
+// It is derived from the palette rather than being a colour of its own, so a
+// theme switch re-derives it like every other colour.
+func (t Theme) DimmedColor() string {
+	return blendColor(t.FGMain, t.Subtle, dimAmount, t.Subtle)
+}
+
+// dimmedAccentColor is the unfocused pane's directory accent.
+func (t Theme) dimmedAccentColor() string {
+	return blendColor(t.Accent, t.DimmedColor(), accentDimAmount, t.Accent)
 }
 
 func (t Theme) PaneActive() lipgloss.Style {
@@ -198,6 +274,30 @@ func (t Theme) FileItemDir() lipgloss.Style {
 		Padding(0, 1)
 }
 
+// FileItemDimmed is a row in the unfocused pane.
+func (t Theme) FileItemDimmed() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(t.DimmedColor())).
+		Padding(0, 1)
+}
+
+// FileItemDirDimmed is a directory row in the unfocused pane.
+func (t Theme) FileItemDirDimmed() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(t.dimmedAccentColor())).
+		Padding(0, 1)
+}
+
+// FileItemCursorUnfocused is the cursor row of the unfocused pane. It keeps
+// the cursor findable but drops the selection bar, which otherwise out-shouts
+// the focused pane's border.
+func (t Theme) FileItemCursorUnfocused() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(t.FGMain)).
+		Bold(true).
+		Padding(0, 1)
+}
+
 func (t Theme) FileItemExec() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color(t.Accent)).
@@ -218,6 +318,12 @@ func (t Theme) PathText() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color(t.FGMain)).
 		Bold(true)
+}
+
+// PathTextUnfocused is the unfocused pane's header path.
+func (t Theme) PathTextUnfocused() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(t.DimmedColor()))
 }
 
 func (t Theme) AccentText() lipgloss.Style {
