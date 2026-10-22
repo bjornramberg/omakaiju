@@ -23,9 +23,9 @@ var (
 	UnknownIcon  = "\uf15b"
 	// Separator divides the top bar's cells: name, path, hostname.
 	Separator = "\uf101"
-	// AppIcon is the Nerd Font leaf glyph that prefixes the app name in the
+	// AppIcon is the Nerd Font droplet glyph that prefixes the app name in the
 	// top bar.
-	AppIcon = "\uf1d6"
+	AppIcon = "\uf0c5"
 )
 
 func ForExtension(ext string) string {
