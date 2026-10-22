@@ -9,6 +9,7 @@ Built in Go with Bubble Tea + Lipgloss. Both panes start in the directory where 
 ## Features
 
 - Dual-pane navigation, dirs-first sorting, arrow keys, per-pane filtering
+- The focused pane says so: a marker in its header, a band of its own across that header, and a dimmed listing in the other pane
 - Dynamic Omarchy theme integration with hot-reloading
 - Nerd Font icons in panes and archive listings
 - Text previews with Chroma syntax highlighting, hex dump for binaries, entry listing for zip/tar/tgz (images show metadata only, no pixel rendering)
@@ -220,6 +221,18 @@ different `colors.toml` to override it.
 
 Older setups that render a per-application `~/.config/omarchy/fm.toml` are used
 only if the primary file is missing. If neither is readable, built-in defaults are used.
+
+### Which pane has the focus
+
+The focused pane is marked three ways at once, so it stays obvious on a dim
+screen and where two colours are too close to tell apart:
+
+- a marker glyph in its header, the shape cue that needs no colour at all
+- a band across its header, the theme background blended toward the accent
+- a dimmed listing in the other pane, whose cursor row drops the selection bar
+
+All three are derived from the same palette the rest of the UI draws from, so
+they follow a theme switch along with everything else.
 
 ## License
 
