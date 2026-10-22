@@ -1,8 +1,10 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,6 +109,44 @@ func TestThemeWatcherIsOwnedAndClosable(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Error("waiting on a closed watcher never returned")
 	}
+}
+
+// The focus cues are derived from the live palette, so a theme switch has to
+// carry them along. The band across the focused pane's header is drawn from
+// the palette that is current at render time, not the one that was loaded
+// when the app started.
+func TestThemeHotReloadCarriesTheFocusCues(t *testing.T) {
+	m, colors := themeFixture(t)
+	m.width, m.height = 80, 20
+
+	before := m.View().Content
+
+	// A palette whose accent differs from the fixture's.
+	body := "background = \"#101010\"\naccent = \"#ff8800\"\n"
+	if err := os.WriteFile(colors, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	msg := awaitReload(t, m.waitThemeCmd())
+	updated, _ := m.Update(msg)
+	m = updated.(Model)
+
+	after := m.View().Content
+	if before == after {
+		t.Fatal("the view did not change with the palette")
+	}
+	if !strings.Contains(after, ansiBackground(m.theme.ActiveHeaderBG())) {
+		t.Error("the focused pane's band should follow the reloaded palette")
+	}
+}
+
+// ansiBackground renders the escape sequence lipgloss emits for a hex
+// background colour.
+func ansiBackground(hex string) string {
+	var r, g, b int
+	if _, err := fmt.Sscanf(hex, "#%02x%02x%02x", &r, &g, &b); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("48;2;%d;%d;%d", r, g, b)
 }
 
 func TestRelevantThemeEvent(t *testing.T) {
