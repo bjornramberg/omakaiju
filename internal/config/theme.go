@@ -136,6 +136,15 @@ func (t Theme) PaneInactive() lipgloss.Style {
 		Padding(1, 2)
 }
 
+// PaneMarker marks the focused pane's header. It is a shape cue first and a
+// colour cue second: the glyph itself says which pane has focus, so the
+// marker still reads where two colours are too close to tell apart.
+func (t Theme) PaneMarker() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(t.Primary)).
+		Bold(true)
+}
+
 func (t Theme) TopBar() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder(), false, false, true, false).

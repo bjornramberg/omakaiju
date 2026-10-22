@@ -79,8 +79,23 @@ func (p Pane) Render() string {
 		listRows = 1
 	}
 
+	// The header reserves a marker column in both panes, so the path starts
+	// in the same column either way and the marker is a shape cue first: it
+	// says which pane has focus even where the colours are too close to tell
+	// apart. A pane too narrow for a marker keeps the whole width for the
+	// path.
+	marker, sep, pathWidth := "", "", inner
+	if inner >= 3 {
+		marker = " "
+		if p.Active {
+			marker = p.Theme.PaneMarker().Render("▸")
+		}
+		sep = " "
+		pathWidth = inner - 2
+	}
+
 	pathStyle := p.Theme.PathText().UnsetPaddingLeft().UnsetPaddingRight()
-	header := pathStyle.Width(inner).MaxWidth(inner).Render(TruncateName(p.Path, inner))
+	header := marker + sep + pathStyle.Width(pathWidth).MaxWidth(pathWidth).Render(TruncateName(p.Path, pathWidth))
 
 	var body string
 	if len(p.Files) == 0 {
