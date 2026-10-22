@@ -141,6 +141,37 @@ func rawLineWith(s, sub string) string {
 	return ""
 }
 
+// The focused pane's header sits on a band of its own, so the pane holding
+// the focus reads apart even where the border colours do not.
+func TestFocusedPaneHasItsOwnHeaderBand(t *testing.T) {
+	theme := config.DefaultTheme()
+	band := ansiBackground(theme.ActiveHeaderBG())
+
+	focusedRow := rawLineWith(focusFixture(t, true, 40).Render(), "/home/user")
+	unfocusedRow := rawLineWith(focusFixture(t, false, 40).Render(), "/home/user")
+
+	if !strings.Contains(focusedRow, band) {
+		t.Error("the focused pane's header should sit on the theme's band colour")
+	}
+	if strings.Contains(unfocusedRow, band) {
+		t.Error("the unfocused pane should not carry a band")
+	}
+}
+
+// The band belongs to the header row alone. A tinted pane background would
+// run into the selection bar, which is drawn in the theme's selection colour
+// and is often the same hue as the accent: the cursor row would disappear
+// into the surface it sits on.
+func TestTheBandStaysOffTheListing(t *testing.T) {
+	theme := config.DefaultTheme()
+	band := ansiBackground(theme.ActiveHeaderBG())
+
+	row := rawLineWith(focusFixture(t, true, 40).Render(), "alpha.txt")
+	if strings.Contains(row, band) {
+		t.Error("the band should stay on the header row, not under the listing")
+	}
+}
+
 // ansiForeground renders the escape sequence lipgloss emits for a hex
 // foreground colour.
 func ansiForeground(hex string) string {

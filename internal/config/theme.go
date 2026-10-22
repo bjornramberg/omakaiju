@@ -72,6 +72,10 @@ const dimAmount = 0.55
 // listing stays readable, but it stops shouting.
 const accentDimAmount = 0.45
 
+// bandAmount is how far the focused pane's header band is blended from the
+// theme background toward the primary colour.
+const bandAmount = 0.25
+
 // blend mixes two hex colours, t being the weight of b. It reports false
 // when either colour is not a hex value, so the caller can fall back to the
 // unblended colour instead of guessing at a mix.
@@ -196,6 +200,22 @@ func (t Theme) dimmedAccentColor() string {
 	return blendColor(t.Accent, t.DimmedColor(), accentDimAmount, t.Accent)
 }
 
+// ActiveHeaderBG is the focused pane's header band: the theme background
+// blended toward the primary colour.
+//
+// The band lives on the header row rather than over the whole pane on
+// purpose. A tinted pane background would run into the selection bar, which
+// is drawn in the theme's selection colour and is often the same hue as the
+// accent: the cursor row would disappear into the surface it sits on. The
+// header is a row of its own, so the band can be as strong as it likes
+// without touching the listing.
+//
+// Like every other derived colour it is computed from the live palette, so a
+// theme switch carries it along.
+func (t Theme) ActiveHeaderBG() string {
+	return blendColor(t.BGDark, t.Primary, bandAmount, t.BGDark)
+}
+
 func (t Theme) PaneActive() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -212,13 +232,19 @@ func (t Theme) PaneInactive() lipgloss.Style {
 		Padding(1, 2)
 }
 
-// PaneMarker marks the focused pane's header. It is a shape cue first and a
-// colour cue second: the glyph itself says which pane has focus, so the
-// marker still reads where two colours are too close to tell apart.
-func (t Theme) PaneMarker() lipgloss.Style {
+// PaneHeaderActive is the focused pane's header: the path and the marker on
+// a band of the pane's own.
+func (t Theme) PaneHeaderActive() lipgloss.Style {
 	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color(t.Primary)).
+		Foreground(lipgloss.Color(t.FGMain)).
+		Background(lipgloss.Color(t.ActiveHeaderBG())).
 		Bold(true)
+}
+
+// PaneHeaderInactive is the unfocused pane's header.
+func (t Theme) PaneHeaderInactive() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(t.DimmedColor()))
 }
 
 func (t Theme) TopBar() lipgloss.Style {
@@ -318,12 +344,6 @@ func (t Theme) PathText() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color(t.FGMain)).
 		Bold(true)
-}
-
-// PathTextUnfocused is the unfocused pane's header path.
-func (t Theme) PathTextUnfocused() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color(t.DimmedColor()))
 }
 
 func (t Theme) AccentText() lipgloss.Style {

@@ -260,4 +260,30 @@ func TestDerivedColoursFollowThePalette(t *testing.T) {
 	if one.DimmedColor() == two.DimmedColor() {
 		t.Error("the dimmed colour should change with the palette")
 	}
+	if one.ActiveHeaderBG() == two.ActiveHeaderBG() {
+		t.Error("the focused pane's header band should change with the palette")
+	}
+}
+
+// The focused pane's band is the theme background blended toward the
+// primary colour, not a colour of its own.
+func TestActiveHeaderBGIsBlendedFromThePalette(t *testing.T) {
+	theme := DefaultTheme()
+
+	bg := theme.ActiveHeaderBG()
+	if bg == theme.BGDark {
+		t.Error("the focused pane's band should differ from the plain background")
+	}
+	if bg == theme.Primary {
+		t.Error("the focused pane's band should not be the primary colour itself")
+	}
+}
+
+func TestActiveHeaderBGFallsBackWhenThePaletteIsNotHex(t *testing.T) {
+	theme := DefaultTheme()
+	theme.BGDark = "black"
+
+	if got := theme.ActiveHeaderBG(); got != "black" {
+		t.Errorf("ActiveHeaderBG = %q, want the fallback %q", got, "black")
+	}
 }

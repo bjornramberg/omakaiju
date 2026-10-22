@@ -88,17 +88,19 @@ func (p Pane) Render() string {
 	if inner >= 3 {
 		marker = " "
 		if p.Active {
-			marker = p.Theme.PaneMarker().Render("▸")
+			marker = "▸"
 		}
 		sep = " "
 		pathWidth = inner - 2
 	}
 
-	pathStyle := p.Theme.PathText().UnsetPaddingLeft().UnsetPaddingRight()
-	if !p.Active {
-		pathStyle = p.Theme.PathTextUnfocused().UnsetPaddingLeft().UnsetPaddingRight()
+	// The header is rendered as a single run, so the focused pane's band
+	// covers the marker cell along with the path.
+	headerStyle := p.Theme.PaneHeaderInactive()
+	if p.Active {
+		headerStyle = p.Theme.PaneHeaderActive()
 	}
-	header := marker + sep + pathStyle.Width(pathWidth).MaxWidth(pathWidth).Render(TruncateName(p.Path, pathWidth))
+	header := headerStyle.Width(inner).MaxWidth(inner).Render(marker + sep + TruncateName(p.Path, pathWidth))
 
 	var body string
 	if len(p.Files) == 0 {
