@@ -112,6 +112,15 @@ func (c *Copier) add(src, dstDir string) error {
 	if err != nil {
 		return err
 	}
+
+	// Copying an entry onto itself would truncate the source before reading
+	// it back. The depth guard below catches a directory copied into its own
+	// subtree, but a copy at exactly the same path slips past it, so refuse
+	// it here where the destination is known.
+	if filepath.Clean(filepath.Join(dstDir, filepath.Base(src))) == filepath.Clean(src) {
+		return fmt.Errorf("copy: %s onto itself", src)
+	}
+
 	if info.Mode()&os.ModeSymlink != 0 {
 		target, err := os.Readlink(src)
 		if err != nil {

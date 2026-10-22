@@ -1466,7 +1466,7 @@ func (m Model) handleYank() (tea.Model, tea.Cmd) {
 
 // handleMove toggles the cursor entry in the marked set. Pressing m again on
 // an already-marked entry unmarks it, so several files or folders can be staged
-// before moving them to the other pane with p.
+// before moving them into the pane under the cursor with Shift+V.
 func (m Model) handleMove() (tea.Model, tea.Cmd) {
 	files := m.visibleFiles(m.activePane)
 	cursor := m.rawCursor(m.activePane)
@@ -1527,8 +1527,13 @@ func copyTotalBytes(files []fs.Entry) int64 {
 	return total
 }
 
-// handlePaste moves everything marked with m to the other pane, falling back to
-// the single file staged by y when nothing is marked.
+// handlePaste drops everything into the active pane's current directory — the
+// pane the user is looking at is where a paste belongs, wherever the copy was
+// started. Tabbing to the other pane and pasting therefore targets that pane,
+// and pasting after navigating inside the copying pane gains a fresh copy
+// there. Marks outweigh the y-staged file, and a file already sitting in the
+// target is skipped while the clipboard stays armed, so tabbing somewhere
+// else can still complete the copy.
 func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 	if m.copier != nil {
 		m.opResult = "copy in progress"
@@ -1541,11 +1546,18 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	targetPath := m.rawPath(1 - m.activePane)
+	targetPath := m.rawPath(m.activePane)
 
 	// Large copies run through the steppable copier so progress is visible and
 	// the operation can be cancelled.
 	if m.clipboard.Action == "copy" {
+		for _, file := range m.clipboard.Files {
+			dst := filepath.Join(targetPath, file.Name)
+			if filepath.Clean(dst) == filepath.Clean(file.Path) {
+				m.opResult = "already in this directory"
+				return m, nil
+			}
+		}
 		if total := copyTotalBytes(m.clipboard.Files); total >= copyProgressThreshold {
 			srcs := make([]string, 0, len(m.clipboard.Files))
 			for _, f := range m.clipboard.Files {
@@ -1561,11 +1573,18 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	for _, file := range m.clipboard.Files {
 		dst := filepath.Join(targetPath, file.Name)
+		if filepath.Clean(dst) == filepath.Clean(file.Path) {
+			continue
+		}
 		if m.clipboard.Action == "copy" {
 			cmds = append(cmds, copyCmd(file.Path, dst))
 		} else {
 			cmds = append(cmds, moveCmd(file.Path, dst))
 		}
+	}
+	if len(cmds) == 0 {
+		m.opResult = "already in this directory"
+		return m, nil
 	}
 
 	m.clipboardOn = false
@@ -1573,11 +1592,11 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// pasteMarks moves the marked set into the inactive pane. Entries that vanished
-// from disk, or that already sit in the destination, are skipped so a stale
-// mark cannot fail the whole batch.
+// pasteMarks moves the marked set into the active pane's current directory.
+// Entries that vanished from disk, or that already sit in the destination,
+// are skipped so a stale mark cannot fail the whole batch.
 func (m Model) pasteMarks() (tea.Model, tea.Cmd) {
-	targetPath := m.rawPath(1 - m.activePane)
+	targetPath := m.rawPath(m.activePane)
 
 	var cmds []tea.Cmd
 	moved, skipped := 0, 0

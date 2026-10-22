@@ -289,3 +289,42 @@ func assertNoDeepNesting(t *testing.T, root string) {
 	}
 	walk(root, 0)
 }
+
+// Copying a file onto itself used to open the destination with O_TRUNC while
+// the source was still open, truncating the inode before anything was read
+// back — the file became empty. The refusal must happen before any write.
+func TestCopyRefusesSamePath(t *testing.T) {
+	base := t.TempDir()
+	src := filepath.Join(base, "keep.txt")
+	if err := os.WriteFile(src, []byte("precious"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, op := range []struct {
+		name string
+		run  func() error
+	}{
+		{"CopyRecursive", func() error { return CopyRecursive(src, src) }},
+		{"Copy", func() error { return Copy(src, filepath.Clean(src)) }},
+		{"Copier", func() error {
+			c, err := NewCopier([]string{src}, base)
+			if err != nil {
+				return err
+			}
+			return c.Abort()
+		}},
+	} {
+		t.Run(op.name, func(t *testing.T) {
+			if err := op.run(); err == nil {
+				t.Error("copying a file onto itself should be refused")
+			}
+			got, rerr := os.ReadFile(src)
+			if rerr != nil {
+				t.Fatalf("source unreadable: %v", rerr)
+			}
+			if string(got) != "precious" {
+				t.Error("the source file must be untouched after the refusal")
+			}
+		})
+	}
+}

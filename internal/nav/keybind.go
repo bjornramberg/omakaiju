@@ -69,7 +69,7 @@ var Keybinds = []Keybind{
 
 	// File Operations (Shift + key)
 	{"shift+c", ActionCopy, "copy (yank)", SectionFileOps},
-	{"shift+v", ActionPaste, "paste / move marked", SectionFileOps},
+	{"shift+v", ActionPaste, "paste into this pane", SectionFileOps},
 	{"shift+d", ActionDelete, "delete", SectionFileOps},
 	{"shift+m", ActionMark, "mark / unmark", SectionFileOps},
 	{"shift+a", ActionAdd, "add file / directory", SectionFileOps},

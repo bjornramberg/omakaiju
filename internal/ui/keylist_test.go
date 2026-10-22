@@ -41,8 +41,8 @@ func TestFilterKeyRowsSearchesBothColumns(t *testing.T) {
 	}
 
 	pane := FilterKeyRows(rows, "pane")
-	if len(pane) != 4 {
-		t.Fatalf("searching pane should find the four pane rows, got %v", pane)
+	if len(pane) != 5 {
+		t.Fatalf("searching pane should find the five pane rows, got %v", pane)
 	}
 	for _, row := range pane {
 		if !strings.Contains(row.Desc, "pane") {

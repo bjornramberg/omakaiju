@@ -63,7 +63,7 @@ func TestKeyRowsMergeAliases(t *testing.T) {
 		"switch pane":                  "tab",
 		"jump to file by first letter": "space+key",
 		"copy (yank)":                  "shift+c",
-		"paste / move marked":          "shift+v",
+		"paste into this pane":         "shift+v",
 		"delete":                       "shift+d",
 		"mark / unmark":                "shift+m",
 		"add file / directory":         "shift+a",

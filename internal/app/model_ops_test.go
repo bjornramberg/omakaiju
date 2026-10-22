@@ -357,6 +357,11 @@ func TestPasteMovesMarkedSetToOtherPane(t *testing.T) {
 		m = updated.(Model)
 	}
 
+	// Marks land in whatever pane is highlighted at paste time, so the
+	// destination is picked by tabbing over before Shift+V.
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
+
 	updated, cmd := m.Update(shiftKey('v'))
 	m = updated.(Model)
 	if cmd == nil {
@@ -398,6 +403,9 @@ func TestPasteSkipsStaleMarks(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
+
 	updated, cmd := m.Update(shiftKey('v'))
 	m = updated.(Model)
 
@@ -411,16 +419,14 @@ func TestPasteSkipsStaleMarks(t *testing.T) {
 }
 
 func TestPasteSkipsEntryAlreadyInTarget(t *testing.T) {
-	m, src, _ := twoPaneFixture(t)
+	m, _, _ := twoPaneFixture(t)
 
 	m = moveCursorTo(t, m, "alpha.txt")
 	updated, _ := m.Update(shiftKey('m'))
 	m = updated.(Model)
 
-	// Point the destination at the same directory as the source so the
-	// marked entry is already in place.
-	m.rightPath = src
-
+	// The marked entry already sits in the active pane's directory, so the
+	// paste has nothing to redistribute.
 	updated, _ = m.Update(shiftKey('v'))
 	m = updated.(Model)
 
@@ -429,11 +435,77 @@ func TestPasteSkipsEntryAlreadyInTarget(t *testing.T) {
 	}
 }
 
+// Pasting without leaving the pane, after navigating around, targets the
+// active pane's current directory: the file the user sees is where it lands.
+func TestYankPasteIntoNavigatedSamePane(t *testing.T) {
+	m, src, dst := twoPaneFixture(t)
+
+	// The fixture already provides "subdir", so the active pane's cursor can
+	// be pointed at it directly, like the user having entered it.
+	sub := filepath.Join(src, "subdir")
+
+	m = yankCopy(t, m, "alpha.txt")
+	m.setPath(0, sub)
+
+	updated, cmd := m.Update(shiftKey('v'))
+	m = updated.(Model)
+	requireNoOpErrors(t, runBatch(t, cmd))
+
+	if _, err := os.Stat(filepath.Join(sub, "alpha.txt")); err != nil {
+		t.Errorf("copy missing from the navigated directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(src, "alpha.txt")); err != nil {
+		t.Errorf("a copy must leave the original in place: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "alpha.txt")); err == nil {
+		t.Error("the other pane must not receive anything while inactive")
+	}
+}
+
+// Yanking and pasting without going anywhere is refused with the clipboard
+// still armed — most importantly with the source file byte-for-byte intact,
+// since a naive same-path copy would truncate it before reading.
+func TestYankPasteSameDirectorySkips(t *testing.T) {
+	m, src, _ := twoPaneFixture(t)
+
+	target := filepath.Join(src, "alpha.txt")
+	want, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m = yankCopy(t, m, "alpha.txt")
+	updated, cmd := m.Update(shiftKey('v'))
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Error("nothing should be dispatched for a same-directory paste")
+	}
+	if m.opResult != "already in this directory" {
+		t.Errorf("opResult = %q, want %q", m.opResult, "already in this directory")
+	}
+	if !m.clipboardOn {
+		t.Error("the clipboard should stay armed so tabbing elsewhere can still paste")
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("source file unreadable: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Error("the source file must survive an in-place paste attempt unchanged")
+	}
+}
+
 func TestYankPasteStillWorksWithoutMarks(t *testing.T) {
 	m, _, dst := twoPaneFixture(t)
 
 	m = moveCursorTo(t, m, "alpha.txt")
 	updated, _ := m.Update(shiftKey('c'))
+	m = updated.(Model)
+
+	// Paste targets the highlighted pane, so tab over first.
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
 	m = updated.(Model)
 
 	updated, cmd := m.Update(shiftKey('v'))
@@ -539,6 +611,8 @@ func TestSmallCopyUsesBlockingPath(t *testing.T) {
 	m.leftFiles = files
 
 	m = yankCopy(t, m, "small.bin")
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
 	updated, cmd := m.Update(shiftKey('v'))
 	m = updated.(Model)
 
@@ -566,6 +640,8 @@ func TestLargeCopyStartsProgressJob(t *testing.T) {
 	m.leftFiles = files
 
 	m = yankCopy(t, m, "big.bin")
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
 	updated, cmd := m.Update(shiftKey('v'))
 	m = updated.(Model)
 

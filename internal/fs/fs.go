@@ -254,10 +254,20 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 
 // copyFile copies a regular file's contents, keeping its permission bits.
 //
+// A same-path destination is refused outright: the destination is opened with
+// O_TRUNC before the source is read, so copying a file onto itself would
+// truncate the inode and then read nothing back, silently destroying the
+// file. Callers that legitimately want to skip such an entry already compare
+// the paths before dispatching.
+//
 // The setuid, setgid and sticky bits are deliberately dropped: a copied
 // setuid binary in a world-writable directory is a privilege escalation
 // waiting to happen, and no file manager should hand one out by accident.
 func copyFile(src, dst string, mode os.FileMode) error {
+	if filepath.Clean(src) == filepath.Clean(dst) {
+		return fmt.Errorf("copy: %s onto itself", src)
+	}
+
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
