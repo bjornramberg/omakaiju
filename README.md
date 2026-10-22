@@ -34,15 +34,31 @@ The installer detects your architecture (`amd64`/`arm64`), verifies the download
 
 ---
 
-## Keybindings
+## Using omakaiju
 
-Navigation is as simple as using your **Arrow Keys** and **Tab** to switch active panes. 
+omakaiju is built around three things you already know:
 
-For all other operations, the only shortcut you need to remember is **`Shift+K`**. This brings up the overlay—a searchable, sectioned list where you can filter shortcuts instantly (type to filter by key or action, e.g., typing *"pane"* or *"copy"*).
+* **Arrow keys** move the cursor, and `←` walks back up to the parent directory.
+* **`Tab`** switches between the two panes.
+* **`Shift+K`** opens the full key list: a searchable, sectioned overlay where you can filter by key or action — type *"pane"* or *"copy"* to narrow it down.
+
+Everything else is a **Shift + letter** combination: `Shift+C` copies, `Shift+V` pastes, `Shift+D` deletes, `Shift+F` filters the listing. The complete table lives in the [Keybindings](#keybindings) section further down.
 
 ```
 Shift+K:keys   q:quit
 ```
+
+### Which pane has the focus
+
+The focused pane is marked three ways at once, so it stays obvious on a dim
+screen and where two colours are too close to tell apart:
+
+* a marker glyph in its header, the shape cue that needs no colour at all
+* a band across its header, the theme background blended toward the accent
+* a dimmed listing in the other pane, whose cursor row drops the selection bar
+
+All three are derived from the same palette the rest of the UI draws from, so
+they follow a theme switch along with everything else.
 
 ---
 
@@ -93,6 +109,8 @@ omakaiju automatically reads colors from `~/.local/state/omarchy/current/theme/c
 
 ### Local Development & Hacking
 
+This README is the design document. It is what users read on GitHub and in the release tarball, and the tests check it against the code: the keybinding table is compared with the keybind table, so a change to the app that makes the README wrong fails the build.
+
 Requires Go 1.27+ on a Unix-like system.
 
 ```bash
@@ -131,17 +149,59 @@ curl -fsSL https://github.com/bjornramberg/omakaiju/releases/latest/download/oma
 
 ---
 
-### Which pane has the focus
+## Keybindings
 
-The focused pane is marked three ways at once, so it stays obvious on a dim
-screen and where two colours are too close to tell apart:
+The complete list of what the app binds. It is compared with the code on
+every build, so it cannot drift away from what the keys actually do.
 
-- a marker glyph in its header, the shape cue that needs no colour at all
-- a band across its header, the theme background blended toward the accent
-- a dimmed listing in the other pane, whose cursor row drops the selection bar
+### Navigation
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` / `←` / `→` | Move cursor (cursor restores to exited dirname on `←`) |
+| `Enter` | Enter directory, or open file with the desktop handler (`gio open`, `xdg-open` fallback) |
+| `→` | Enter directory only (never opens files) |
+| `Tab` | Toggle active pane |
 
-All three are derived from the same palette the rest of the UI draws from, so
-they follow a theme switch along with everything else.
+### Jump (Space + letter)
+| Key | Action |
+|-----|--------|
+| `Space` + `a`–`z` | Jump to first file starting with letter (sorting-aware, wraps) |
+
+### File Operations (Shift + key)
+| Key | Action |
+|-----|--------|
+| `Shift+C` | Copy (yank) entry under cursor |
+| `Shift+V` | Paste / move marked entries |
+| `Shift+D` | Delete prompt: `t`rash (default, also `y`/`Enter`), `f`orce delete, `n`/`Esc` cancel |
+| `Shift+M` | Mark / unmark entry (repeat to select several for bulk move) |
+| `Shift+A` | Add file/directory (trailing `/` creates a directory) |
+| `Shift+R` | Rename entry under cursor |
+
+### Pane / View (Shift + key)
+| Key | Action |
+|-----|--------|
+| `Shift+S` | Stack file panes vertically / restore side by side |
+| `Shift+O` | Cycle sort order: name → size↓ → size↑ → name (dirs stay first) |
+| `Shift+I` | Toggle preview |
+| `Shift+P` | Fuzzy find (`j/k` navigate, type/backspace refines, `Enter` jumps, `Esc` exits) |
+| `Shift+F` | Filter pane (per-pane, arrows keep the prompt open) |
+| `Shift+G` | Goto path |
+| `Shift+E` | Refresh active pane |
+| `Shift+K` | Key list overlay: search across keys and descriptions, arrow keys to browse, closes with `Esc`/`Shift+K` |
+
+### System
+| Key | Action |
+|-----|--------|
+| `q` / `Shift+Q` | Quit |
+| `Esc` | Cancel copy / dismiss prompt / clear filter |
+
+The shifted key is the whole binding: `Shift+G` opens the goto prompt and the
+unshifted `g` does nothing. In the file view only `q`, `Esc`, `Tab`, `Enter`,
+the arrows and `Space` work without a modifier — every other binding needs the
+shift. The overlays have their own keys: `j`/`k` move in the fuzzy finder, the
+arrows walk the key list, and typing searches in both.
+
+Long copies show a progress bar; `Esc` cancels and removes only the partial file.
 
 ## License
 
