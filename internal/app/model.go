@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -44,8 +45,108 @@ type dirLoadedMsg struct {
 	err   error
 }
 
+// opFailure is one entry a file operation could not finish, with the reason
+// reduced to something a person can read.
+type opFailure struct {
+	name string
+	// path is the entry's source path, used to put a failed move back into
+	// the marked set so it can be retried.
+	path string
+	err  error
+}
+
+// fileOpMsg reports the outcome of a file operation, or of a whole batch.
+//
+// A batch runs to completion inside a single command and reports back as one
+// message. That is what makes its outcome independent of completion order:
+// there is no race between per-file messages, so one failure cannot be erased
+// by a success that happens to arrive after it.
 type fileOpMsg struct {
-	err error
+	// verb is the past tense shown for the successful entries: "moved",
+	// "copied", "pasted", "deleted", "trashed", "renamed", "created".
+	verb string
+	// name is set for a single-entry operation, which reads better as
+	// "<verb> <name>" than as a count.
+	name      string
+	succeeded int
+	skipped   int
+	failures  []opFailure
+	// text, when set, replaces the generated result. It is for outcomes that
+	// are more than a count, such as a trash that moved the payload but could
+	// not write its metadata.
+	text string
+	// marks holds the marked entries a move batch attempted, keyed by path.
+	// A failed entry is put back so the user can fix the cause and retry
+	// instead of marking everything again.
+	marks map[string]fs.Entry
+	// clipboard is the paste selection the batch consumed. A failed paste
+	// re-arms it for the same reason.
+	clipboard *Clipboard
+}
+
+// result renders the line shown in the bottom bar. Failures are sorted by
+// name, so the same batch always reads the same way, whatever order its work
+// happened to finish in.
+func (msg fileOpMsg) result() string {
+	if msg.text != "" {
+		return msg.text
+	}
+	if len(msg.failures) == 0 && msg.skipped == 0 && msg.succeeded == 1 && msg.name != "" {
+		return msg.verb + " " + msg.name
+	}
+
+	var parts []string
+	if msg.succeeded > 0 {
+		parts = append(parts, fmt.Sprintf("%s %d file(s)", msg.verb, msg.succeeded))
+	}
+	if msg.skipped > 0 {
+		parts = append(parts, fmt.Sprintf("skipped %d", msg.skipped))
+	}
+	if len(msg.failures) > 0 {
+		failures := append([]opFailure(nil), msg.failures...)
+		sort.Slice(failures, func(i, j int) bool { return failures[i].name < failures[j].name })
+		reasons := make([]string, 0, len(failures))
+		for _, f := range failures {
+			reasons = append(reasons, fmt.Sprintf("%s (%s)", f.name, readableOpError(f.err)))
+		}
+		parts = append(parts, fmt.Sprintf("failed %d: %s", len(failures), strings.Join(reasons, ", ")))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// readableOpError strips the noisy prefix os.LinkError and os.PathError add
+// ("rename /a /b: ", "open /a: ") and keeps the reason the user can act on,
+// such as "permission denied". The file name is already shown beside it, so
+// repeating the path adds nothing.
+func readableOpError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) && linkErr.Err != nil {
+		err = linkErr.Err
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) && pathErr.Err != nil {
+		err = pathErr.Err
+	}
+	return err.Error()
+}
+
+// opItem is one entry in a batch: its display name, source, and destination.
+type opItem struct {
+	name string
+	src  string
+	dst  string
+}
+
+// singularResult builds the one-entry result of an operation that finished
+// inline, such as creating or renaming an entry.
+func singularResult(verb, name string, err error) fileOpMsg {
+	if err != nil {
+		return fileOpMsg{verb: verb, failures: []opFailure{{name: name, err: err}}}
+	}
+	return fileOpMsg{verb: verb, name: name, succeeded: 1}
 }
 
 // copyProgressMsg reports one chunk of an in-flight copy and asks for the next
@@ -54,6 +155,13 @@ type copyProgressMsg struct {
 	copier *fs.Copier
 	done   bool
 	err    error
+	// name is the file the step was working on when it failed, captured
+	// before Step ran because a failed Step drops the copier's pointer to
+	// the current entry.
+	name string
+	// path is where that file was read from, so a failed transfer can put
+	// the entry back for another try.
+	path string
 	// gen identifies the copy this message belongs to.
 	//
 	// A copy that was cancelled still has a step in flight, and its message
@@ -61,6 +169,10 @@ type copyProgressMsg struct {
 	// against, the message would adopt its dead copier, block the keys
 	// again and report a copy that never finished.
 	gen int
+	// move marks the transfer as a move rather than a copy. A move removes
+	// the source once the copy has landed, so it is reported with its own
+	// wording.
+	move bool
 }
 
 // openMsg reports the result of opening a file with the desktop handler. It is
@@ -154,7 +266,13 @@ type Model struct {
 	rightPath   string
 	rightFiles  []fs.Entry
 	rightCursor int
-	loadErr     error
+	// loadErr reports a directory-listing failure. It is deliberately
+	// separate from opErr: a pane reload must never erase the outcome of a
+	// file operation, and an operation must not erase a listing error.
+	loadErr error
+	// opErr reports the last file-operation failure. It survives the pane
+	// reloads an operation triggers and is cleared only when the user acts.
+	opErr error
 
 	clipboard     Clipboard
 	clipboardOn   bool
@@ -170,14 +288,24 @@ type Model struct {
 	// cancelled. Small copies skip this and use the blocking path.
 	copier    *fs.Copier
 	copyFiles int
+	// copyClipboard is the paste selection a large copy consumed. If the copy
+	// fails, the selection is re-armed so the paste can be retried.
+	copyClipboard *Clipboard
+	// copyMarks holds the marked entries a move consumed. A failed entry is
+	// put back so the user can fix the cause and try again.
+	copyMarks map[string]fs.Entry
+	// copySkipped counts the entries a move never attempted, such as ones
+	// that had already vanished. They are reported with the result.
+	copySkipped int
 	// copyGen identifies the current copy. It changes whenever a copy
 	// starts or ends, so a message from a copy that has been cancelled is
 	// recognised as stale and dropped.
 	copyGen int
 
-	// leftRestore/rightRestore hold the directory name the cursor should return
-	// to after going up a level, so leaving and re-entering a folder keeps the
-	// position instead of jumping to the top.
+	// leftRestore/rightRestore hold the name the cursor should land on when a
+	// pane's listing loads: the directory we came from after going up a level,
+	// and the entry a copy, move, or paste just put there. Without them both
+	// operations end with the pane scrolled back to the top.
 	leftRestore  string
 	rightRestore string
 
@@ -311,10 +439,34 @@ func loadDirCmd(pane int, path string) tea.Cmd {
 	})
 }
 
-func copyCmd(src, dst string) tea.Cmd {
-	return safeCmd("copy", func() tea.Msg {
-		err := fs.CopyRecursive(src, dst)
-		return fileOpMsg{err: err}
+// batchOpCmd applies one operation to every item in a single command and
+// reports one aggregate result. Running the whole batch here rather than
+// dispatching one command per entry is what keeps the outcome independent of
+// completion order: there is exactly one message to apply.
+//
+// marks and clipboard are the selection the batch consumes. They ride along on
+// the result so a failure can restore what the user would otherwise have to
+// select again.
+func batchOpCmd(verb string, items []opItem, skipped int, marks map[string]fs.Entry, clipboard *Clipboard, op func(src, dst string) error) tea.Cmd {
+	return safeCmd(verb, func() tea.Msg {
+		msg := fileOpMsg{verb: verb, skipped: skipped, marks: marks, clipboard: clipboard}
+		for _, item := range items {
+			if err := op(item.src, item.dst); err != nil {
+				msg.failures = append(msg.failures, opFailure{name: item.name, path: item.src, err: err})
+				continue
+			}
+			msg.succeeded++
+		}
+		return msg
+	})
+}
+
+// singleOpCmd runs one path-based operation and reports it as a one-entry
+// result. The name is reported even when the operation fails, so the user can
+// tell which file was involved.
+func singleOpCmd(verb, name, path string, op func(string) error) tea.Cmd {
+	return safeCmd(verb, func() tea.Msg {
+		return singularResult(verb, name, op(path))
 	})
 }
 
@@ -323,14 +475,47 @@ func copyCmd(src, dst string) tea.Cmd {
 // small copies keep the simple path and just report a result.
 const copyProgressThreshold = 1 << 20
 
-// startCopyCmd builds the copier and performs the first step.
-func startCopyCmd(srcs []string, dstDir string, gen int) tea.Cmd {
+// startCopyCmd builds the copier and performs the first step. clipboard is the
+// paste selection the copy consumed, restored if the job cannot start.
+func startCopyCmd(srcs []string, dstDir string, gen int, clipboard *Clipboard) tea.Cmd {
 	return safeCmd("copy-start", func() tea.Msg {
 		copier, err := fs.NewCopier(srcs, dstDir)
 		if err != nil {
-			return fileOpMsg{err: err}
+			// Nothing was copied. Name each source so the failure reads
+			// like any other aggregate result.
+			msg := fileOpMsg{verb: "copied", clipboard: clipboard}
+			for _, src := range srcs {
+				msg.failures = append(msg.failures, opFailure{name: filepath.Base(src), path: src, err: err})
+			}
+			return msg
 		}
 		return copyProgressMsg{copier: copier, gen: gen}
+	})
+}
+
+// startMoveCmd builds the mover and performs the first step.
+//
+// A move within one filesystem is a rename, and it costs nothing. A move
+// onto another filesystem — a share, say — cannot be a rename, so the entry
+// is copied across, and that copy has to travel. It therefore runs through
+// the same steppable machinery as a copy, and gets a progress bar and a
+// cancel of its own.
+//
+// The marks ride along on the result so a move that fails can put the
+// selection back the way it was.
+func startMoveCmd(srcs []string, dstDir string, gen int, marks map[string]fs.Entry, skipped int) tea.Cmd {
+	return safeCmd("move-start", func() tea.Msg {
+		copier, err := fs.NewMover(srcs, dstDir)
+		if err != nil {
+			msg := fileOpMsg{verb: "moved", skipped: skipped, marks: marks}
+			for _, src := range srcs {
+				msg.failures = append(msg.failures, opFailure{name: filepath.Base(src), path: src, err: err})
+			}
+			return msg
+		}
+		// A move that had nothing to copy is already finished, so it reports
+		// straight away rather than flashing a progress bar for a frame.
+		return copyProgressMsg{copier: copier, gen: gen, move: true, done: copier.Pending() == 0}
 	})
 }
 
@@ -341,25 +526,20 @@ func stepCopyCmd(copier *fs.Copier, gen int) tea.Cmd {
 		// today, but the guard costs nothing and turns a future mistake
 		// into a reported error instead of a dead session.
 		if copier == nil {
-			return fileOpMsg{err: errors.New("copy: no copier in flight")}
+			return singularResult("copied", "copy", errors.New("no copier in flight"))
 		}
+		// Capture the file before Step runs: a failed Step discards the
+		// copier's pointer to the current job, which is exactly the file
+		// the user needs named in the error.
+		name := copier.CurrentName()
+		path := copier.CurrentSource()
 		done, err := copier.Step()
-		return copyProgressMsg{copier: copier, done: done, err: err, gen: gen}
-	})
-}
-
-func moveCmd(src, dst string) tea.Cmd {
-	return safeCmd("move", func() tea.Msg {
-		err := fs.Move(src, dst)
-		return fileOpMsg{err: err}
+		return copyProgressMsg{copier: copier, done: done, err: err, name: name, path: path, gen: gen, move: copier.IsMove()}
 	})
 }
 
 func deleteCmd(path string) tea.Cmd {
-	return safeCmd("delete", func() tea.Msg {
-		err := fs.Delete(path)
-		return fileOpMsg{err: err}
-	})
+	return singleOpCmd("deleted", filepath.Base(path), path, fs.Delete)
 }
 
 func openCmd(path, name string) tea.Cmd {
@@ -368,10 +548,32 @@ func openCmd(path, name string) tea.Cmd {
 	})
 }
 
+// trashCmd moves a path into the trash. Trash reports the payload's new
+// location alongside an error: once the rename has happened, a failure to
+// write the .trashinfo record leaves the file in the trash with nothing
+// pointing back to where it came from. That destination must be shown, or the
+// user is told the delete failed while the file is no longer where it was.
 func trashCmd(path string) tea.Cmd {
 	return safeCmd("trash", func() tea.Msg {
-		_, err := fs.Trash(path)
-		return fileOpMsg{err: err}
+		name := filepath.Base(path)
+		newPath, err := fs.Trash(path)
+		if err == nil {
+			return fileOpMsg{verb: "trashed", name: name, succeeded: 1}
+		}
+
+		reason := readableOpError(err)
+		if newPath == "" {
+			return fileOpMsg{
+				verb:     "trashed",
+				failures: []opFailure{{name: name, path: path, err: err}},
+				text:     fmt.Sprintf("trash failed: %s did not move (%s)", name, reason),
+			}
+		}
+		return fileOpMsg{
+			verb:     "trashed",
+			failures: []opFailure{{name: name, path: path, err: err}},
+			text:     fmt.Sprintf("trashed %s to %s (write failed: %s)", name, newPath, reason),
+		}
 	})
 }
 
@@ -588,23 +790,46 @@ func (m *Model) setRestore(pane int, name string) {
 	}
 }
 
-func (m *Model) takeRestore(pane int) string {
+// restoreOf reports the name the pane's cursor should land on after its next
+// load.
+//
+// The name outlives the loads that apply it rather than being consumed by the
+// first one. A paste of several entries dispatches one operation per entry and
+// each of them reloads the panes, so a restore that was taken on the first
+// landing would leave the cursor back at the top once the rest arrive.
+func (m Model) restoreOf(pane int) string {
 	if pane == 0 {
-		name := m.leftRestore
-		m.leftRestore = ""
-		return name
+		return m.leftRestore
 	}
-	name := m.rightRestore
-	m.rightRestore = ""
-	return name
+	return m.rightRestore
 }
 
-func (m *Model) clearRestore(pane int) {
-	if pane == 0 {
-		m.leftRestore = ""
-	} else {
-		m.rightRestore = ""
+// clearRestores drops both panes' pending restores. A key press means the user
+// has moved on, so a selection left over from an earlier operation must not
+// survive to drag the cursor back the next time a listing loads.
+func (m *Model) clearRestores() {
+	m.leftRestore = ""
+	m.rightRestore = ""
+}
+
+// restoreLanded points a pane at the entry an operation just put on disk, so a
+// copy, move, or paste ends with the cursor on what it created.
+//
+// The entry is the first in name order rather than whichever operation message
+// arrives last: the moves of a marked set are dispatched from a map, so their
+// messages come back in no particular order, and every reload they trigger has
+// to agree on the same row.
+func (m *Model) restoreLanded(pane int, names []string) {
+	first := ""
+	for _, name := range names {
+		if first == "" || name < first {
+			first = name
+		}
 	}
+	if first == "" {
+		return
+	}
+	m.setRestore(pane, first)
 }
 
 func (m *Model) clampCursor(pane int) {
@@ -748,8 +973,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// order, so a size mode would otherwise be lost on every reload.
 		m.applySort(msg.pane)
 		// A load triggered by going up should land on the directory we came
-		// from; every other load starts at the top as before.
-		if name := m.takeRestore(msg.pane); name != "" {
+		// from, and one triggered by a copy, move, or paste on the entry that
+		// operation put there; every other load starts at the top as before.
+		if name := m.restoreOf(msg.pane); name != "" {
 			for i, f := range m.rawFiles(msg.pane) {
 				if f.Name == name {
 					m.setCursor(msg.pane, i)
@@ -773,8 +999,42 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.copier = msg.copier
 
 		if msg.err != nil {
+			done := 0
+			if msg.copier != nil {
+				done = msg.copier.FilesDone()
+			}
+			name := msg.name
+			if name == "" {
+				name = "copy"
+			}
+			path := msg.path
+			if path == "" {
+				path = name
+			}
+			clipboard := m.copyClipboard
+			marks := m.copyMarks
+			skipped := m.copySkipped
 			m.finishCopy()
-			m.loadErr = msg.err
+			verb := "copied"
+			failures := []opFailure{{name: name, path: path, err: msg.err}}
+			if msg.move {
+				verb = "moved"
+				// The mover reports the entries it could not even start,
+				// and the one that stopped it is reported beside them.
+				failures = append(moverFailures(msg.copier), failures...)
+				done = 0
+				if msg.copier != nil {
+					done = msg.copier.Moved()
+				}
+			}
+			m.recordOpResult(fileOpMsg{
+				verb:      verb,
+				succeeded: done,
+				failures:  failures,
+				clipboard: clipboard,
+				marks:     marks,
+				skipped:   skipped,
+			})
 			return m, tea.Batch(
 				loadDirCmd(0, m.leftPath),
 				loadDirCmd(1, m.rightPath),
@@ -783,8 +1043,29 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.done {
 			files := m.copyFiles
+			marks := m.copyMarks
+			skipped := m.copySkipped
 			m.finishCopy()
-			m.opResult = fmt.Sprintf("copied %d file(s)", files)
+			if msg.move {
+				moved := 0
+				var failures []opFailure
+				if msg.copier != nil {
+					moved = msg.copier.Moved()
+					failures = moverFailures(msg.copier)
+				}
+				m.recordOpResult(fileOpMsg{
+					verb:      "moved",
+					succeeded: moved,
+					failures:  failures,
+					marks:     marks,
+					skipped:   skipped,
+				})
+				return m, tea.Batch(
+					loadDirCmd(0, m.leftPath),
+					loadDirCmd(1, m.rightPath),
+				)
+			}
+			m.recordOpResult(fileOpMsg{verb: "copied", succeeded: files})
 			return m, tea.Batch(
 				loadDirCmd(0, m.leftPath),
 				loadDirCmd(1, m.rightPath),
@@ -794,12 +1075,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, stepCopyCmd(msg.copier, msg.gen)
 
 	case fileOpMsg:
-		if msg.err != nil {
-			m.opResult = ""
-			m.loadErr = msg.err
-		} else {
-			m.loadErr = nil
-		}
+		// The whole batch reports back as one message, so its counts and
+		// failures cannot be overwritten by a sibling result arriving
+		// later. Reloading the panes must not clear the outcome: opErr
+		// lives apart from loadErr precisely so the listing refresh that
+		// follows an operation cannot erase the operation's error.
+		m.recordOpResult(msg)
 		return m, tea.Batch(
 			loadDirCmd(0, m.leftPath),
 			loadDirCmd(1, m.rightPath),
@@ -822,10 +1103,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case openMsg:
 		if msg.err != nil {
-			m.loadErr = msg.err
+			m.opErr = msg.err
 			m.opResult = ""
 		} else {
-			m.loadErr = nil
+			m.opErr = nil
 			m.opResult = "opening " + msg.name + "..."
 		}
 		// No pane reload: opening a file must not disturb the listing or move
@@ -881,7 +1162,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the next one.
 		m.opResult = ""
 		m.loadErr = nil
+		m.opErr = nil
 		m.crashErr = nil
+
+		// The same applies to a pending cursor placement: an operation that
+		// has not landed yet must not yank the cursor back to the entry it
+		// named once the user has already chosen a different one. The keys
+		// that set a restore of their own set it after this, so it survives.
+		m.clearRestores()
 
 		if m.confirmDelete {
 			return m.handleConfirmDelete(msg)
@@ -1380,11 +1668,9 @@ func (m Model) commitInput() (tea.Model, tea.Cmd) {
 
 		path := filepath.Join(m.rawPath(m.activePane), name)
 		if isDir {
-			err := fs.CreateDir(path)
-			m.opResult = resultMessage("created dir", name, err)
+			m.recordOpResult(singularResult("created dir", name, fs.CreateDir(path)))
 		} else {
-			err := fs.CreateFile(path)
-			m.opResult = resultMessage("created", name, err)
+			m.recordOpResult(singularResult("created", name, fs.CreateFile(path)))
 		}
 		return m, m.loadActive()
 
@@ -1401,10 +1687,7 @@ func (m Model) commitInput() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		err := fs.Move(target, filepath.Join(filepath.Dir(target), name))
-		m.opResult = resultMessage("renamed", name, err)
-		if err != nil {
-			m.loadErr = err
-		}
+		m.recordOpResult(singularResult("renamed", name, err))
 		return m, m.loadActive()
 	}
 
@@ -1437,11 +1720,78 @@ func (m Model) commitGoto() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func resultMessage(action, name string, err error) string {
-	if err != nil {
-		return err.Error()
+// moverFailures converts the entries a mover could not move into the
+// failures a result reports.
+//
+// A move that cannot even start an entry — because the destination is the
+// file itself, say — is reported the same way as one that failed halfway,
+// so the user sees every entry that did not arrive in one place.
+func moverFailures(copier *fs.Copier) []opFailure {
+	if copier == nil {
+		return nil
 	}
-	return action + " " + name
+	failures := copier.Failures()
+	out := make([]opFailure, 0, len(failures))
+	for _, f := range failures {
+		out = append(out, opFailure{name: f.Name, path: f.Path, err: f.Err})
+	}
+	return out
+}
+
+// recordOpResult stores the outcome of a file operation. A failure goes into
+// opErr, which the bottom bar shows and only a keypress clears; a success goes
+// into opResult. Both live apart from loadErr so neither the pane reload that
+// follows an operation nor a later listing failure can erase the other.
+func (m *Model) recordOpResult(msg fileOpMsg) {
+	m.opResult = ""
+	// Any result ends the copy lifecycle, including a copier that never
+	// started, so the retry snapshot must not outlive it.
+	m.copyClipboard = nil
+	if len(msg.failures) > 0 {
+		m.restoreSelection(msg)
+		m.opErr = errors.New(msg.result())
+		return
+	}
+	m.opErr = nil
+	m.opResult = msg.result()
+}
+
+// restoreSelection puts back what a failed operation consumed: the marked
+// entries it could not move, and the paste selection it used. The work that
+// did land stays done; only what failed is offered for another try.
+func (m *Model) restoreSelection(msg fileOpMsg) {
+	if len(msg.marks) > 0 {
+		paths := make([]string, 0, len(msg.failures))
+		for _, f := range msg.failures {
+			paths = append(paths, f.path)
+		}
+		m.restoreMarks(msg.marks, paths)
+	}
+	m.restoreClipboard(msg.clipboard)
+}
+
+// restoreMarks puts the marked entries named by paths back into the marked
+// set. marks is the snapshot the transfer took, keyed by source path.
+func (m *Model) restoreMarks(marks map[string]fs.Entry, paths []string) {
+	for _, path := range paths {
+		entry, ok := marks[path]
+		if !ok {
+			continue
+		}
+		if m.marked == nil {
+			m.marked = make(map[string]fs.Entry)
+		}
+		m.marked[entry.Path] = entry
+	}
+}
+
+// restoreClipboard re-arms a paste selection a transfer consumed. A selection
+// the user staged after the transfer was dispatched is left alone.
+func (m *Model) restoreClipboard(clipboard *Clipboard) {
+	if clipboard != nil && !m.clipboardOn {
+		m.clipboard = *clipboard
+		m.clipboardOn = true
+	}
 }
 
 func (m Model) loadActive() tea.Cmd {
@@ -1498,32 +1848,104 @@ func (m Model) handleMove() (tea.Model, tea.Cmd) {
 func (m *Model) finishCopy() {
 	m.copier = nil
 	m.copyFiles = 0
+	m.copyClipboard = nil
+	m.copyMarks = nil
+	m.copySkipped = 0
 	m.copyGen++
 }
 
-// cancelCopy aborts an in-flight copy, removing the partially written file.
+// cancelCopy aborts an in-flight copy or move.
+//
+// The transfer stops at the next chunk boundary and the scratch file it was
+// writing goes with it. The destination is untouched: it still holds
+// whatever it held before, and the source of a move is still where it was.
+//
+// Because nothing landed, the selection the transfer consumed is put back.
+// For a move, an entry is restored only if its source is still on disk: one
+// that was already renamed away did move, and must not come back.
 func (m Model) cancelCopy() (tea.Model, tea.Cmd) {
 	if m.copier == nil {
 		return m, nil
 	}
+	verb := "copy"
+	if m.copier.IsMove() {
+		verb = "move"
+	}
+
+	marks := m.copyMarks
+	clipboard := m.copyClipboard
+
 	if err := m.copier.Abort(); err != nil {
-		m.loadErr = err
+		m.opErr = err
 	}
 	m.finishCopy()
-	m.opResult = "copy cancelled"
+
+	if len(marks) > 0 {
+		pending := make([]string, 0, len(marks))
+		for path := range marks {
+			if _, err := os.Stat(path); err == nil {
+				pending = append(pending, path)
+			}
+		}
+		m.restoreMarks(marks, pending)
+	}
+	m.restoreClipboard(clipboard)
+
+	m.opResult = verb + " cancelled"
 	return m, tea.Batch(
 		loadDirCmd(0, m.leftPath),
 		loadDirCmd(1, m.rightPath),
 	)
 }
 
-// copyTotalBytes sums the size of every staged entry so the copy path can decide
-// whether the work is large enough to warrant a progress bar.
+// copySizeWalkLimit bounds how many entries the pre-copy size walk visits, so
+// starting a paste cannot stall on an enormous tree. It mirrors the finder's
+// limit for the same reason: the estimate only decides which copy path to use,
+// and erring toward the simple path is cheaper than blocking the UI.
+const copySizeWalkLimit = 200000
+
+// copyTotalBytes estimates how many bytes a paste will move, so the copy path
+// can decide whether the work deserves a progress bar.
+//
+// A directory entry's Size is the inode's own size — a few kilobytes — not the
+// payload inside it. Summing that made a multi-gigabyte folder look tiny and
+// sent it down the blocking path with no progress at all. Directories are
+// therefore walked; files still just contribute their recorded size.
 func copyTotalBytes(files []fs.Entry) int64 {
 	var total int64
+	budget := copySizeWalkLimit
 	for _, f := range files {
-		total += f.Size
+		if !f.IsDir {
+			total += f.Size
+			continue
+		}
+		total += dirContentSize(f.Path, &budget)
 	}
+	return total
+}
+
+// dirContentSize sums the files beneath root. budget is shared across every
+// directory in the batch; once it is exhausted the walk stops. A truncated
+// walk can only understate the size, which at worst keeps a copy on the simple
+// path rather than stalling the key press.
+func dirContentSize(root string, budget *int) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if *budget <= 0 {
+			return filepath.SkipAll
+		}
+		*budget--
+		if info, err := d.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
 	return total
 }
 
@@ -1534,9 +1956,17 @@ func copyTotalBytes(files []fs.Entry) int64 {
 // there. Marks outweigh the y-staged file, and a file already sitting in the
 // target is skipped while the clipboard stays armed, so tabbing somewhere
 // else can still complete the copy.
+//
+// Whatever lands is named as the target pane's next cursor position, so the
+// reload that follows the operation puts the cursor on the new file rather than
+// back at the top of the listing.
 func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 	if m.copier != nil {
-		m.opResult = "copy in progress"
+		what := "copy"
+		if m.copier.IsMove() {
+			what = "move"
+		}
+		m.opResult = what + " in progress"
 		return m, nil
 	}
 	if len(m.marked) > 0 {
@@ -1560,46 +1990,67 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 		}
 		if total := copyTotalBytes(m.clipboard.Files); total >= copyProgressThreshold {
 			srcs := make([]string, 0, len(m.clipboard.Files))
+			names := make([]string, 0, len(m.clipboard.Files))
 			for _, f := range m.clipboard.Files {
 				srcs = append(srcs, f.Path)
+				names = append(names, f.Name)
 			}
+			// Snapshot the selection before disarming it: a failure re-arms
+			// this exact paste so the user can retry.
+			clipboard := m.clipboard
 			m.clipboardOn = false
+			m.copyClipboard = &clipboard
 			m.copyFiles = len(m.clipboard.Files)
 			m.copyGen++
-			return m, startCopyCmd(srcs, targetPath, m.copyGen)
+			m.restoreLanded(m.activePane, names)
+			m.opResult = fmt.Sprintf("copying %d file(s)...", len(srcs))
+			return m, startCopyCmd(srcs, targetPath, m.copyGen, &clipboard)
 		}
 	}
 
-	var cmds []tea.Cmd
+	verb, gerund := "moved", "moving"
+	op := fs.Move
+	if m.clipboard.Action == "copy" {
+		verb, gerund = "pasted", "copying"
+		op = fs.CopyRecursive
+	}
+
+	var items []opItem
+	var pasted []string
 	for _, file := range m.clipboard.Files {
 		dst := filepath.Join(targetPath, file.Name)
 		if filepath.Clean(dst) == filepath.Clean(file.Path) {
 			continue
 		}
-		if m.clipboard.Action == "copy" {
-			cmds = append(cmds, copyCmd(file.Path, dst))
-		} else {
-			cmds = append(cmds, moveCmd(file.Path, dst))
-		}
+		items = append(items, opItem{name: file.Name, src: file.Path, dst: dst})
+		pasted = append(pasted, file.Name)
 	}
-	if len(cmds) == 0 {
+	if len(items) == 0 {
 		m.opResult = "already in this directory"
 		return m, nil
 	}
 
+	clipboard := m.clipboard
 	m.clipboardOn = false
-	m.opResult = fmt.Sprintf("pasted %d file(s)", len(m.clipboard.Files))
-	return m, tea.Batch(cmds...)
+	m.restoreLanded(m.activePane, pasted)
+	// The work has not run yet, so this is a progress notice rather than a
+	// result: claiming a paste whose outcome is still unknown is the bug.
+	m.opResult = fmt.Sprintf("%s %d file(s)...", gerund, len(items))
+	return m, batchOpCmd(verb, items, 0, nil, &clipboard, op)
 }
 
 // pasteMarks moves the marked set into the active pane's current directory.
 // Entries that vanished from disk, or that already sit in the destination,
-// are skipped so a stale mark cannot fail the whole batch.
+// are skipped so a stale mark cannot fail the whole batch. The pane is left
+// pointing at one of the entries that arrived, not at the top of the listing.
 func (m Model) pasteMarks() (tea.Model, tea.Cmd) {
 	targetPath := m.rawPath(m.activePane)
 
-	var cmds []tea.Cmd
-	moved, skipped := 0, 0
+	var items []opItem
+	var landed []string
+	var srcs []string
+	marks := make(map[string]fs.Entry, len(m.marked))
+	skipped := 0
 	for _, entry := range m.marked {
 		if _, err := os.Stat(entry.Path); err != nil {
 			skipped++
@@ -1610,21 +2061,30 @@ func (m Model) pasteMarks() (tea.Model, tea.Cmd) {
 			skipped++
 			continue
 		}
-		cmds = append(cmds, moveCmd(entry.Path, dst))
-		moved++
+		items = append(items, opItem{name: entry.Name, src: entry.Path, dst: dst})
+		srcs = append(srcs, entry.Path)
+		landed = append(landed, entry.Name)
+		marks[entry.Path] = entry
 	}
+	dstDir := targetPath
 
 	m.marked = nil
+	m.restoreLanded(m.activePane, landed)
 
-	switch {
-	case moved == 0:
+	if len(items) == 0 {
 		m.opResult = "nothing to move"
-	case skipped > 0:
-		m.opResult = fmt.Sprintf("moved %d, skipped %d", moved, skipped)
-	default:
-		m.opResult = fmt.Sprintf("moved %d file(s)", moved)
+		return m, nil
 	}
-	return m, tea.Batch(cmds...)
+
+	// The moves have not run yet, so report that they are starting rather
+	// than claiming they are done. The final count comes back in the batch
+	// result once every move has actually been attempted. The marks ride
+	// along so a move that fails can be put back for another try.
+	m.opResult = fmt.Sprintf("moving %d file(s)...", len(items))
+	m.copyMarks = marks
+	m.copySkipped = skipped
+	m.copyGen++
+	return m, startMoveCmd(srcs, dstDir, m.copyGen, marks, skipped)
 }
 
 func (m Model) handleDelete() (tea.Model, tea.Cmd) {
@@ -1646,13 +2106,13 @@ func (m Model) handleConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirmDelete = false
 		target := m.deleteTarget
 		m.deleteTarget = ""
-		m.opResult = "trashed " + filepath.Base(target)
+		m.opResult = "trashing " + filepath.Base(target) + "..."
 		return m, trashCmd(target)
 	case "f", "F":
 		m.confirmDelete = false
 		target := m.deleteTarget
 		m.deleteTarget = ""
-		m.opResult = "deleted " + filepath.Base(target)
+		m.opResult = "deleting " + filepath.Base(target) + "..."
 		return m, deleteCmd(target)
 	case "n", "N", "esc":
 		m.confirmDelete = false
@@ -1790,6 +2250,11 @@ func (m Model) view() tea.View {
 			// A recovered crash outranks a load error: it is the one thing
 			// the user needs to know about, and it may still be relevant.
 			bottomBar.Error = m.crashErr.Error()
+		} else if m.opErr != nil {
+			// An operation failure is what the user just caused, so it
+			// outranks a listing error. loadErr stays on the model, so the
+			// next reload can show it once the operation message is gone.
+			bottomBar.Error = m.opErr.Error()
 		} else if m.loadErr != nil {
 			bottomBar.Error = m.loadErr.Error()
 		} else if m.opResult != "" {

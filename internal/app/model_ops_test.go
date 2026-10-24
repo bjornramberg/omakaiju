@@ -275,10 +275,66 @@ func runBatch(t *testing.T, cmd tea.Cmd) []fileOpMsg {
 func requireNoOpErrors(t *testing.T, msgs []fileOpMsg) {
 	t.Helper()
 	for _, m := range msgs {
-		if m.err != nil {
-			t.Fatalf("file op failed: %v", m.err)
+		if len(m.failures) > 0 {
+			t.Fatalf("file op failed: %s", m.result())
 		}
 	}
+}
+
+// runTransfer drives a steppable transfer — a copy or a move — to completion
+// the way the event loop does, and returns the model with the result applied.
+//
+// A transfer that runs through the progress flow does not report back in one
+// message: it reports a step at a time, and each step asks for the next. The
+// loop here follows that chain until the transfer says it is done, so a test
+// sees the same outcome the user does.
+func runTransfer(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+	for i := 0; i < 10000 && cmd != nil; i++ {
+		msg := cmd()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			cmd = nil
+			for _, c := range batch {
+				if c == nil {
+					continue
+				}
+				switch inner := c().(type) {
+				case fileOpMsg:
+					updated, _ := m.Update(inner)
+					m = updated.(Model)
+				case copyProgressMsg:
+					updated, next := m.Update(inner)
+					m = updated.(Model)
+					cmd = next
+				}
+			}
+			continue
+		}
+		switch inner := msg.(type) {
+		case fileOpMsg:
+			updated, _ := m.Update(inner)
+			m = updated.(Model)
+			cmd = nil
+		case copyProgressMsg:
+			updated, next := m.Update(inner)
+			m = updated.(Model)
+			cmd = next
+		default:
+			cmd = nil
+		}
+	}
+	return m
+}
+
+// applyOps feeds operation results back into the model the way the event loop
+// does, so the final status text can be asserted.
+func applyOps(t *testing.T, m Model, msgs []fileOpMsg) Model {
+	t.Helper()
+	for _, msg := range msgs {
+		updated, _ := m.Update(msg)
+		m = updated.(Model)
+	}
+	return m
 }
 
 // moveCursorTo advances the active pane cursor onto the named entry.
@@ -312,6 +368,180 @@ func twoPaneFixture(t *testing.T) (Model, string, string) {
 	}
 	m.rightFiles = rightFiles
 	return m, src, dst
+}
+
+// crossDevicePane points the right pane at a directory on another filesystem,
+// so a move into it has to copy the file across rather than rename it.
+//
+// This is the shape of a move onto a network share: the destination is not
+// on the same filesystem, so the kernel refuses the rename.
+func crossDevicePane(t *testing.T, m Model) (Model, string) {
+	t.Helper()
+	for _, candidate := range []string{"/dev/shm", "/run/shm"} {
+		if err := os.MkdirAll(candidate, 0o755); err != nil {
+			continue
+		}
+		dst, err := os.MkdirTemp(candidate, "omakaiju-share-")
+		if err != nil {
+			continue
+		}
+		// The pane has to be on a genuinely different filesystem, or the
+		// test would pass without exercising the copy at all.
+		probe := filepath.Join(dst, "probe")
+		if err := os.WriteFile(probe, []byte("x"), 0o644); err != nil {
+			os.RemoveAll(dst)
+			continue
+		}
+		if err := os.Rename(probe, filepath.Join(m.rightPath, "omakaiju-probe")); err == nil {
+			os.Remove(filepath.Join(m.rightPath, "omakaiju-probe"))
+			os.RemoveAll(dst)
+			continue
+		}
+		os.Remove(probe)
+
+		files, err := fs.ReadDir(dst)
+		if err != nil {
+			os.RemoveAll(dst)
+			continue
+		}
+		m.rightPath = dst
+		m.rightFiles = files
+		return m, dst
+	}
+	t.Skip("no second filesystem available for a cross-device move test")
+	return m, ""
+}
+
+// A move onto another filesystem — a share, say — cannot be a rename. The
+// file has to be copied across and the original removed, and the user has to
+// be told that it worked.
+//
+// This is the move that used to fail with "invalid cross-device link" and
+// leave the user with no idea what had happened.
+func TestMoveToAnotherFilesystemCopiesAndReports(t *testing.T) {
+	m, src, _ := twoPaneFixture(t)
+	m, dst := crossDevicePane(t, m)
+
+	m = moveCursorTo(t, m, "alpha.txt")
+	updated, _ := m.Update(shiftKey('m'))
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
+
+	updated, cmd := m.Update(shiftKey('v'))
+	m = updated.(Model)
+
+	m = runTransfer(t, m, cmd)
+
+	if m.opErr != nil {
+		t.Fatalf("the move failed: %v", m.opErr)
+	}
+	if m.opResult != "moved 1 file(s)" {
+		t.Errorf("opResult = %q, want %q", m.opResult, "moved 1 file(s)")
+	}
+
+	landed := filepath.Join(dst, "alpha.txt")
+	data, err := os.ReadFile(landed)
+	if err != nil {
+		t.Fatalf("the file did not arrive on the other filesystem: %v", err)
+	}
+	if len(data) == 0 {
+		t.Error("the file arrived empty")
+	}
+	if _, err := os.Stat(filepath.Join(src, "alpha.txt")); !os.IsNotExist(err) {
+		t.Errorf("the original should be gone after a successful move: %v", err)
+	}
+}
+
+// A move that cannot cross to the other filesystem has to leave the original
+// exactly where it was, and say so.
+func TestMoveToAnotherFilesystemThatFailsKeepsTheSource(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	m, src, _ := twoPaneFixture(t)
+	m, dst := crossDevicePane(t, m)
+
+	m = moveCursorTo(t, m, "alpha.txt")
+	updated, _ := m.Update(shiftKey('m'))
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
+
+	// The destination refuses writes, so the copy cannot land.
+	if err := os.Chmod(dst, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dst, 0o755)
+
+	updated, cmd := m.Update(shiftKey('v'))
+	m = updated.(Model)
+
+	m = runTransfer(t, m, cmd)
+
+	if m.opErr == nil {
+		t.Fatal("a move into a directory that cannot be written to should be reported")
+	}
+	if _, err := os.Stat(filepath.Join(src, "alpha.txt")); err != nil {
+		t.Errorf("a failed move must leave the source in place: %v", err)
+	}
+}
+
+// A move into a directory the user cannot write to has to say so, name the
+// file, and keep it selected so the move can be tried again once the
+// permissions are fixed.
+//
+// It used to show nothing at all: the error was written to the same field the
+// pane reload cleared a moment later.
+func TestMoveWithoutPermissionIsReportedAndKeepsTheMark(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	m, src, dst := twoPaneFixture(t)
+
+	m = moveCursorTo(t, m, "alpha.txt")
+	updated, _ := m.Update(shiftKey('m'))
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
+
+	// The destination refuses writes.
+	if err := os.Chmod(dst, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dst, 0o755)
+
+	updated, cmd := m.Update(shiftKey('v'))
+	m = updated.(Model)
+
+	m = runTransfer(t, m, cmd)
+
+	if m.opErr == nil {
+		t.Fatal("a move into a directory that cannot be written to should be reported")
+	}
+	got := m.opErr.Error()
+	if !strings.Contains(got, "alpha.txt") {
+		t.Errorf("opErr = %q, want the failing file named", got)
+	}
+	if !strings.Contains(got, "permission denied") {
+		t.Errorf("opErr = %q, want the reason the user can act on", got)
+	}
+	// The failure is still on screen after the panes reload.
+	if m.opResult != "" {
+		t.Errorf("opResult = %q, want the failure reported as an error", m.opResult)
+	}
+
+	// The entry stays selected, so the move can be retried.
+	key := filepath.Join(src, "alpha.txt")
+	if _, ok := m.marked[key]; !ok {
+		t.Errorf("the failed move should stay marked for a retry, marked = %v", m.marked)
+	}
+	if _, err := os.Stat(key); err != nil {
+		t.Errorf("a failed move must leave the source in place: %v", err)
+	}
 }
 
 func TestMarkTogglesOnAndOff(t *testing.T) {
@@ -371,12 +601,15 @@ func TestPasteMovesMarkedSetToOtherPane(t *testing.T) {
 		t.Errorf("marks should clear after paste, got %d", len(m.marked))
 	}
 
-	// Drain the returned commands so the moves actually run.
-	msgs := runBatch(t, cmd)
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 move operations, got %d", len(msgs))
+	// Drain the returned command so the moves actually run. A move reports
+	// its outcome once every entry has been attempted.
+	m = runTransfer(t, m, cmd)
+	if m.opErr != nil {
+		t.Fatalf("move failed: %v", m.opErr)
 	}
-	requireNoOpErrors(t, msgs)
+	if m.opResult != "moved 2 file(s)" {
+		t.Errorf("opResult = %q, want %q", m.opResult, "moved 2 file(s)")
+	}
 
 	for _, name := range []string{"alpha.txt", "beta.txt"} {
 		if _, err := os.Stat(filepath.Join(dst, name)); err != nil {
@@ -409,15 +642,22 @@ func TestPasteSkipsStaleMarks(t *testing.T) {
 	updated, cmd := m.Update(shiftKey('v'))
 	m = updated.(Model)
 
-	if m.opResult != "moved 1, skipped 1" {
-		t.Errorf("opResult = %q, want %q", m.opResult, "moved 1, skipped 1")
+	// The move has been dispatched but has not run, so it must not claim a
+	// result yet.
+	if m.opResult != "moving 1 file(s)..." {
+		t.Errorf("opResult = %q, want the in-flight progress notice", m.opResult)
 	}
-	requireNoOpErrors(t, runBatch(t, cmd))
+	m = runTransfer(t, m, cmd)
+	if m.opErr != nil {
+		t.Fatalf("move failed: %v", m.opErr)
+	}
+	if m.opResult != "moved 1 file(s), skipped 1" {
+		t.Errorf("opResult = %q, want %q", m.opResult, "moved 1 file(s), skipped 1")
+	}
 	if _, err := os.Stat(filepath.Join(dst, "alpha.txt")); err != nil {
 		t.Errorf("alpha.txt should have moved: %v", err)
 	}
 }
-
 func TestPasteSkipsEntryAlreadyInTarget(t *testing.T) {
 	m, _, _ := twoPaneFixture(t)
 
@@ -433,6 +673,167 @@ func TestPasteSkipsEntryAlreadyInTarget(t *testing.T) {
 	if m.opResult != "nothing to move" {
 		t.Errorf("opResult = %q, want %q", m.opResult, "nothing to move")
 	}
+}
+
+// seedPane writes files into a directory and refreshes the pane showing it,
+// so an entry that lands there sorts between two others. Without them a
+// pasted file would sit at index 0 and "the cursor follows the paste" would
+// pass whether the feature worked or not.
+func seedPane(t *testing.T, m Model, pane int, dir string, names ...string) Model {
+	t.Helper()
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return loadDir(t, m, pane)
+}
+
+// wantCursorOn asserts the pane's cursor sits on the named entry, and that the
+// entry is not the first row — the pane used to snap back there, so a test
+// that passed at index 0 would prove nothing.
+func wantCursorOn(t *testing.T, m Model, pane int, name string) int {
+	t.Helper()
+	idx := indexOf(m.visibleFiles(pane), name)
+	if idx <= 0 {
+		t.Fatalf("%s is at index %d, want it sorted below the first row", name, idx)
+	}
+	if m.rawCursor(pane) != idx {
+		t.Errorf("cursor = %d, want %d (the %s that was just pasted)", m.rawCursor(pane), idx, name)
+	}
+	return idx
+}
+
+// A copy ends with the destination pane pointing at the file it wrote. It used
+// to reload at the top of the listing, so the result of the operation was
+// nowhere on screen.
+func TestPasteLandsCursorOnTheCopiedFile(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+	m = seedPane(t, m, 1, dst, "aaa.txt", "zzz.txt")
+
+	m = yankCopy(t, m, "beta.txt")
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
+
+	updated, cmd := m.Update(shiftKey('v'))
+	m = updated.(Model)
+	requireNoOpErrors(t, runBatch(t, cmd))
+
+	m = loadDir(t, m, 1)
+	wantCursorOn(t, m, 1, "beta.txt")
+}
+
+// Moving a marked set dispatches one operation per entry and every one of them
+// reloads the panes, so all of those reloads have to agree on the row. Letting
+// the last one decide would leave the cursor wherever the scheduling happened
+// to put it.
+func TestMarksMoveLandsCursorOnTheMovedSet(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+	m = seedPane(t, m, 1, dst, "aaa.txt", "zzz.txt")
+
+	// Marked back to front, so the entry the cursor lands on is not the one
+	// that was marked first.
+	m = moveCursorTo(t, m, "beta.txt")
+	updated, _ := m.Update(shiftKey('m'))
+	m = updated.(Model)
+	updated, _ = m.Update(arrow(tea.KeyUp))
+	m = updated.(Model)
+	updated, _ = m.Update(shiftKey('m'))
+	m = updated.(Model)
+	if len(m.marked) != 2 {
+		t.Fatalf("marked = %d, want 2", len(m.marked))
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
+	updated, cmd := m.Update(shiftKey('v'))
+	m = updated.(Model)
+	requireNoOpErrors(t, runBatch(t, cmd))
+
+	// The marks come out of a map, so the entry chosen has to be stable
+	// rather than "whichever move reported back last".
+	m = loadDir(t, m, 1)
+	want := wantCursorOn(t, m, 1, "alpha.txt")
+
+	again := loadDir(t, m, 1)
+	if again.rawCursor(1) != want {
+		t.Errorf("cursor = %d on the second reload, want %d", again.rawCursor(1), want)
+	}
+}
+
+// The landing only holds until the user acts. A reload that arrives after the
+// cursor has been moved by hand — the rest of a multi-entry paste, say — must
+// not drag it back onto the entry the paste named.
+func TestCursorMoveBeatsThePasteRestore(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+	m = seedPane(t, m, 1, dst, "aaa.txt", "zzz.txt")
+
+	m = yankCopy(t, m, "beta.txt")
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
+	updated, cmd := m.Update(shiftKey('v'))
+	m = updated.(Model)
+	requireNoOpErrors(t, runBatch(t, cmd))
+
+	m = loadDir(t, m, 1)
+	pasted := wantCursorOn(t, m, 1, "beta.txt")
+
+	updated, _ = m.Update(arrow(tea.KeyDown))
+	m = updated.(Model)
+	if m.rawCursor(1) == pasted {
+		t.Fatal("the cursor did not move off the pasted entry")
+	}
+
+	m = loadDir(t, m, 1)
+	if m.rawCursor(1) == pasted {
+		t.Error("a reload dragged the cursor back onto the pasted entry after the user moved off it")
+	}
+}
+
+// The steppable copier finishes long after the key that started it, so the
+// destination is only aimed at the copied file once the job reports back.
+func TestLargeCopyLandsCursorOnTheCopiedFile(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+	m = seedPane(t, m, 1, dst, "aaa.txt", "zzz.txt")
+
+	// Larger than the 1 MiB threshold so the progress copier is used.
+	big := filepath.Join(m.leftPath, "big.bin")
+	if err := os.WriteFile(big, make([]byte, 3<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := fs.ReadDir(m.leftPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.leftFiles = files
+
+	m = yankCopy(t, m, "big.bin")
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
+	updated, _ = m.Update(shiftKey('v'))
+	m = updated.(Model)
+
+	copier, err := fs.NewCopier([]string{big}, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _ = m.Update(copyProgressMsg{copier: copier, gen: m.copyGen})
+	m = updated.(Model)
+
+	for {
+		msg, ok := stepCopyCmd(m.copier, m.copyGen)().(copyProgressMsg)
+		if !ok {
+			t.Fatal("expected progress messages while stepping")
+		}
+		updated, _ = m.Update(msg)
+		m = updated.(Model)
+		if msg.done {
+			break
+		}
+	}
+
+	m = loadDir(t, m, 1)
+	wantCursorOn(t, m, 1, "big.bin")
 }
 
 // Pasting without leaving the pane, after navigating around, targets the
@@ -511,10 +912,15 @@ func TestYankPasteStillWorksWithoutMarks(t *testing.T) {
 	updated, cmd := m.Update(shiftKey('v'))
 	m = updated.(Model)
 
+	if m.opResult != "copying 1 file(s)..." {
+		t.Errorf("opResult = %q, want the in-flight progress notice", m.opResult)
+	}
+	msgs := runBatch(t, cmd)
+	requireNoOpErrors(t, msgs)
+	m = applyOps(t, m, msgs)
 	if m.opResult != "pasted 1 file(s)" {
 		t.Errorf("opResult = %q, want %q", m.opResult, "pasted 1 file(s)")
 	}
-	requireNoOpErrors(t, runBatch(t, cmd))
 	// A copy leaves the original in place.
 	if _, err := os.Stat(filepath.Join(dst, "alpha.txt")); err != nil {
 		t.Errorf("copy missing from destination: %v", err)
@@ -865,7 +1271,9 @@ func TestDeleteTrashesByDefault(t *testing.T) {
 			if cmd == nil {
 				t.Fatal("the prompt should dispatch a trash command")
 			}
-			requireNoOpErrors(t, runBatch(t, cmd))
+			msgs := runBatch(t, cmd)
+			requireNoOpErrors(t, msgs)
+			m = applyOps(t, m, msgs)
 
 			target := filepath.Join(dir, "alpha.txt")
 			if _, err := os.Stat(target); !os.IsNotExist(err) {
@@ -887,10 +1295,15 @@ func TestDeleteForceRemovesPermanently(t *testing.T) {
 	updated, cmd := m.Update(key('f'))
 	m = updated.(Model)
 
+	if m.opResult != "deleting alpha.txt..." {
+		t.Errorf("opResult = %q, want the in-flight progress notice", m.opResult)
+	}
+	msgs := runBatch(t, cmd)
+	requireNoOpErrors(t, msgs)
+	m = applyOps(t, m, msgs)
 	if m.opResult != "deleted alpha.txt" {
 		t.Errorf("opResult = %q, want %q", m.opResult, "deleted alpha.txt")
 	}
-	requireNoOpErrors(t, runBatch(t, cmd))
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Error("force delete should remove the file")
 	}
@@ -1037,8 +1450,11 @@ func TestOpenFailureSurfacesError(t *testing.T) {
 	updated, _ := m.Update(openMsg{name: "alpha.txt", err: errors.New("no handler")})
 	m = updated.(Model)
 
-	if m.loadErr == nil {
+	if m.opErr == nil {
 		t.Fatal("a failed open should surface an error")
+	}
+	if m.loadErr != nil {
+		t.Errorf("an open failure is not a listing failure: loadErr = %v", m.loadErr)
 	}
 	if m.opResult != "" {
 		t.Errorf("opResult = %q, want cleared on failure", m.opResult)

@@ -125,6 +125,36 @@ func TestProgressFromCopier(t *testing.T) {
 	}
 }
 
+// A move and a copy look alike on the bar, so the bar has to say which one
+// is running.
+func TestProgressSaysWhetherItIsAMove(t *testing.T) {
+	dir := t.TempDir()
+	src := dir + "/a.bin"
+	if err := writeFileSized(src, 4096); err != nil {
+		t.Fatal(err)
+	}
+
+	copier, err := fs.NewCopier([]string{src}, dir+"/out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := NewProgress(copier, config.DefaultTheme()); p.Verb != "copying" {
+		t.Errorf("Verb = %q, want %q", p.Verb, "copying")
+	}
+
+	mover, err := fs.NewMover([]string{src}, dir+"/out2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := NewProgress(mover, config.DefaultTheme())
+	if p.Verb != "moving" {
+		t.Errorf("Verb = %q, want %q", p.Verb, "moving")
+	}
+	if out := stripANSI(p.Render(60)); !strings.Contains(out, "moving") {
+		t.Errorf("the bar should say it is moving: %q", out)
+	}
+}
+
 func TestBottomBarShowsProgress(t *testing.T) {
 	theme := config.DefaultTheme()
 	bar := NewBottomBar(80, theme)

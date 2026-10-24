@@ -21,10 +21,18 @@ type Progress struct {
 	FileIndex int
 	FileTotal int
 	Theme     config.Theme
+	// Verb is the word shown before the bar. A move says "moving" and a
+	// copy says "copying", because the two look alike on the bar and the
+	// user needs to know which one is running.
+	Verb string
 }
 
 // NewProgress snapshots a copier for rendering.
 func NewProgress(c *fs.Copier, theme config.Theme) Progress {
+	verb := "copying"
+	if c.IsMove() {
+		verb = "moving"
+	}
 	return Progress{
 		Name:      c.CurrentName(),
 		Copied:    c.Copied(),
@@ -33,6 +41,7 @@ func NewProgress(c *fs.Copier, theme config.Theme) Progress {
 		FileIndex: c.FilesDone() + 1,
 		FileTotal: c.FilesTotal(),
 		Theme:     theme,
+		Verb:      verb,
 	}
 }
 
@@ -76,6 +85,9 @@ func (p Progress) Render(maxCells int) string {
 
 	// "copying [bar] " + suffix, reserving a 10-cell bar when there is room.
 	prefix := "copying "
+	if p.Verb != "" {
+		prefix = p.Verb + " "
+	}
 	chrome := DisplayWidth(prefix) + 2 + 10 + DisplayWidth(suffix)
 
 	if chrome > maxCells {
