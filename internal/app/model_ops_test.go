@@ -718,13 +718,19 @@ func TestEscapeCancelsCopyAndRemovesPartial(t *testing.T) {
 	updated, _ := m.Update(copyProgressMsg{copier: copier, gen: m.copyGen})
 	m = updated.(Model)
 
-	// Take one step so a partial file exists.
+	// Take one step so partial data exists. The copy may write it straight
+	// to the destination or to a scratch file beside it, so assert on the
+	// directory rather than on one implementation's path.
 	msg := stepCopyCmd(m.copier, m.copyGen)().(copyProgressMsg)
 	updated, _ = m.Update(msg)
 	m = updated.(Model)
 
-	if _, err := os.Stat(filepath.Join(dst, "big.bin")); err != nil {
-		t.Fatalf("partial file should exist mid-copy: %v", err)
+	partials, err := os.ReadDir(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(partials) == 0 {
+		t.Fatal("expected partial copy data mid-copy")
 	}
 
 	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
@@ -738,6 +744,13 @@ func TestEscapeCancelsCopyAndRemovesPartial(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, "big.bin")); !os.IsNotExist(err) {
 		t.Error("cancel should remove the partial destination file")
+	}
+	leftovers, err := os.ReadDir(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leftovers) != 0 {
+		t.Errorf("cancel left %d entr(ies) behind: %v", len(leftovers), leftovers)
 	}
 }
 

@@ -119,6 +119,10 @@ func TestCopierProgressIsMonotonic(t *testing.T) {
 	}
 }
 
+// A copied directory lands in the destination as a directory, with its
+// contents inside it. Scattering a folder's files loose in the destination
+// is not what "copy this folder" means, and it drops them on top of
+// whatever was already there.
 func TestCopierDirectoryTree(t *testing.T) {
 	src := t.TempDir()
 	dst := t.TempDir()
@@ -138,10 +142,60 @@ func TestCopierDirectoryTree(t *testing.T) {
 	}
 	drain(t, c)
 
+	root := filepath.Join(dst, filepath.Base(src))
 	for _, rel := range []string{"top.bin", "sub/nested.bin", "sub/deeper/deep.bin"} {
-		if _, err := os.Stat(filepath.Join(dst, rel)); err != nil {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
 			t.Errorf("%s missing: %v", rel, err)
 		}
+	}
+}
+
+// A folder that holds no files is still a folder, and a copy of one has to
+// produce it.
+func TestCopierCopiesEmptyDirectories(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, "outer", "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := NewCopier([]string{src}, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, c)
+
+	root := filepath.Join(dst, filepath.Base(src))
+	for _, rel := range []string{"empty", "outer", "outer/inner"} {
+		info, err := os.Stat(filepath.Join(root, rel))
+		if err != nil {
+			t.Errorf("%s missing: %v", rel, err)
+			continue
+		}
+		if !info.IsDir() {
+			t.Errorf("%s is not a directory", rel)
+		}
+	}
+}
+
+// A file copied into a destination lands under its own name, exactly as a
+// directory does.
+func TestCopierFileLandsUnderItsOwnName(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+	writeBytes(t, filepath.Join(src, "a.bin"), 10)
+
+	c, err := NewCopier([]string{filepath.Join(src, "a.bin")}, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, c)
+
+	if _, err := os.Stat(filepath.Join(dst, "a.bin")); err != nil {
+		t.Errorf("a.bin missing: %v", err)
 	}
 }
 
@@ -180,21 +234,26 @@ func TestCopierAbortRemovesPartialFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Step once so a partial file exists.
+	// Step once so a partial copy exists.
 	if _, err := c.Step(); err != nil {
 		t.Fatal(err)
 	}
-	partial := filepath.Join(dst, "big.bin")
-	if _, err := os.Stat(partial); err != nil {
-		t.Fatalf("partial file should exist mid-copy: %v", err)
+
+	// The destination name must not appear until the copy is whole. A
+	// half-written file under the name the user expects is what an aborted
+	// copy used to leave behind.
+	if _, err := os.Stat(filepath.Join(dst, "big.bin")); !os.IsNotExist(err) {
+		t.Fatalf("the destination must not exist while the copy is partial: %v", err)
 	}
 
 	if err := c.Abort(); err != nil {
 		t.Fatalf("abort failed: %v", err)
 	}
-	if _, err := os.Stat(partial); !os.IsNotExist(err) {
-		t.Error("abort should remove the partial destination file")
+	if _, err := os.Stat(filepath.Join(dst, "big.bin")); !os.IsNotExist(err) {
+		t.Error("abort should leave no destination file behind")
 	}
+	// Nothing may be left over in the destination directory.
+	assertNoScratchFiles(t, dst)
 }
 
 func TestCopierAbortKeepsCompletedFiles(t *testing.T) {
@@ -223,7 +282,9 @@ func TestCopierAbortKeepsCompletedFiles(t *testing.T) {
 	if err := c.Abort(); err != nil {
 		t.Fatalf("abort failed: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dst, "a.bin")); err != nil {
+	// The completed file is under the source directory's own name.
+	completed := filepath.Join(dst, filepath.Base(src), "a.bin")
+	if _, err := os.Stat(completed); err != nil {
 		t.Errorf("completed file should survive abort: %v", err)
 	}
 }

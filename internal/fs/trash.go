@@ -120,15 +120,3 @@ func escapeTrashPath(p string) string {
 	}
 	return strings.Join(segments, "/")
 }
-
-// isCrossDevice reports whether err is a rename across filesystems, which
-// Go reports as a link error rather than a typed one.
-func isCrossDevice(err error) bool {
-	var le *os.LinkError
-	if errors.As(err, &le) {
-		msg := le.Err.Error()
-		return strings.Contains(msg, "invalid cross-device link") ||
-			strings.Contains(msg, "cross-device")
-	}
-	return false
-}

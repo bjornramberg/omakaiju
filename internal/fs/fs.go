@@ -169,7 +169,7 @@ func Copy(src, dst string) error {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return copySymlink(src, dst)
 	}
-	return copyFile(src, dst, info.Mode())
+	return copyFileAtomic(src, dst, info.Mode())
 }
 
 // copyMaxDepth bounds the recursion. A tree nested deeper than this is
@@ -213,7 +213,7 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 	}
 
 	if !info.IsDir() {
-		return copyFile(src, dst, info.Mode())
+		return copyFileAtomic(src, dst, info.Mode())
 	}
 
 	// Copying a directory into its own subtree would make the copy
@@ -228,6 +228,14 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 			return fmt.Errorf("copy: %s is a directory cycle", src)
 		}
 	}
+	// A destination that is not there yet is built in a scratch directory
+	// beside it and renamed into place. A copy that fails part way through
+	// then leaves the destination as it was, instead of a half-filled
+	// directory the user has to clear out by hand before trying again.
+	if _, err := os.Lstat(dst); os.IsNotExist(err) {
+		return copyDirAtomic(src, dst, visited, depth, info.Mode().Perm())
+	}
+
 	visited = append(visited, info)
 
 	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
@@ -252,62 +260,95 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 	return nil
 }
 
-// copyFile copies a regular file's contents, keeping its permission bits.
+// copyDirAtomic builds a directory tree in a scratch directory beside the
+// destination and renames it into place.
 //
-// A same-path destination is refused outright: the destination is opened with
-// O_TRUNC before the source is read, so copying a file onto itself would
-// truncate the inode and then read nothing back, silently destroying the
-// file. Callers that legitimately want to skip such an entry already compare
-// the paths before dispatching.
-//
-// The setuid, setgid and sticky bits are deliberately dropped: a copied
-// setuid binary in a world-writable directory is a privilege escalation
-// waiting to happen, and no file manager should hand one out by accident.
-func copyFile(src, dst string, mode os.FileMode) error {
-	if filepath.Clean(src) == filepath.Clean(dst) {
-		return fmt.Errorf("copy: %s onto itself", src)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+// The rename is atomic, so the destination either holds the whole tree or
+// is not there at all. A copy that fails leaves the scratch directory
+// behind, and that is removed.
+func copyDirAtomic(src, dst string, visited []os.FileInfo, depth int, mode os.FileMode) error {
+	dir := filepath.Dir(dst)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
-	in, err := os.Open(src)
+	tmp, err := os.MkdirTemp(dir, tempPrefix+"*")
 	if err != nil {
 		return err
 	}
-	defer in.Close()
 
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode.Perm())
-	if err != nil {
+	if err := copyRecursive(src, tmp, visited, depth); err != nil {
+		os.RemoveAll(tmp)
 		return err
 	}
-	defer out.Close()
 
-	if _, err := io.Copy(out, in); err != nil {
+	// The scratch directory was created private. The copy carries the
+	// source's permissions.
+	if err := os.Chmod(tmp, mode); err != nil {
+		os.RemoveAll(tmp)
 		return err
 	}
-	// OpenFile masks the mode with the umask, so the exact bits are set
-	// here. A copied script that loses its executable bit is a surprise
-	// the user would not expect from a file manager.
-	return os.Chmod(dst, mode.Perm())
+
+	if err := os.Rename(tmp, dst); err != nil {
+		os.RemoveAll(tmp)
+		return err
+	}
+	syncDir(dir)
+	return nil
 }
 
 // copySymlink recreates a symlink at dst with the same target.
+//
+// The link is made beside the destination and renamed into place, so the
+// destination the user already had survives a link that could not be
+// created. Removing it first and then failing to put the link back would
+// leave the user with nothing at all.
 func copySymlink(src, dst string) error {
 	target, err := os.Readlink(src)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if filepath.Clean(src) == filepath.Clean(dst) {
+		return fmt.Errorf("copy: %s onto itself", src)
+	}
+	// The destination may be the very file the link points at. Removing it
+	// to put the link in its place would destroy the file the link names,
+	// and the link would then point at itself.
+	if isLinkToItsOwnDestination(src, dst, target) {
+		return fmt.Errorf("copy: %s points at its own destination", src)
+	}
+	dir := filepath.Dir(dst)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	// os.Symlink fails if the path exists, and the destination may be
-	// left over from an earlier copy.
-	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+
+	tmp, err := scratchName(dir)
+	if err != nil {
 		return err
 	}
-	return os.Symlink(target, dst)
+	if err := os.Symlink(target, tmp); err != nil {
+		return err
+	}
+	if err := renameIntoPlace(tmp, dst); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// scratchName reserves an unused name in dir.
+//
+// The name is free, but nothing is written to it: it is a place to build a
+// file before it takes its final name.
+func scratchName(dir string) (string, error) {
+	res, err := os.CreateTemp(dir, tempPrefix+"*")
+	if err != nil {
+		return "", err
+	}
+	name := res.Name()
+	res.Close()
+	os.Remove(name)
+	return name, nil
 }
 
 // isInside reports whether child is parent or lies beneath it.
@@ -330,16 +371,43 @@ func isInside(parent, child string) (bool, error) {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }
 
+// Move relocates src to dst.
+//
+// A rename is the move: it is atomic, it costs nothing, and the file is
+// either in one place or the other. It only works within one filesystem,
+// though, so a move onto a share — or between two shares — comes back as a
+// cross-device link error. That case is handled by copying the file across
+// and removing the original, but only once the copy has been written,
+// flushed and checked. The source is never removed on the strength of a copy
+// that did not land.
 func Move(src, dst string) error {
-	return os.Rename(src, dst)
+	// A source and a destination that are two names for one file would
+	// otherwise be a silent no-op that looks like a successful move.
+	if same, err := SameFile(src, dst); err == nil && same {
+		return fmt.Errorf("move: %s and %s are the same file", src, dst)
+	}
+
+	err := os.Rename(src, dst)
+	if err == nil {
+		return nil
+	}
+	if !isCrossDevice(err) {
+		return err
+	}
+	return moveAcrossDevices(src, dst)
 }
 
 func Delete(path string) error {
 	return os.RemoveAll(path)
 }
 
+// CreateFile creates an empty file at path.
+//
+// The creation is exclusive: a name that is already taken is refused rather
+// than emptied. Creating a file over one that exists would destroy it, and
+// the user asked for a new file, not an empty one.
 func CreateFile(path string) error {
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
