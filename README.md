@@ -201,7 +201,36 @@ the arrows and `Space` work without a modifier — every other binding needs the
 shift. The overlays have their own keys: `j`/`k` move in the fuzzy finder, the
 arrows walk the key list, and typing searches in both.
 
-Long copies show a progress bar; `Esc` cancels and removes only the partial file.
+Long copies show a progress bar; `Esc` cancels and removes only the partial
+file. A move that has to cross a filesystem — onto a share, say — is a copy
+followed by the removal of the original, so it gets a bar and a cancel of its
+own.
+
+### File operations are safe by construction
+
+Copies and moves never expose a half-written file, and never lose one.
+
+* A copy is written to a scratch file beside the destination and renamed into
+  place only once it is whole, flushed and checked against the source. The
+  destination you already had is replaced atomically, or not at all — and it
+  is held aside until the replacement is confirmed, so a replacement that
+  does not land puts the old file back.
+* A failed or cancelled copy leaves the destination exactly as it was. Nothing
+  is emptied, and nothing is left lying around.
+* A move between filesystems — onto an SMB share, say — is a rename the kernel
+  refuses, so omakaiju copies the file across and removes the original. The
+  original is only removed once the copy has landed and been verified.
+* The sources of a move go together or not at all. A move that stops half
+  way leaves every file where it was, so it can be tried again.
+* A source that changed while it was on its way is left alone: it is not the
+  file that arrived.
+* A file reached by two paths (a symlinked directory, a share mounted in two
+  places) is recognised as one file, so copying or moving it onto itself is
+  refused instead of emptying it.
+* Creating a file never empties one that is already there.
+* Every operation that fails says so, names the file, and stays on screen
+  until you do something else. What did not move stays selected, so you can
+  fix the cause and try again.
 
 ## License
 
