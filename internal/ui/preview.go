@@ -300,6 +300,10 @@ func (p Preview) RenderArchive(lines []string) string {
 	if len(body) > maxVisible {
 		body = body[:maxVisible]
 	}
+	// ArchiveLines budgets its rows to the panel width, but clip here as a
+	// backstop: one member must stay one rendered row even if the caller's
+	// budget and the panel's content width ever disagree.
+	body = clipLines(body, p.ContentWidth())
 
 	header := p.header(filepath.Base(p.path))
 	content := strings.Join(body, "\n")

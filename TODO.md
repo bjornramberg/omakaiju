@@ -91,14 +91,6 @@ must leave two payloads in the trash.
 
 ## UI polish
 
-### 24. Archive rows overflow the preview
-
-`internal/ui/archive.go:16` budgets the member's name, appends the size, and
-never clips the row. Most long member paths wrap and push the footer out of
-the panel.
-
-Fix: reserve the size column in the name's budget, or clip the finished row.
-
 ### 25. The progress bar is two rows where the layout expects three
 
 `internal/ui/bottombar.go:50` draws the progress bar without the height the

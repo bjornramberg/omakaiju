@@ -43,6 +43,91 @@ func TestArchiveLinesMarksTruncation(t *testing.T) {
 	}
 }
 
+// longMember is a member path far wider than any preview panel, so a row that
+// is not bounded will wrap and steal a line from the panel's height.
+var longMember = strings.Repeat("deeply/nested/", 12) + "some-very-long-member-name.tar.gz"
+
+// TestArchiveLinesLongNameStaysOnOneLine checks the promise the preview relies
+// on: one archive member is one rendered row, no wider than the panel.
+func TestArchiveLinesLongNameStaysOnOneLine(t *testing.T) {
+	const width = 34
+	entries := []fs.ArchiveEntry{{Name: longMember, Size: 2048}}
+
+	lines := ArchiveLines(entries, false, config.DefaultTheme(), width)
+	if len(lines) != 1 {
+		t.Fatalf("lines = %d, want one line per member", len(lines))
+	}
+	if got := DisplayWidth(lines[0]); got > width {
+		t.Errorf("row is %d cells wide, want <= %d: %q", got, width, stripANSI(lines[0]))
+	}
+	if !strings.Contains(stripANSI(lines[0]), ellipsis) {
+		t.Errorf("a name too long for the row should be truncated with an ellipsis: %q", stripANSI(lines[0]))
+	}
+}
+
+// TestArchiveLinesLongNameKeepsSize checks that reserving the size up front
+// leaves the size intact rather than letting the name crowd it out.
+func TestArchiveLinesLongNameKeepsSize(t *testing.T) {
+	const width = 34
+	entries := []fs.ArchiveEntry{{Name: longMember, Size: 2048}}
+
+	lines := ArchiveLines(entries, false, config.DefaultTheme(), width)
+	if len(lines) != 1 {
+		t.Fatalf("lines = %d, want 1", len(lines))
+	}
+	if got := DisplayWidth(lines[0]); got > width {
+		t.Fatalf("row is %d cells wide, want <= %d", got, width)
+	}
+	if !strings.Contains(stripANSI(lines[0]), "2KB") {
+		t.Errorf("size should survive a truncated name, got %q", stripANSI(lines[0]))
+	}
+}
+
+// TestArchiveLinesShortNameAlignsSize checks that sizes sit in the same column
+// regardless of name length, the way the file rows align their detail columns.
+func TestArchiveLinesShortNameAlignsSize(t *testing.T) {
+	const width = 40
+	entries := []fs.ArchiveEntry{
+		{Name: "a.txt", Size: 5},
+		{Name: "notes.txt", Size: 2048},
+	}
+
+	lines := ArchiveLines(entries, false, config.DefaultTheme(), width)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %d, want 2", len(lines))
+	}
+	for i, want := range []string{"a.txt", "notes.txt"} {
+		flat := stripANSI(lines[i])
+		if !strings.Contains(flat, want) {
+			t.Errorf("line %d missing name %q: %q", i, want, flat)
+		}
+		if got := DisplayWidth(lines[i]); got != width {
+			t.Errorf("line %d is %d cells wide, want the full %d so the size aligns: %q", i, got, width, flat)
+		}
+	}
+	if !strings.HasSuffix(stripANSI(lines[0]), " 5") {
+		t.Errorf("size should be right-aligned, got %q", stripANSI(lines[0]))
+	}
+	if !strings.HasSuffix(stripANSI(lines[1]), " 2KB") {
+		t.Errorf("size should be right-aligned, got %q", stripANSI(lines[1]))
+	}
+}
+
+// TestArchiveLinesNarrowPanelDoesNotOverflow checks the degenerate case: when
+// the panel cannot hold the icon and the size, the row is still bounded.
+func TestArchiveLinesNarrowPanelDoesNotOverflow(t *testing.T) {
+	const width = 6
+	entries := []fs.ArchiveEntry{{Name: longMember, Size: 2048}}
+
+	lines := ArchiveLines(entries, false, config.DefaultTheme(), width)
+	if len(lines) != 1 {
+		t.Fatalf("lines = %d, want 1", len(lines))
+	}
+	if got := DisplayWidth(lines[0]); got > width {
+		t.Errorf("row is %d cells wide, want <= %d: %q", got, width, stripANSI(lines[0]))
+	}
+}
+
 func TestRenderArchiveTruncatesToHeight(t *testing.T) {
 	theme := config.DefaultTheme()
 	entries := make([]fs.ArchiveEntry, 50)

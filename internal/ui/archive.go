@@ -2,7 +2,6 @@ package ui
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/bjornramberg/omakaiju/internal/config"
@@ -15,6 +14,9 @@ import (
 // so long member paths cannot wrap and break the panel height.
 func ArchiveLines(entries []fs.ArchiveEntry, truncated bool, theme config.Theme, maxCells int) []string {
 	lines := make([]string, 0, len(entries)+1)
+	if maxCells < 1 {
+		maxCells = 1
+	}
 
 	for _, e := range entries {
 		// Entry names come from the archive and may hold raw bytes; the styled
@@ -31,15 +33,53 @@ func ArchiveLines(entries []fs.ArchiveEntry, truncated bool, theme config.Theme,
 			icon = icons.ForDir()
 		}
 
-		row := fmt.Sprintf("%s %s", icon, TruncateName(name, maxCells-2-DisplayWidth(icon)))
-		if !e.IsDir {
-			row += "  " + theme.StatusText().Render(fs.FormatSize(e.Size))
+		// The icon column is the icon plus the space after it. On a panel too
+		// narrow to leave even one cell of name, the icon is dropped rather
+		// than letting it push the row past the panel.
+		prefix := icon + " "
+		if DisplayWidth(prefix) >= maxCells {
+			prefix = ""
 		}
+
+		// Budget the size column before truncating the name, not after: the
+		// name gets what is left, and the size is never the part that is cut
+		// off. Directories carry no size. When the panel cannot fit the size
+		// and a cell of name, the size is dropped so the row still fits.
+		detail := ""
+		if !e.IsDir {
+			detail = " " + fs.FormatSize(e.Size)
+			if DisplayWidth(prefix)+DisplayWidth(detail)+1 > maxCells {
+				detail = ""
+			}
+		}
+
+		nameBudget := maxCells - DisplayWidth(prefix) - DisplayWidth(detail)
+		if nameBudget < 1 {
+			nameBudget = 1
+		}
+		left := prefix + TruncateName(name, nameBudget)
+		row := left
+
+		// The size is pushed to the right edge, as the file rows push their
+		// detail columns, so sizes line up down the listing instead of
+		// trailing each name at a different column.
+		if detail != "" {
+			pad := maxCells - DisplayWidth(left) - DisplayWidth(detail)
+			if pad < 0 {
+				pad = 0
+			}
+			row = left + strings.Repeat(" ", pad) + detail
+		}
+
+		// Backstop: a wide glyph or a budget edge case must never produce a
+		// row wider than the panel, which would wrap and add a phantom line.
+		row = TruncateEnd(row, maxCells)
 		lines = append(lines, style.UnsetPaddingLeft().UnsetPaddingRight().Render(row))
 	}
 
 	if truncated {
-		lines = append(lines, theme.StatusText().Render("... listing truncated"))
+		note := TruncateEnd("... listing truncated", maxCells)
+		lines = append(lines, theme.StatusText().Render(note))
 	}
 	return lines
 }
