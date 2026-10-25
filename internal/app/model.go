@@ -118,9 +118,21 @@ func (msg fileOpMsg) result() string {
 // ("rename /a /b: ", "open /a: ") and keeps the reason the user can act on,
 // such as "permission denied". The file name is already shown beside it, so
 // repeating the path adds nothing.
+//
+// A refused replacement is the exception: fs reports it as a
+// *fs.RefusedReplacement, which names the destination that could not be
+// replaced and why. Unwrapping that would reduce the whole outcome to the bare
+// reason the backup failed, leaving the user unable to tell a replacement that
+// was refused because the old file could not be kept from a copy that failed
+// some other way. The type is recognised rather than its wording, so fs may
+// reword the message without the context silently disappearing.
 func readableOpError(err error) string {
 	if err == nil {
 		return ""
+	}
+	var refused *fs.RefusedReplacement
+	if errors.As(err, &refused) {
+		return refused.Error()
 	}
 	var linkErr *os.LinkError
 	if errors.As(err, &linkErr) && linkErr.Err != nil {
@@ -515,6 +527,35 @@ func startMoveCmd(srcs []string, dstDir string, gen int, marks map[string]fs.Ent
 		}
 		// A move that had nothing to copy is already finished, so it reports
 		// straight away rather than flashing a progress bar for a frame.
+		//
+		// A rename-only move is that case even though Pending() is not zero:
+		// its renames are outstanding work, but no bytes have to travel, so
+		// the move is driven to completion here instead of handing a job with
+		// nothing to draw to the progress loop. Every step runs until the
+		// mover says it is done, and a step that fails is reported the same
+		// way the progress path reports one.
+		if copier.CopyPending() == 0 && copier.Pending() > 0 {
+			for {
+				// Capture the entry before Step runs: a failed Step drops the
+				// copier's pointer to the current job.
+				name := copier.CurrentName()
+				path := copier.CurrentSource()
+				done, stepErr := copier.Step()
+				if stepErr != nil {
+					return copyProgressMsg{
+						copier: copier,
+						gen:    gen,
+						move:   true,
+						err:    stepErr,
+						name:   name,
+						path:   path,
+					}
+				}
+				if done {
+					return copyProgressMsg{copier: copier, gen: gen, move: true, done: true}
+				}
+			}
+		}
 		return copyProgressMsg{copier: copier, gen: gen, move: true, done: copier.Pending() == 0}
 	})
 }
@@ -1432,7 +1473,7 @@ func (m Model) handleKeyListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down":
 		m.moveKeyListCursor(1)
 	default:
-		if r, ok := printableRune(msg.String()); ok {
+		if r, ok := printableKeyRune(msg); ok {
 			m.keyListQuery += string(r)
 			m.keyListCursor = 0
 		}
@@ -1455,6 +1496,28 @@ func printableRune(key string) (rune, bool) {
 		return 0, false
 	}
 	return runes[0], true
+}
+
+// printableKeyRune returns the printable rune a key event carries, however the
+// terminal chose to describe it, and whether it carried one at all.
+//
+// The text the terminal delivered comes first: that is the character the user
+// typed. The String() path stays as the fallback for events that carry no
+// Text, so every key that already worked keeps working. The space bar needs
+// the separate check because Key.String hides its printable character behind
+// the key's name: it reports "space", not " ", and a prompt that only looked
+// at the string silently dropped every space.
+func printableKeyRune(msg tea.KeyMsg) (rune, bool) {
+	if r, ok := printableRune(msg.Key().Text); ok {
+		return r, true
+	}
+	if r, ok := printableRune(msg.String()); ok {
+		return r, true
+	}
+	if keyID(msg) == "space" {
+		return ' ', true
+	}
+	return 0, false
 }
 
 // moveKeyListCursor walks within the filtered rows, stopping at the edges
@@ -1518,8 +1581,7 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	keyStr := msg.String()
-	if r, ok := printableRune(keyStr); ok {
+	if r, ok := printableKeyRune(msg); ok {
 		m.fuzzyInput += string(r)
 		cmd, started := m.refilterFuzzy()
 		if started {
@@ -1635,7 +1697,7 @@ func (m Model) handleInputKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if r, ok := printableRune(msg.String()); ok {
+	if r, ok := printableKeyRune(msg); ok {
 		m.inputBuf += string(r)
 		if m.mode == inputFilter {
 			m.setFilter(m.activePane, m.inputBuf)
@@ -1856,9 +1918,20 @@ func (m *Model) finishCopy() {
 
 // cancelCopy aborts an in-flight copy or move.
 //
-// The transfer stops at the next chunk boundary and the scratch file it was
-// writing goes with it. The destination is untouched: it still holds
-// whatever it held before, and the source of a move is still where it was.
+// The cancel signals the abort at once and leaves the part of the cleanup that
+// can wait to a goroutine. Copier.Close waits for a step that is still in
+// flight, and a step can be stuck in a read or a sync on a stalled network
+// filesystem; waiting for it here — this runs on the event loop — would freeze
+// the whole UI until the filesystem returned.
+//
+// The cleanup still finishes. Abort is non-blocking: it sets the flag, and an
+// in-flight step unwinds when it observes it. The goroutine's Close then waits
+// for that step, so the scratch file is removed, the directories the copy made
+// are taken away and the handles are closed, just later than the keypress.
+//
+// The goroutine captures the copier and nothing else. Model is copied by value
+// on every update, so a write to a model copy from here would race the app and
+// change nothing the user sees; the teardown touches only the copier.
 //
 // Because nothing landed, the selection the transfer consumed is put back.
 // For a move, an entry is restored only if its source is still on disk: one
@@ -1867,17 +1940,26 @@ func (m Model) cancelCopy() (tea.Model, tea.Cmd) {
 	if m.copier == nil {
 		return m, nil
 	}
+	copier := m.copier
 	verb := "copy"
-	if m.copier.IsMove() {
+	if copier.IsMove() {
 		verb = "move"
 	}
 
 	marks := m.copyMarks
 	clipboard := m.copyClipboard
 
-	if err := m.copier.Abort(); err != nil {
-		m.opErr = err
-	}
+	// Signal the abort before returning to the loop, so the step stops as
+	// soon as it looks at the flag rather than copying another chunk first.
+	_ = copier.Abort()
+	go func() {
+		// A goroutine the app owns sits outside Bubble Tea's panic net, so
+		// a panic in it would kill the process with the terminal still in
+		// raw mode. There is no UI to report it to from here; the recover
+		// keeps a teardown bug from taking the session with it.
+		defer func() { _ = recover() }()
+		_ = copier.Close()
+	}()
 	m.finishCopy()
 
 	if len(marks) > 0 {

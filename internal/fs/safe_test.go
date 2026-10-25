@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -666,5 +667,63 @@ func TestIsCrossDevice(t *testing.T) {
 	}
 	if isCrossDevice(os.ErrNotExist) {
 		t.Error("an unrelated error should not be treated as cross-device")
+	}
+}
+
+// A destination that cannot be held aside is refused with a typed error, not a
+// bare filesystem reason. The UI has to be able to say that the previous file
+// could not be kept and name it; reducing the refusal to the cause ("operation
+// not permitted") hides both.
+//
+// A directory cannot be hard-linked, so the strict backup fails without needing
+// a permission setup that would behave differently for root.
+func TestRefusedReplacementIsTyped(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "occupied")
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scratch := filepath.Join(dir, "scratch")
+	if err := os.WriteFile(scratch, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := replaceDestination(scratch, dst)
+	if err == nil {
+		t.Fatal("replacing a destination that cannot be held aside should be refused")
+	}
+
+	var refused *RefusedReplacement
+	if !errors.As(err, &refused) {
+		t.Fatalf("error = %T (%v), want a *RefusedReplacement", err, err)
+	}
+	if refused.Path != dst {
+		t.Errorf("Path = %q, want the destination %q", refused.Path, dst)
+	}
+	if refused.Err == nil {
+		t.Fatal("the refusal lost the reason the backup failed")
+	}
+
+	// The cause stays reachable through Unwrap for callers that want it.
+	if !errors.Is(err, refused.Err) {
+		t.Errorf("errors.Is(err, refused.Err) = false, want the underlying error reachable")
+	}
+	var linkErr *os.LinkError
+	if !errors.As(err, &linkErr) {
+		t.Errorf("error = %v, want the backup's *os.LinkError still reachable", err)
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "cannot keep the previous") {
+		t.Errorf("message = %q, want it to say the previous file could not be kept", msg)
+	}
+	if !strings.Contains(msg, dst) {
+		t.Errorf("message = %q, want the destination named", msg)
+	}
+	if linkErr != nil {
+		want := "cannot keep the previous " + dst + ": " + linkErr.Err.Error()
+		if msg != want {
+			t.Errorf("message = %q, want %q", msg, want)
+		}
 	}
 }

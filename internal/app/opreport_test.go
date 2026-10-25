@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -421,6 +422,55 @@ func TestOperationResultText(t *testing.T) {
 				t.Errorf("result = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// A refused replacement has to keep the reason it was refused. fs reports one
+// as a *fs.RefusedReplacement naming the destination that could not be kept;
+// unwrapping that to the cause would leave only "operation not supported", so
+// the user cannot tell a replacement refused because the old file could not be
+// kept from a copy that failed some other way.
+func TestRefusedReplacementKeepsItsContext(t *testing.T) {
+	dst := filepath.Join("/mnt/share", "photo.jpg")
+	reason := errors.New("operation not supported")
+	// Wrapped the way an outer layer might hand it on: the type still has to
+	// be found, and its message is what the user sees.
+	err := fmt.Errorf("copy: %w", &fs.RefusedReplacement{
+		Path: dst,
+		Err: &os.LinkError{
+			Op:  "link",
+			Old: dst,
+			New: filepath.Join("/mnt/share", ".kaiju-123"),
+			Err: reason,
+		},
+	})
+
+	var refused *fs.RefusedReplacement
+	if !errors.As(err, &refused) {
+		t.Fatalf("error = %T (%v), want a *fs.RefusedReplacement to be reachable", err, err)
+	}
+
+	got := readableOpError(err)
+	if got != refused.Error() {
+		t.Errorf("readableOpError = %q, want the refusal's own message %q", got, refused.Error())
+	}
+	if !strings.Contains(got, dst) {
+		t.Errorf("readableOpError = %q, want the refused path named", got)
+	}
+	if !strings.Contains(got, reason.Error()) {
+		t.Errorf("readableOpError = %q, want the underlying reason", got)
+	}
+	if strings.HasPrefix(got, "copy: ") {
+		t.Errorf("readableOpError = %q, want the operation prefix trimmed", got)
+	}
+
+	// The same context has to reach the line the bottom bar builds.
+	line := fileOpMsg{
+		verb:     "copied",
+		failures: []opFailure{{name: "photo.jpg", err: err}},
+	}.result()
+	if !strings.Contains(line, refused.Error()) || !strings.Contains(line, dst) || !strings.Contains(line, reason.Error()) {
+		t.Errorf("result = %q, want the refusal, its path and its reason", line)
 	}
 }
 

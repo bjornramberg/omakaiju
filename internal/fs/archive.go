@@ -30,6 +30,12 @@ type ArchiveEntry struct {
 
 // Truncated reports whether listing stopped early at the scan cap.
 func ListArchive(path string) (entries []ArchiveEntry, truncated bool, err error) {
+	// A FIFO or a device cannot be listed as an archive: opening one can
+	// block or never end. The check happens before the format is dispatched
+	// so no reader below is handed a path it cannot stream.
+	if err := requireRegularFile(path, "archive"); err != nil {
+		return nil, false, err
+	}
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".zip":
 		entries, err = listZip(path)

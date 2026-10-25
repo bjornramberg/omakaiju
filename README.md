@@ -215,15 +215,28 @@ Copies and moves never expose a half-written file, and never lose one.
   destination you already had is replaced atomically, or not at all — and it
   is held aside until the replacement is confirmed, so a replacement that
   does not land puts the old file back.
-* A failed or cancelled copy leaves the destination exactly as it was. Nothing
-  is emptied, and nothing is left lying around.
+* A failed or cancelled copy does not put a half-written file in place, and
+  nothing it made for itself is left lying around. In a folder copy the files
+  it had already finished stay: they are whole, and they are the ones the
+  copy was asked for.
 * A move between filesystems — onto an SMB share, say — is a rename the kernel
   refuses, so omakaiju copies the file across and removes the original. The
   original is only removed once the copy has landed and been verified.
-* The sources of a move go together or not at all. A move that stops half
-  way leaves every file where it was, so it can be tried again.
-* A source that changed while it was on its way is left alone: it is not the
-  file that arrived.
+* A move never replaces a file that is already there. Renaming onto a name
+  that is taken is refused, and the file under that name is left alone. The
+  one case the kernel cannot make safe is another program writing to that
+  exact name in the same instant.
+* A batch of moves that would put two entries under the same name is refused
+  before anything moves, so one entry can never quietly overwrite another.
+* Each entry of a move is moved on its own: it lands only once its
+  destination is safely in place, and it keeps its source until then. A batch
+  can therefore finish partly — if one entry fails, the entries that already
+  landed stay moved, and the report names what failed and what did not. What
+  did not move stays selected, so it can be tried again.
+* A source whose size or timestamp changed while it was on its way is left
+  alone: it is not the file that arrived.
+* Only regular files are copied. A pipe, a socket or a device is reported by
+  name and left where it is, rather than copied.
 * A file reached by two paths (a symlinked directory, a share mounted in two
   places) is recognised as one file, so copying or moving it onto itself is
   refused instead of emptying it.

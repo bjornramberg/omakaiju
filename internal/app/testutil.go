@@ -34,7 +34,9 @@ func ctrlKey(r rune) tea.KeyMsg {
 	return tea.KeyPressMsg(tea.Key{Code: r, Mod: tea.ModCtrl})
 }
 
-// space returns the Space key.
+// space returns a KeyPressMsg for the Space key, shaped the way a terminal
+// actually delivers it: the space in Text and KeySpace in Code. Bubble Tea
+// names the keystroke "space", so the Text is what carries the character.
 func space() tea.KeyMsg {
-	return tea.KeyPressMsg(tea.Key{Code: ' '})
+	return tea.KeyPressMsg(tea.Key{Code: tea.KeySpace, Text: " "})
 }

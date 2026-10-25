@@ -1,10 +1,12 @@
 package fs
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 )
@@ -56,6 +58,14 @@ type Copier struct {
 	// aborted stops the copy at the next chunk boundary.
 	aborted atomic.Bool
 
+	// stepping marks that a Step is running. Abort only touches the fields
+	// below when it can take this flag for itself, so a cancel on the UI
+	// goroutine never races a step for the state Step owns.
+	stepping atomic.Bool
+	// cleaned records that the copy has been unwound. Abort, Step and Close
+	// can all arrive; exactly one of them does the teardown.
+	cleaned atomic.Bool
+
 	// --- everything below is owned by the goroutine that calls Step ---
 
 	jobs  []copyJob
@@ -69,10 +79,23 @@ type Copier struct {
 	// finalPath is the name the scratch file takes once it is whole.
 	finalPath string
 
+	// linkScratch is a symlink staged beside its destination, waiting for
+	// the next step to rename it into place. Nothing at the destination is
+	// touched until that rename.
+	linkScratch string
+	// linkFinal is the name the staged link takes.
+	linkFinal string
+	// linkTarget is the target the staged link stores.
+	linkTarget string
+
 	fileDone int64
 	fileSize int64
 	copied   int64
-	total    int64
+	// total is the byte count of the whole transfer. It is atomic because
+	// a rename that turns out to cross devices at execution time queues a
+	// fallback copy and grows it, while the UI reads Total and Percent on
+	// every frame.
+	total atomic.Int64
 
 	// jobMode is the permission bits of the file being written, so the
 	// finished copy can carry them over.
@@ -83,8 +106,22 @@ type Copier struct {
 	// available.
 	move bool
 	// renamed counts the entries a rename settled. A rename costs nothing,
-	// so those entries are finished before the first step.
-	renamed int
+	// so those entries are counted as soon as they have been renamed. It is
+	// atomic because the UI reads FilesDone and FilesTotal every frame while
+	// the step goroutine advances the count.
+	renamed atomic.Int64
+	// movedJobs counts the entries a copy carried whose source has really
+	// been removed. A source that refused to go is not a moved entry, so it
+	// is not counted here. Atomic for the same reason as renamed.
+	movedJobs atomic.Int64
+	// filesTotal is the number of entries the transfer counts as its total.
+	// It is atomic because a rename that falls back to a copy at execution
+	// time adds more jobs while the UI is reading FilesTotal.
+	filesTotal atomic.Int64
+	// renames are the entries a move settles with a rename. Planning only
+	// fills this queue: the renames run during the settle phase, after any
+	// copy jobs have landed and been verified.
+	renames []renameJob
 	// failures records the entries that could not be moved at all.
 	failures []MoveFailure
 	// srcDirs are the source directories a move emptied. The files are
@@ -95,15 +132,24 @@ type Copier struct {
 	// that is cancelled or fails takes them away again, so the user's
 	// folder is not left with an empty tree in it.
 	createdDirs []string
-	// pending counts the queued jobs that still have to run. It is fixed
-	// once the copier is built, so it can be read from any goroutine.
-	pending int
-	// settled records that a move's sources have already been removed, so
-	// the settling does not run twice.
-	settled bool
-	// settleOK records that the sources were removed, so a move that did
-	// not finish can say so.
-	settleOK bool
+	// copyPending counts the copy jobs and directories that still have to
+	// run. It is atomic because a UI may read it while Step advances.
+	copyPending atomic.Int64
+	// renamePending counts the renames that still have to run. Pending
+	// includes them, so the caller cannot declare a move finished before
+	// its renames have happened.
+	renamePending atomic.Int64
+	// settledJobs counts the copy jobs whose landing has been verified and
+	// whose source has been removed. A move can settle more than once when
+	// a rename turns out to cross devices at execution time and falls back
+	// to a copy.
+	settledJobs int
+	// dstDir is the directory a move's entries are landing in, and
+	// dstDirExisted records that it was there at planning time. A move does
+	// not silently recreate a destination that vanished under it: that
+	// would be a different move from the one the user started.
+	dstDir        string
+	dstDirExisted bool
 
 	filesDone int
 }
@@ -126,6 +172,53 @@ type copyJob struct {
 	// isLink marks a job that recreates a symlink rather than copying the
 	// file it points at.
 	isLink bool
+}
+
+// refusedEntry is an entry the copy will not stream because it is not a
+// regular file.
+//
+// Opening a FIFO waits for a writer that may never come, and a device such as
+// a character device has no end to copy to. Neither is something a copy can
+// carry, so the entry is reported and the rest of the batch carries on.
+type refusedEntry struct {
+	verb string
+	path string
+}
+
+func (e *refusedEntry) Error() string {
+	return fmt.Sprintf("%s: %s is not a regular file", e.verb, e.path)
+}
+
+// errStopped reports that a cancel landed while an entry was about to be put
+// in place. The caller unwinds the copy instead of counting the entry.
+var errStopped = errors.New("copy: cancelled")
+
+// beforeCommitHook runs between the last cancel check and the commit. It is
+// nil in production. A test uses it to land a cancel inside the window
+// between the check and the rename, which cannot be scheduled from another
+// goroutine deterministically.
+var beforeCommitHook func()
+
+// runBeforeCommitHook calls the test seam when one is installed.
+func runBeforeCommitHook() {
+	if beforeCommitHook != nil {
+		beforeCommitHook()
+	}
+}
+
+// refuseExistingDestination reports the per-entry failure a move uses when the
+// destination path is already taken.
+//
+// Lstat is deliberate: a symlink is a destination too, and must not be
+// followed or replaced. A path that cannot be checked at all is refused rather
+// than assumed free.
+func refuseExistingDestination(dst string) error {
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("move: %s already exists", dst)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("move: cannot check %s: %w", dst, err)
+	}
+	return nil
 }
 
 // dirJob is a directory to create at the destination.
@@ -156,20 +249,31 @@ func NewCopier(srcs []string, dstDir string) (*Copier, error) {
 			return nil, err
 		}
 	}
-	c.total = c.scheduledBytes()
-	c.pending = len(c.jobs) + len(c.dirs)
+	c.total.Store(c.scheduledBytes())
+	c.filesTotal.Store(int64(len(c.jobs)))
+	c.copyPending.Store(int64(len(c.jobs) + len(c.dirs)))
 	c.publish()
 	return c, nil
 }
 
-// Pending counts the work still to do: the files to copy and the
-// directories to create.
+// Pending counts the work still to do: the files to copy, the directories to
+// create, and the entries still waiting to be renamed.
 //
-// It is fixed once the copier is built, so it can be read from any
-// goroutine. A mover with nothing pending is already finished: every entry
-// it was given was settled by a rename, or there was nothing to carry —
-// an empty folder still has to be created at the destination.
-func (c *Copier) Pending() int { return c.pending }
+// Renames count as outstanding work even though they cost nothing: the app
+// uses Pending() == 0 to mean the move is finished, and a rename-only move
+// is not finished until its renames have run. It may be read from any
+// goroutine.
+func (c *Copier) Pending() int {
+	return int(c.copyPending.Load() + c.renamePending.Load())
+}
+
+// CopyPending counts the byte-copy work still to do: the file and directory
+// jobs. It does not count renames, which need no progress bar.
+//
+// A caller can use it to tell a rename-only move — Pending() > 0 with
+// CopyPending() == 0 — from one that actually has to carry bytes. It may be
+// read from any goroutine.
+func (c *Copier) CopyPending() int { return int(c.copyPending.Load()) }
 
 // add queues src and, for directories, every file beneath it.
 //
@@ -209,6 +313,13 @@ func (c *Copier) add(src, dstDir string) error {
 		return nil
 	}
 	if !info.IsDir() {
+		// Only regular files are streamed. A FIFO would block forever in
+		// open, and a device can never be read to its end, so both are
+		// refused here rather than at open time.
+		if !info.Mode().IsRegular() {
+			c.recordFailure(src, c.refuseRegular(src))
+			return nil
+		}
 		c.jobs = append(c.jobs, copyJob{
 			src:     src,
 			dst:     dst,
@@ -254,7 +365,8 @@ func (c *Copier) add(src, dstDir string) error {
 			mode:    fi.Mode(),
 			modTime: fi.ModTime().UnixNano(),
 		}
-		if fi.Mode()&os.ModeSymlink != 0 {
+		switch {
+		case fi.Mode()&os.ModeSymlink != 0:
 			target, err := os.Readlink(path)
 			if err != nil {
 				return err
@@ -262,9 +374,35 @@ func (c *Copier) add(src, dstDir string) error {
 			job.link = target
 			job.isLink = true
 			job.size = 0
+		case !fi.Mode().IsRegular():
+			// A FIFO, socket or device inside a tree is refused on its
+			// own: the rest of the tree still copies.
+			c.recordFailure(path, c.refuseRegular(path))
+			return nil
 		}
 		c.jobs = append(c.jobs, job)
 		return nil
+	})
+}
+
+// refuseRegular builds the per-entry error for an entry that is not a
+// regular file. The verb matches the operation, so a move's report reads like
+// a move's.
+func (c *Copier) refuseRegular(path string) *refusedEntry {
+	verb := "copy"
+	if c.move {
+		verb = "move"
+	}
+	return &refusedEntry{verb: verb, path: path}
+}
+
+// recordFailure notes an entry the transfer could not carry, so the caller
+// can report it without losing the rest of the batch.
+func (c *Copier) recordFailure(path string, err error) {
+	c.failures = append(c.failures, MoveFailure{
+		Name: filepath.Base(path),
+		Path: path,
+		Err:  err,
 	})
 }
 
@@ -278,18 +416,17 @@ func (c *Copier) scheduledBytes() int64 {
 
 // Total is the byte count of everything queued. It is fixed once the copier
 // is built, so it can be read from any goroutine.
-func (c *Copier) Total() int64 { return c.total }
+func (c *Copier) Total() int64 { return c.total.Load() }
 
-// FilesTotal counts queued files. Like Total, it never changes.
+// FilesTotal counts queued files. Like Total, it never changes once
+// planning is over, except for a rename that falls back to a copy at
+// execution time.
 //
-// A move counts the entries a rename settled as well: they are finished
-// before the first step, and leaving them out would make the bar count
-// entries that never existed.
+// A move counts the entries waiting to be renamed, and the ones a rename
+// already settled, as well: they are part of the move and leaving them out
+// would make the bar count entries that never existed.
 func (c *Copier) FilesTotal() int {
-	if c.move {
-		return len(c.jobs) + c.renamed
-	}
-	return len(c.jobs)
+	return int(c.filesTotal.Load())
 }
 
 // IsMove reports whether this is a move rather than a copy. A move removes
@@ -324,7 +461,7 @@ func (c *Copier) Copied() int64 { return c.snapshot().copied }
 func (c *Copier) FilesDone() int {
 	done := c.snapshot().filesDone
 	if c.move {
-		done += c.renamed
+		done += int(c.renamed.Load())
 	}
 	return done
 }
@@ -344,7 +481,7 @@ func (c *Copier) FileSize() int64   { return c.snapshot().fileSize }
 // aggregate keeps the bar monotonic across file boundaries; the per-file
 // position is reported separately by FileCopied and FileSize.
 func (c *Copier) Percent() int {
-	total := c.total
+	total := c.total.Load()
 	if total <= 0 {
 		return 100
 	}
@@ -375,7 +512,20 @@ func (c *Copier) currentSource() string {
 
 // Step copies up to copyChunk bytes. It reports done when every file is
 // complete; any error is returned with the copier already closed.
+//
+// Step owns the fields below the published snapshot for the duration of the
+// call. Abort may be called from another goroutine: it only signals, and this
+// call performs the teardown when it observes the signal. Exactly one of the
+// two ever unwinds the copy; see Abort and Close.
 func (c *Copier) Step() (done bool, err error) {
+	c.acquireStep()
+	defer func() {
+		c.stepping.Store(false)
+		// A cancel that landed while this step ran is unwound here, so it
+		// is not left to a Step that may never come.
+		c.stopIfAborted()
+	}()
+
 	if c.aborted.Load() {
 		c.stop()
 		return true, nil
@@ -386,39 +536,82 @@ func (c *Copier) Step() (done bool, err error) {
 	// comes before the check for work left to do, because a copy of nothing
 	// but empty folders is still a copy.
 	if len(c.dirs) > 0 {
-		for _, dir := range c.dirs {
-			// A directory the copy had to make is remembered, so a copy
-			// that is cancelled can take it away again rather than leave
-			// an empty tree behind.
-			if _, err := os.Lstat(dir.path); os.IsNotExist(err) {
-				c.createdDirs = append(c.createdDirs, dir.path)
+		// A move does not recreate a destination directory that existed
+		// when it was planned and has since gone. The copy would land
+		// somewhere the user no longer has open.
+		if c.move && c.dstDirExisted {
+			if _, err := os.Stat(c.dstDir); err != nil {
+				c.stop()
+				return false, err
 			}
-			if err := os.MkdirAll(dir.path, dir.mode); err != nil {
+		}
+		dirs := len(c.dirs)
+		for _, dir := range c.dirs {
+			// Every directory the copy had to make is remembered, so a
+			// copy that is cancelled can take it away again rather than
+			// leave an empty tree behind.
+			if err := mkdirAllTracked(dir.path, dir.mode, &c.createdDirs); err != nil {
 				c.stop()
 				return false, err
 			}
 		}
 		c.dirs = nil
+		c.copyPending.Add(-int64(dirs))
 	}
 
 	if c.index >= len(c.jobs) {
 		return c.complete()
 	}
 
-	if c.dst == nil {
-		if err := c.openCurrent(); err != nil {
-			return false, err
-		}
-		// A symlink job is finished the moment the link exists: there are
-		// no bytes to move.
-		if c.jobs[c.index].isLink {
-			c.index++
-			c.filesDone++
-			c.publish()
-			if c.index >= len(c.jobs) {
-				return c.complete()
+	// A symlink is staged beside its destination by one step and renamed
+	// into place by the next. Nothing is ever removed to make room for it,
+	// so a cancel between the two leaves the destination exactly as it was.
+	if c.jobs[c.index].isLink {
+		if c.linkScratch == "" {
+			if err := c.openCurrent(); err != nil {
+				return false, err
 			}
 			return false, nil
+		}
+		if err := c.finishLink(); err != nil {
+			c.stop()
+			if errors.Is(err, errStopped) {
+				return true, nil
+			}
+			return false, err
+		}
+		c.filesDone++
+		c.index++
+		c.copyPending.Add(-1)
+		c.publish()
+		if c.index >= len(c.jobs) {
+			return c.complete()
+		}
+		return false, nil
+	}
+
+	if c.dst == nil {
+		if err := c.openCurrent(); err != nil {
+			var refused *refusedEntry
+			if errors.As(err, &refused) {
+				// The entry stopped being a regular file between being
+				// queued and being opened. It is reported on its own,
+				// and the rest of the batch carries on.
+				c.recordFailure(refused.path, err)
+				c.index++
+				c.copyPending.Add(-1)
+				c.publish()
+				if c.index >= len(c.jobs) {
+					return c.complete()
+				}
+				return false, nil
+			}
+			c.recordStepFailure(err)
+			// openCurrent may already have created the entry's parent
+			// directories. A failed step leaves the destination as it was,
+			// so the teardown takes them away and closes anything open.
+			c.stop()
+			return false, err
 		}
 	}
 
@@ -429,8 +622,8 @@ func (c *Copier) Step() (done bool, err error) {
 	c.copied += n
 
 	// An abort may have landed while the chunk was being written. The
-	// destination is unlinked by the abort itself, so there is nothing left
-	// to do but stop.
+	// teardown below removes the scratch file and closes the handles, so
+	// there is nothing left to do but stop.
 	if c.aborted.Load() {
 		c.stop()
 		return true, nil
@@ -444,6 +637,14 @@ func (c *Copier) Step() (done bool, err error) {
 	case err == io.EOF:
 		// File finished; put it in place and try the next one.
 		if err := c.finishCurrent(); err != nil {
+			// A cancel that landed in the last moment before the commit is
+			// not a failure: the destination was left as it was and the
+			// copy simply stops.
+			if errors.Is(err, errStopped) {
+				c.stop()
+				return true, nil
+			}
+			c.recordStepFailure(err)
 			c.stop()
 			return false, err
 		}
@@ -455,71 +656,122 @@ func (c *Copier) Step() (done bool, err error) {
 		}
 		c.filesDone++
 		c.index++
+		c.copyPending.Add(-1)
 		c.publish()
 		if c.index >= len(c.jobs) {
 			return c.complete()
 		}
 		return false, nil
 	default:
+		c.recordStepFailure(err)
 		c.stop()
 		return false, err
 	}
 }
 
-// openCurrent opens the next queued file for reading and writing, or creates
+// openCurrent opens the next queued file for reading and writing, or stages
 // the next queued symlink.
 //
 // The bytes go to a scratch file beside the destination rather than to the
 // destination itself, so the name the user expects only ever points at a
-// whole file. An abort or a failure removes the scratch file and leaves the
-// destination exactly as it was.
+// whole file. A symlink is staged the same way: it is made under a scratch
+// name and only renamed into place once it is whole. An abort or a failure
+// removes the scratch entry and leaves the destination exactly as it was.
 func (c *Copier) openCurrent() error {
 	job := c.jobs[c.index]
 
-	if err := os.MkdirAll(filepath.Dir(job.dst), 0o755); err != nil {
-		return err
+	// A destination directory that was there at planning time and has
+	// since gone is not recreated for a move: the copy fails instead of
+	// landing somewhere the user no longer has open.
+	if c.move && c.dstDirExisted {
+		if _, err := os.Stat(c.dstDir); err != nil {
+			return err
+		}
 	}
 
+	dir := filepath.Dir(job.dst)
+
+	// Everything that can refuse the entry is checked, and the source is
+	// opened, before the destination's directories are made. A refusal
+	// then leaves nothing behind to unwind: the copy did not create
+	// anything for it.
+	var src *os.File
 	if job.isLink {
 		// The destination may be the file the link points at, and putting
 		// the link in its place would destroy it.
 		if isLinkToItsOwnDestination(job.src, job.dst, job.link) {
 			return fmt.Errorf("copy: %s points at its own destination", job.src)
 		}
-		// os.Symlink fails if the path exists, and the destination may be
-		// left over from an earlier run.
-		if err := os.Remove(job.dst); err != nil && !os.IsNotExist(err) {
+	} else {
+		// Only a regular file may be opened and streamed. A source that
+		// changed into a FIFO or a device since it was queued would
+		// otherwise block the copy for good, or never end.
+		info, err := os.Lstat(job.src)
+		if err != nil {
 			return err
 		}
-		if err := os.Symlink(job.link, job.dst); err != nil {
+		if !info.Mode().IsRegular() {
+			return c.refuseRegular(job.src)
+		}
+
+		// The destination and the source can be two names for one file — a
+		// symlinked directory, a share mounted twice — and writing to the
+		// destination would then truncate the source before a byte of it
+		// was read.
+		same, err := SameFile(job.src, job.dst)
+		if err != nil {
+			return err
+		}
+		if same {
+			return fmt.Errorf("copy: %s would overwrite itself", job.src)
+		}
+
+		// The source is opened without blocking, and checked again after
+		// the open, so a file swapped for a FIFO between the check above
+		// and the open fails at once instead of waiting for a writer that
+		// may never come.
+		src, err = openSourceNonBlocking(job.src)
+		if err != nil {
+			var refused *refusedEntry
+			if errors.As(err, &refused) {
+				return c.refuseRegular(job.src)
+			}
+			return err
+		}
+	}
+
+	if err := mkdirAllTracked(dir, 0o755, &c.createdDirs); err != nil {
+		if src != nil {
+			src.Close()
+		}
+		return err
+	}
+
+	if job.isLink {
+		// The link is made inside the destination's own directory, so the
+		// rename that puts it in place is atomic and never crosses a
+		// filesystem.
+		scratch, err := scratchName(dir)
+		if err != nil {
+			return err
+		}
+		if err := os.Symlink(job.link, scratch); err != nil {
+			os.Remove(scratch)
 			return err
 		}
 		// The source of a move goes with the rest of the sources, once
 		// everything has landed.
 		c.src = nil
 		c.dst = nil
-		c.dstPath = ""
-		c.finalPath = ""
+		c.dstPath = scratch
+		c.finalPath = job.dst
+		c.linkScratch = scratch
+		c.linkFinal = job.dst
+		c.linkTarget = job.link
 		c.fileDone = 0
 		c.fileSize = 0
+		c.publish()
 		return nil
-	}
-
-	// The destination and the source can be two names for one file — a
-	// symlinked directory, a share mounted twice — and writing to the
-	// destination would then truncate the source before a byte of it was
-	// read.
-	same, err := SameFile(job.src, job.dst)
-	if err != nil {
-		return err
-	}
-	if same {
-		return fmt.Errorf("copy: %s would overwrite itself", job.src)
-	}
-
-	src, err := os.Open(job.src)
-	if err != nil {
-		return err
 	}
 
 	tmp, err := os.CreateTemp(filepath.Dir(job.dst), tempPrefix+"*")
@@ -620,6 +872,28 @@ func (c *Copier) finishCurrent() error {
 		}
 	}
 
+	// A move never replaces a destination that is already there. Planning
+	// refused the entries it already knew about, but the destination can
+	// appear between planning and this commit; the check is repeated here,
+	// with Lstat, so a symlink counts as something that is already there.
+	if c.move {
+		if err := refuseExistingDestination(final); err != nil {
+			return fail(err)
+		}
+	}
+
+	runBeforeCommitHook()
+
+	// The cancel is re-checked as late as it can be: this is the last
+	// statement before the destination is replaced. The window between this
+	// load and the rename below is the smallest the code can make it, and a
+	// cancel that lands in it would have to be observed by the rename
+	// itself. Inside the window the destination is still untouched, so a
+	// cancel restores nothing but the scratch.
+	if c.aborted.Load() {
+		return fail(errStopped)
+	}
+
 	backup, err := replaceDestination(name, final)
 	if err != nil {
 		os.Remove(name)
@@ -631,20 +905,102 @@ func (c *Copier) finishCurrent() error {
 	// be seen at its new name with its content.
 	landed, err := os.Stat(final)
 	if err != nil {
-		restoreBackup(backup, final)
-		return fmt.Errorf("copy: %s did not land: %w", final, err)
+		return restoreFailure(fmt.Errorf("copy: %s did not land: %w", final, err), backup, final)
 	}
 	if landed.Size() != c.fileDone {
-		restoreBackup(backup, final)
-		return fmt.Errorf("copy: %s landed short (%d of %d bytes)", final, landed.Size(), c.fileDone)
+		return restoreFailure(fmt.Errorf("copy: %s landed short (%d of %d bytes)", final, landed.Size(), c.fileDone), backup, final)
 	}
 	// The replacement is good, so the old file can go.
 	discardBackup(backup)
 	return nil
 }
 
+// finishLink puts a staged symlink in place.
+//
+// The link was made beside the destination, so the rename that puts it there
+// is atomic and within one filesystem: a reader sees either the entry that
+// was already there or the whole new link. The destination is never removed
+// first.
+//
+// An existing destination is held aside the same way a file copy holds one,
+// so a rename that does not land can be undone and the old entry put back.
+// Nothing is removed until the link has landed and been checked.
+func (c *Copier) finishLink() error {
+	scratch := c.linkScratch
+	final := c.linkFinal
+	target := c.linkTarget
+	c.linkScratch = ""
+	c.linkFinal = ""
+	c.linkTarget = ""
+	c.dstPath = ""
+	c.finalPath = ""
+
+	// From here on the staged link belongs to this function, so every
+	// failure takes it away again.
+	fail := func(err error) error {
+		os.Remove(scratch)
+		return err
+	}
+
+	// The staged entry has to be the link that was asked for.
+	staged, err := os.Readlink(scratch)
+	if err != nil {
+		return fail(err)
+	}
+	if staged != target {
+		return fail(fmt.Errorf("copy: %s was staged with the wrong target", final))
+	}
+
+	// A move never replaces a destination that is already there. The check
+	// is by Lstat, so a symlink counts as existing and is not followed.
+	if c.move {
+		if err := refuseExistingDestination(final); err != nil {
+			return fail(err)
+		}
+	}
+
+	runBeforeCommitHook()
+
+	// A cancel that landed before the link is put in place leaves the
+	// destination alone: the link was never there, so there is nothing to
+	// undo. The check is the last statement before the rename, which keeps
+	// the window between the check and the commit as small as the code can
+	// make it.
+	if c.aborted.Load() {
+		return fail(errStopped)
+	}
+
+	backup, err := replaceDestination(scratch, final)
+	if err != nil {
+		os.Remove(scratch)
+		return err
+	}
+	syncDir(filepath.Dir(final))
+
+	// The name is on the link, but it is only really there if it can be
+	// seen at its new name, as a link, naming the target that was asked
+	// for.
+	landed, err := os.Lstat(final)
+	if err != nil {
+		return restoreFailure(fmt.Errorf("copy: %s did not land: %w", final, err), backup, final)
+	}
+	if landed.Mode()&os.ModeSymlink == 0 {
+		return restoreFailure(fmt.Errorf("copy: %s did not land as a link", final), backup, final)
+	}
+	landedTarget, err := os.Readlink(final)
+	if err != nil {
+		return restoreFailure(fmt.Errorf("copy: %s did not land: %w", final, err), backup, final)
+	}
+	if landedTarget != target {
+		return restoreFailure(fmt.Errorf("copy: %s landed with the wrong target", final), backup, final)
+	}
+	// The replacement is good, so the old entry can go.
+	discardBackup(backup)
+	return nil
+}
+
 // closeCurrent closes the open files without putting the copy in place. The
-// scratch file is left for stop to remove.
+// scratch entry is left for stop to remove.
 func (c *Copier) closeCurrent() {
 	if c.src != nil {
 		c.src.Close()
@@ -656,6 +1012,9 @@ func (c *Copier) closeCurrent() {
 	}
 	c.dstPath = ""
 	c.finalPath = ""
+	c.linkScratch = ""
+	c.linkFinal = ""
+	c.linkTarget = ""
 }
 
 // complete reports that the transfer has finished.
@@ -664,61 +1023,115 @@ func (c *Copier) closeCurrent() {
 // been checked, the originals can be removed.
 func (c *Copier) complete() (bool, error) {
 	if err := c.settleMove(); err != nil {
+		// The move has stopped: the sources stay where they are and no
+		// rename will run. A UI asking Pending must not be told there is
+		// work left that never will.
+		c.copyPending.Store(0)
+		c.renamePending.Store(0)
 		return false, err
 	}
 	// The copy landed, so the directories it made are the user's now and
 	// are not to be taken away.
 	c.createdDirs = nil
+
+	// The renames run only now: every cross-device copy has landed and
+	// been verified, so a copy that failed left the cheap entries where
+	// they were. A rename that falls back to a copy at this point queues
+	// the copy and keeps the move unfinished; the next step carries it.
+	if c.runRenames() {
+		return false, nil
+	}
 	return true, nil
 }
 
 // settleMove removes the sources of a move, now that every file has landed
 // and been checked.
 //
-// The sources go together or not at all. A file that failed to copy leaves
-// its source exactly where it was, so a transfer that stopped half way never
-// leaves the user with half a move and a hole where the rest of it was.
+// The sources of the jobs settled so far go together or not at all. A file
+// that failed to copy leaves its source exactly where it was, so a transfer
+// that stopped half way never leaves the user with half a move and a hole
+// where the rest of it was.
 //
 // The check comes first: every destination has to be there, whole, and the
 // size the source promised before any source is removed. A source that
 // changed while it was being copied is not the file that was copied, so
 // removing it would throw away something else.
+//
+// A move can settle more than once: a rename that turns out to cross devices
+// at execution time queues a new copy job, and the next settle verifies that
+// job on its own without re-checking sources that have already gone.
 func (c *Copier) settleMove() error {
-	if !c.move || c.settled {
+	if !c.move {
 		return nil
 	}
-	c.settled = true
+	if c.settledJobs >= len(c.jobs) {
+		// There is no new copy work to verify. A tree that held no files
+		// still leaves the directories it was carried in, so those are
+		// removed here once everything else has landed.
+		c.removeEmptySourceDirs()
+		return nil
+	}
 
+	jobs := c.jobs[c.settledJobs:]
 	var problems []string
-	for _, job := range c.jobs {
+	// fail records a problem for the user's report as well as for the
+	// error the step returns. The entry stays in Failures so the app can
+	// name it and offer it for another try.
+	fail := func(job copyJob, err error) {
+		problems = append(problems, err.Error())
+		c.failures = append(c.failures, MoveFailure{
+			Name: filepath.Base(job.src),
+			Path: job.src,
+			Err:  err,
+		})
+	}
+
+	for _, job := range jobs {
 		if job.isLink {
 			// A link either arrived or it did not. Its size is the length
 			// of the path it stores, which says nothing about the copy.
-			if _, err := os.Lstat(job.dst); err != nil {
-				problems = append(problems, fmt.Sprintf("%s did not arrive", job.dst))
+			if err := verifyLinkSource(job); err != nil {
+				fail(job, err)
+				continue
+			}
+			// The destination has to be the link that was planned, with
+			// the same target. Anything else would mean the source was
+			// removed in exchange for something that never arrived.
+			landed, err := os.Lstat(job.dst)
+			if err != nil {
+				fail(job, fmt.Errorf("%s did not arrive", job.dst))
+				continue
+			}
+			if landed.Mode()&os.ModeSymlink == 0 {
+				fail(job, fmt.Errorf("%s did not arrive as a link", job.dst))
+				continue
+			}
+			landedTarget, err := os.Readlink(job.dst)
+			if err != nil || landedTarget != job.link {
+				fail(job, fmt.Errorf("%s did not arrive with the right target", job.dst))
 			}
 			continue
 		}
 		src, err := os.Lstat(job.src)
 		if err != nil {
-			problems = append(problems, fmt.Sprintf("%s could not be checked", job.src))
+			fail(job, fmt.Errorf("%s could not be checked", job.src))
 			continue
 		}
 		if src.Size() != job.size {
-			problems = append(problems, fmt.Sprintf("%s changed while it was being copied", job.src))
+			fail(job, fmt.Errorf("%s changed while it was being copied", job.src))
 			continue
 		}
 		if job.modTime != 0 && src.ModTime().UnixNano() != job.modTime {
-			problems = append(problems, fmt.Sprintf("%s changed while it was being copied", job.src))
+			fail(job, fmt.Errorf("%s changed while it was being copied", job.src))
 			continue
 		}
 		dst, err := os.Stat(job.dst)
 		if err != nil {
-			problems = append(problems, fmt.Sprintf("%s did not arrive", job.dst))
+			fail(job, fmt.Errorf("%s did not arrive", job.dst))
 			continue
 		}
 		if dst.Size() != job.size {
-			problems = append(problems, fmt.Sprintf("%s arrived short", job.dst))
+			fail(job, fmt.Errorf("%s arrived short", job.dst))
 		}
 	}
 	if len(problems) > 0 {
@@ -726,20 +1139,58 @@ func (c *Copier) settleMove() error {
 		// again once the cause is fixed.
 		return fmt.Errorf("move: %s", strings.Join(problems, ", "))
 	}
-	c.settleOK = true
 
 	// Everything arrived, so the sources can go. A source that refuses to
 	// be removed is reported, but the rest still go: the copies are all
 	// there, so nothing is lost by finishing the move.
-	for _, job := range c.jobs {
-		if err := os.Remove(job.src); err != nil && !os.IsNotExist(err) {
-			problems = append(problems, fmt.Sprintf("%s could not be removed", job.src))
+	//
+	// A symlink is checked once more immediately before it is removed. The
+	// source a move deletes must still be the link that was planned; a link
+	// that was repointed since planning is not what arrived, and removing it
+	// would throw away whatever it now names.
+	for _, job := range jobs {
+		if job.isLink {
+			if err := verifyLinkSource(job); err != nil {
+				fail(job, err)
+				continue
+			}
 		}
+		if err := os.Remove(job.src); err != nil && !os.IsNotExist(err) {
+			fail(job, fmt.Errorf("%s could not be removed", job.src))
+			continue
+		}
+		// The entry really moved: its copy landed and its source is gone.
+		c.movedJobs.Add(1)
 	}
+	c.settledJobs = len(c.jobs)
 	c.removeEmptySourceDirs()
 
 	if len(problems) > 0 {
 		return fmt.Errorf("move: %s", strings.Join(problems, ", "))
+	}
+	return nil
+}
+
+// verifyLinkSource checks that a move's symlink source is still the link that
+// was planned: still a symlink, and still storing the same target.
+//
+// A link is a name, not content, so there is no size to compare. The target
+// is the only thing that says whether the link the move is about to remove is
+// the one whose copy landed.
+func verifyLinkSource(job copyJob) error {
+	info, err := os.Lstat(job.src)
+	if err != nil {
+		return fmt.Errorf("%s could not be checked", job.src)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return fmt.Errorf("%s changed while it was being copied", job.src)
+	}
+	target, err := os.Readlink(job.src)
+	if err != nil {
+		return fmt.Errorf("%s could not be checked", job.src)
+	}
+	if target != job.link {
+		return fmt.Errorf("%s changed while it was being copied", job.src)
 	}
 	return nil
 }
@@ -757,21 +1208,31 @@ func (c *Copier) removeEmptySourceDirs() {
 	c.srcDirs = nil
 }
 
-// stop unwinds a cancelled or failed copy: the open files are closed and the
-// scratch file is removed. It runs on the goroutine that owns the copy, so
-// it can touch the copy's own state.
+// stop unwinds a cancelled or failed copy: the open files are closed, the
+// scratch entry is removed and the directories the copy made are taken away.
+// It runs on the goroutine that owns the copy, so it can touch the copy's own
+// state.
+//
+// It is idempotent. Abort, Step and Close can all arrive, and only the first
+// one does the work, so the teardown never runs twice.
 //
 // The destination is never touched. A copy that was cancelled or that failed
 // leaves whatever was already there in place.
 func (c *Copier) stop() {
+	if !c.cleaned.CompareAndSwap(false, true) {
+		return
+	}
 	partial := c.dstPath
 	c.closeCurrent()
 	c.dirs = nil
 	c.index = len(c.jobs)
+	// Nothing that was still pending will ever run now, so the work
+	// counters are cleared. A UI reading Pending after a cancel must see a
+	// finished transfer, not work that is already over.
+	c.copyPending.Store(0)
+	c.renamePending.Store(0)
 	c.publish()
 	if partial != "" {
-		// The abort usually removed it already; this covers the case where
-		// the copy was stopped by an error instead.
 		_ = os.Remove(partial)
 	}
 	c.removeCreatedDirs()
@@ -789,22 +1250,97 @@ func (c *Copier) removeCreatedDirs() {
 	c.createdDirs = nil
 }
 
-// Abort stops the copy and removes the partially written destination file.
-// Files already finished are left in place, since they are complete.
-//
-// It is safe to call while a step is in flight on another goroutine. The
-// stop is signalled with a flag the owner checks at the next chunk boundary,
-// and the partial file is unlinked here: on POSIX, removing a file that is
-// still open leaves the writer on its now-unlinked inode and frees the path
-// immediately, which is what the user asked for.
-func (c *Copier) Abort() error {
-	c.aborted.Store(true)
-	partial := c.snapshot().dstPath
-	if partial == "" {
-		return nil
+// mkdirAllTracked creates dir and every missing parent, recording the
+// directories the copy had to make so a cancelled copy can take them away
+// again. A directory that was already there is not recorded: it is the
+// user's, and it stays.
+func mkdirAllTracked(dir string, mode os.FileMode, created *[]string) error {
+	var missing []string
+	for p := filepath.Clean(dir); ; p = filepath.Dir(p) {
+		if _, err := os.Lstat(p); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		missing = append(missing, p)
+		if parent := filepath.Dir(p); parent == p {
+			break
+		}
 	}
-	if err := os.Remove(partial); err != nil && !os.IsNotExist(err) {
+	if err := os.MkdirAll(dir, mode); err != nil {
 		return err
 	}
+	// Shallowest first, so removeCreatedDirs, which walks backwards, takes
+	// the deepest directory away first.
+	for i := len(missing) - 1; i >= 0; i-- {
+		*created = append(*created, missing[i])
+	}
+	return nil
+}
+
+// acquireStep takes ownership of the fields Step mutates. A cancel holds it
+// only for the moment it takes to unwind, so this never waits for another
+// step: there is one Step goroutine.
+func (c *Copier) acquireStep() {
+	for !c.stepping.CompareAndSwap(false, true) {
+		runtime.Gosched()
+	}
+}
+
+// stopIfAborted unwinds the copy when a cancel landed while a step was
+// running. It is the step's half of the Abort contract: when Abort could not
+// take the step flag, this does the teardown instead. The cleaned flag in
+// stop makes sure only one of them ever does.
+func (c *Copier) stopIfAborted() {
+	if !c.aborted.Load() {
+		return
+	}
+	if !c.stepping.CompareAndSwap(false, true) {
+		return
+	}
+	defer c.stepping.Store(false)
+	c.stop()
+}
+
+// Abort stops the copy and unwinds it: the partially written file and the
+// directories the copy made for itself are removed, and the open source and
+// destination files are closed. Files already finished are left in place,
+// since they are complete.
+//
+// It is safe to call while a step is in flight on another goroutine. The stop
+// is signalled with a flag. If no step is running — the usual case, since the
+// application stops stepping before it cancels — Abort performs the whole
+// teardown itself, so the destination is left exactly as it was without
+// waiting for a Step that will never come. If a step is in flight, that step
+// performs the teardown when it observes the flag. Exactly one of them does
+// it.
+//
+// Because the teardown may be left to a step that is still in flight, call
+// Close when the caller needs the cleanup to have happened by the time it
+// returns.
+func (c *Copier) Abort() error {
+	c.aborted.Store(true)
+	if c.stepping.CompareAndSwap(false, true) {
+		defer c.stepping.Store(false)
+		c.stop()
+	}
+	return nil
+}
+
+// Close stops the copy if it is still running and guarantees that the copy has
+// been unwound: when Close returns, the partial file is gone, the directories
+// the copy created are removed, and the source and destination handles are
+// closed. A copy that already finished is left exactly as it is.
+//
+// Close is idempotent and safe to call from any goroutine. Unlike Abort it may
+// wait for a step that is in flight, which is what makes the guarantee
+// complete when it returns.
+func (c *Copier) Close() error {
+	c.aborted.Store(true)
+	for !c.stepping.CompareAndSwap(false, true) {
+		runtime.Gosched()
+	}
+	defer c.stepping.Store(false)
+	c.stop()
 	return nil
 }

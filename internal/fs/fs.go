@@ -169,6 +169,12 @@ func Copy(src, dst string) error {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return copySymlink(src, dst)
 	}
+	// Only a regular file can be streamed. Opening a FIFO waits for a
+	// writer that may never come, and a device has no end to copy, so a
+	// special file is refused by name rather than opened.
+	if !info.Mode().IsRegular() {
+		return &refusedEntry{verb: "copy", path: src}
+	}
 	return copyFileAtomic(src, dst, info.Mode())
 }
 
@@ -213,6 +219,11 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 	}
 
 	if !info.IsDir() {
+		// A FIFO, socket or device is not a stream a copy can carry.
+		// Refuse it by name; the rest of the tree is still copied.
+		if !info.Mode().IsRegular() {
+			return &refusedEntry{verb: "copy", path: src}
+		}
 		return copyFileAtomic(src, dst, info.Mode())
 	}
 
@@ -299,10 +310,13 @@ func copyDirAtomic(src, dst string, visited []os.FileInfo, depth int, mode os.Fi
 
 // copySymlink recreates a symlink at dst with the same target.
 //
-// The link is made beside the destination and renamed into place, so the
-// destination the user already had survives a link that could not be
-// created. Removing it first and then failing to put the link back would
-// leave the user with nothing at all.
+// The link is staged beside the destination and then put in place with the
+// same protection a file copy uses: an existing destination is held aside by
+// a hard link, so a replacement that does not land can be undone and the old
+// entry put back. Removing the destination first and then failing to put the
+// link back would leave the user with nothing at all.
+//
+// The link is always copied as a link, never as the file it points at.
 func copySymlink(src, dst string) error {
 	target, err := os.Readlink(src)
 	if err != nil {
@@ -327,12 +341,52 @@ func copySymlink(src, dst string) error {
 		return err
 	}
 	if err := os.Symlink(target, tmp); err != nil {
-		return err
-	}
-	if err := renameIntoPlace(tmp, dst); err != nil {
 		os.Remove(tmp)
 		return err
 	}
+
+	// From here on the staged link belongs to this function, so every
+	// failure takes it away again.
+	fail := func(err error) error {
+		os.Remove(tmp)
+		return err
+	}
+
+	// The staged entry has to be the link that was asked for.
+	staged, err := os.Readlink(tmp)
+	if err != nil {
+		return fail(err)
+	}
+	if staged != target {
+		return fail(fmt.Errorf("copy: %s was staged with the wrong target", dst))
+	}
+
+	backup, err := replaceDestination(tmp, dst)
+	if err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	syncDir(dir)
+
+	// The name is on the link, but it is only really there if it can be
+	// seen at its new name, as a link, naming the target that was asked
+	// for. A replacement that turns out not to have landed is undone.
+	landed, err := os.Lstat(dst)
+	if err != nil {
+		return restoreFailure(fmt.Errorf("copy: %s did not land: %w", dst, err), backup, dst)
+	}
+	if landed.Mode()&os.ModeSymlink == 0 {
+		return restoreFailure(fmt.Errorf("copy: %s did not land as a link", dst), backup, dst)
+	}
+	landedTarget, err := os.Readlink(dst)
+	if err != nil {
+		return restoreFailure(fmt.Errorf("copy: %s did not land: %w", dst, err), backup, dst)
+	}
+	if landedTarget != target {
+		return restoreFailure(fmt.Errorf("copy: %s landed with the wrong target", dst), backup, dst)
+	}
+	// The replacement is good, so the old entry can go.
+	discardBackup(backup)
 	return nil
 }
 
@@ -387,6 +441,17 @@ func Move(src, dst string) error {
 		return fmt.Errorf("move: %s and %s are the same file", src, dst)
 	}
 
+	// A rename replaces an existing name atomically, which would destroy
+	// whatever was there without a word. The destination is checked with
+	// Lstat, so a symlink counts as something that is already there and is
+	// not followed. This is the same check the app's rename prompt relies
+	// on.
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("move: destination %s already exists", dst)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("move: cannot check destination %s: %w", dst, err)
+	}
+
 	err := os.Rename(src, dst)
 	if err == nil {
 		return nil
@@ -435,6 +500,11 @@ func DetectFileType(path string) FileType {
 	}
 	if info.IsDir() {
 		return FileTypeDirectory
+	}
+	// Only a regular file may be sampled. Opening a FIFO waits for a writer
+	// that may never come, and a device has no end. Neither is a preview.
+	if !info.Mode().IsRegular() {
+		return FileTypeBinary
 	}
 
 	ext := strings.ToLower(filepath.Ext(path))
@@ -500,7 +570,28 @@ func isControlByte(b byte) bool {
 	return b < 0x20 || b == 0x7f
 }
 
+// requireRegularFile refuses a path that is not a regular file before a
+// reader opens it.
+//
+// Opening a FIFO waits for a writer that may never come, and a device has no
+// end to read, so neither can be treated as a stream. Stat follows a symlink,
+// which is what a reader wants: the link is a name for the file being read.
+// Directories have their own readers and are refused here too.
+func requireRegularFile(path, verb string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s: %s is not a regular file", verb, path)
+	}
+	return nil
+}
+
 func ReadFileHead(path string, maxLines int) ([]string, error) {
+	if err := requireRegularFile(path, "read"); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -516,6 +607,9 @@ func ReadFileHead(path string, maxLines int) ([]string, error) {
 }
 
 func CountLines(path string) (int, error) {
+	if err := requireRegularFile(path, "read"); err != nil {
+		return 0, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, err
