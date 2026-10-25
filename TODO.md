@@ -16,16 +16,6 @@ operations should be signed (#34).
 
 ## Correctness and robustness
 
-### 18. Archive entry names come back raw
-
-The fs layer hands out the member names as the archive stores them: control
-bytes, absolute paths and `..` among them. The UI sanitises them when
-drawing now, but the fs layer is what a future "extract" would consume, and
-that is where the check belongs.
-
-Fix: sanitise at the fs boundary and flag entries that are absolute or that
-climb out of the archive.
-
 ### 21. The trash is the home trash only
 
 `internal/fs/trash.go:20` always uses the XDG home trash, and

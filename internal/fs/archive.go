@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // maxArchiveScan caps how many members a listing returns. Both formats are
@@ -41,9 +42,112 @@ var ErrUnsupportedArchive = errors.New("unsupported archive format")
 var errArchiveBudget = errors.New("archive decompression budget exhausted")
 
 type ArchiveEntry struct {
-	Name  string
-	Size  int64
+	// Name is the member's stored name made safe to show in a terminal: a tab
+	// becomes one space, and control characters, DEL, the C1 controls and
+	// invalid UTF-8 become U+FFFD. It is still only a label; UnsafePath says
+	// whether the stored name may be used as an extraction destination.
+	Name string
+	Size int64
+	// IsDir reports whether the member is a directory entry.
 	IsDir bool
+	// UnsafePath reports that the member's stored name is an absolute path or
+	// contains a ".." component, so extracting it verbatim could write outside
+	// the archive's root. Such an entry is still listed; the flag lets an
+	// extractor refuse it from the listing rather than re-deriving intent from
+	// the spelling. It is computed from the raw name and is not affected by
+	// sanitisation.
+	UnsafePath bool
+}
+
+// newArchiveEntry builds one listing row. The raw name is sanitised for the
+// terminal, while the raw spelling decides whether the member points outside
+// the archive: sanitisation never changes a separator or a "..", but the two
+// questions are kept separate so neither can mask the other.
+func newArchiveEntry(rawName string, size int64, isDir bool) ArchiveEntry {
+	return ArchiveEntry{
+		Name:       sanitizeArchiveName(rawName),
+		Size:       size,
+		IsDir:      isDir,
+		UnsafePath: unsafeArchivePath(rawName),
+	}
+}
+
+// archiveReplacement stands in for a byte the terminal would act on.
+const archiveReplacement = "\uFFFD"
+
+// sanitizeArchiveName makes an archive member's stored name safe to hand to a
+// terminal. It mirrors the name contract internal/ui applies when drawing:
+// escape sequences are the hazard, since a hostile archive can clear panes or
+// move the cursor with them. A tab is a cursor instruction rather than a
+// glyph, so it becomes one space; every other control character, DEL, the C1
+// controls and invalid UTF-8 become U+FFFD.
+//
+// The fs package owns this copy because it is the boundary an extractor will
+// consume and must not depend on internal/ui.
+func sanitizeArchiveName(s string) string {
+	// Printable ASCII cannot be misinterpreted and is the common case, so it
+	// is returned untouched without allocating.
+	plain := true
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] >= 0x7f {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return s
+	}
+
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\t':
+			b.WriteByte(' ')
+		case r == utf8.RuneError, r < 0x20, r >= 0x7f && r <= 0x9f:
+			// utf8.RuneError also covers invalid encoding; a genuine U+FFFD is
+			// replaced with itself and changes nothing.
+			b.WriteString(archiveReplacement)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// unsafeArchivePath reports whether a stored member name is absolute or
+// contains a ".." component. The name is judged as stored, before
+// sanitisation, so an escape sequence elsewhere in the name cannot disguise
+// the shape of the path.
+//
+// A backslash is treated as a separator and a leading drive letter as
+// absolute: members are often written on Windows, and an extractor running on
+// Unix may still translate those spellings. A ".." anywhere is refused even
+// when the surrounding components would cancel it out (a/../b): that is a
+// climb attempt, and the cost of refusing it is one member that is still
+// listed but not extracted.
+func unsafeArchivePath(name string) bool {
+	if name == "" {
+		return false
+	}
+
+	p := strings.ReplaceAll(name, `\`, "/")
+	if strings.HasPrefix(p, "/") {
+		return true
+	}
+	if len(p) >= 2 && p[1] == ':' && isASCIILetter(p[0]) {
+		return true
+	}
+	for _, part := range strings.Split(p, "/") {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 // Truncated reports whether listing stopped early at an entry or byte cap.
@@ -105,11 +209,7 @@ func listZip(path string) ([]ArchiveEntry, bool, error) {
 
 	entries := make([]ArchiveEntry, 0, len(files))
 	for _, f := range files {
-		entries = append(entries, ArchiveEntry{
-			Name:  f.Name,
-			Size:  int64(f.UncompressedSize64),
-			IsDir: f.FileInfo().IsDir(),
-		})
+		entries = append(entries, newArchiveEntry(f.Name, int64(f.UncompressedSize64), f.FileInfo().IsDir()))
 	}
 	return entries, truncated, nil
 }
@@ -177,11 +277,7 @@ func listTar(path string, r io.Reader) ([]ArchiveEntry, bool, error) {
 			return nil, false, err
 		}
 
-		entries = append(entries, ArchiveEntry{
-			Name:  hdr.Name,
-			Size:  hdr.Size,
-			IsDir: hdr.Typeflag == tar.TypeDir,
-		})
+		entries = append(entries, newArchiveEntry(hdr.Name, hdr.Size, hdr.Typeflag == tar.TypeDir))
 
 		if budget != nil && hdr.Size > budget.remaining {
 			// Reaching the next header means decompressing this payload, and
