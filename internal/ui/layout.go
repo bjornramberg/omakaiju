@@ -20,8 +20,11 @@ type Layout struct {
 	Width  int
 	Height int
 	Theme  config.Theme
-	// PanesStacked puts the two file panes on top of each other instead of
-	// side by side. The preview stays on the right at full height either way.
+	// PanesStacked is the user's choice to put the two file panes on top of
+	// each other instead of side by side. It is remembered even when the
+	// terminal is too short to honour it: the layout falls back to side by
+	// side until there is room again. The preview stays on the right at full
+	// height either way.
 	PanesStacked bool
 	// PreviewHidden hides the preview pane, giving full width to the file panes.
 	PreviewHidden bool
@@ -29,7 +32,7 @@ type Layout struct {
 
 // minStackedMainHeight is the smallest main area that still fits two stacked
 // panes. Below this the panes would degrade to little more than borders, so
-// the toggle stays horizontal instead.
+// they are drawn side by side instead.
 const minStackedMainHeight = 10
 
 func NewLayout(width, height int, theme config.Theme) Layout {
@@ -70,10 +73,18 @@ func (l Layout) PreviewWidth() int {
 	return w
 }
 
+// stacked reports whether the panes are actually drawn on top of each other.
+// PanesStacked is only the request: a terminal too short for the stacked
+// minimum falls back to side by side, and returns to stacked once it grows,
+// because the choice itself is never discarded.
+func (l Layout) stacked() bool {
+	return l.PanesStacked && l.CanStack()
+}
+
 // PaneWidth keeps at least one column for each pane even when the preview takes
 // a third of a very narrow terminal. Stacked panes span the whole panes area.
 func (l Layout) PaneWidth() int {
-	if l.PanesStacked {
+	if l.stacked() {
 		w := l.Width - l.PreviewWidth()
 		if w < 1 {
 			w = 1
@@ -92,7 +103,7 @@ func (l Layout) PaneWidth() int {
 // row on odd heights so the pair always sums back to the main area exactly.
 func (l Layout) PaneHeight(top bool) int {
 	h := l.MainAreaHeight()
-	if !l.PanesStacked {
+	if !l.stacked() {
 		return h
 	}
 	half := h / 2
@@ -106,14 +117,16 @@ func (l Layout) PaneHeight(top bool) int {
 }
 
 // CanStack reports whether the terminal is tall enough for stacked panes to be
-// usable.
+// usable. It is checked on every access, not just when the user toggles, so a
+// terminal that shrinks under a stacked layout falls back rather than showing
+// panes that are nothing but borders.
 func (l Layout) CanStack() bool {
 	return l.MainAreaHeight() >= minStackedMainHeight
 }
 
 func (l Layout) Render(topBar, leftPane, rightPane, preview, bottomBar string) string {
 	var main string
-	if l.PanesStacked {
+	if l.stacked() {
 		stack := lipgloss.JoinVertical(lipgloss.Left, leftPane, rightPane)
 		if l.PreviewHidden {
 			main = stack

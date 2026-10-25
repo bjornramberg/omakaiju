@@ -46,15 +46,6 @@ must leave two payloads in the trash.
 
 ## UI polish
 
-### 26. Stacked panes are not reconsidered when the terminal shrinks
-
-`internal/ui/layout.go:110` (`CanStack`) is consulted when the user toggles
-the layout and never again. Shrink the terminal afterwards and each stacked
-pane is two rows high, with no filename visible.
-
-Fix: fall back to side by side at render time when the layout no longer
-fits.
-
 ### 27. A 40-column terminal is too narrow to use
 
 `internal/ui/layout.go:14` allows a 40-column terminal, which gives the

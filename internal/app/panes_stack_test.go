@@ -45,20 +45,36 @@ func TestStackTogglePreservesState(t *testing.T) {
 	}
 }
 
-// Below the floor the toggle refuses and says why, instead of rendering
-// panes too short to use.
-func TestStackToggleRefusesShortTerminal(t *testing.T) {
+// Below the floor the layout falls back to side by side, so the toggle still
+// records the choice: a user who stacked the panes in a small window has to
+// be able to unstack them again.
+func TestStackToggleWorksBelowTheFloor(t *testing.T) {
 	m := modelIn(t, t.TempDir())
 	m.width, m.height = 100, 15 // main area 9, below the floor of 10
 
 	updated, _ := m.Update(shiftKey('s'))
 	m = updated.(Model)
 
-	if m.panesStacked {
-		t.Error("stacking must stay off below the floor")
+	if !m.panesStacked {
+		t.Error("the choice must be recorded even when the terminal is too short to show it")
 	}
-	if m.opResult == "" {
-		t.Error("expected a note explaining why stacking refused")
+
+	// The layout is what protects the user: it draws the panes side by side
+	// when there is no room for the stacked ones.
+	layout := ui.NewLayout(m.width, m.height, m.theme)
+	layout.PanesStacked = m.panesStacked
+	if layout.CanStack() {
+		t.Fatal("a terminal this short cannot stack")
+	}
+	if got, want := layout.PaneHeight(true), layout.MainAreaHeight(); got != want {
+		t.Errorf("the fallback pane is %d rows, want the full main area %d", got, want)
+	}
+
+	// And the choice can be taken back.
+	updated, _ = m.Update(shiftKey('s'))
+	m = updated.(Model)
+	if m.panesStacked {
+		t.Error("Shift+S again should unstack the panes")
 	}
 }
 

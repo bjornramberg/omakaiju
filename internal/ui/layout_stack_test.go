@@ -25,12 +25,28 @@ func TestLayoutSideBySideGeometryUnchanged(t *testing.T) {
 }
 
 // Stacked panes span the panes area and always sum back to the main height,
-// including odd heights where one of them takes the extra row.
+// including odd heights where one of them takes the extra row. Heights below
+// the stacking minimum keep the request but are drawn side by side.
 func TestLayoutStackedGeometry(t *testing.T) {
 	theme := config.DefaultTheme()
 	for _, h := range []int{10, 11, 16, 24, 25, 31, 50} {
 		l := NewLayout(100, h, theme)
 		l.PanesStacked = true
+
+		if !l.CanStack() {
+			// Too short to honour the choice: the panes fall back to side by
+			// side and take the full main height each.
+			if want := (100 - l.PreviewWidth()) / 2; l.PaneWidth() != want {
+				t.Errorf("height %d: fallback width %d, want %d", h, l.PaneWidth(), want)
+			}
+			if l.PaneHeight(true) != l.MainAreaHeight() || l.PaneHeight(false) != l.MainAreaHeight() {
+				t.Errorf("height %d: fallback panes must take the full main height", h)
+			}
+			if !l.PanesStacked {
+				t.Errorf("height %d: the fallback must not discard the user's choice", h)
+			}
+			continue
+		}
 
 		if l.PaneWidth() != 100-l.PreviewWidth() {
 			t.Errorf("height %d: stacked width %d, want the full panes area", h, l.PaneWidth())

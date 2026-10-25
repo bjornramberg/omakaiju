@@ -1429,12 +1429,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activePane = 1 - m.activePane
 			return m, m.updatePreview()
 		case nav.ActionStack:
-			// The layout object lives in View, so the gate check builds a
-			// throwaway one from the current size.
-			if !ui.NewLayout(m.width, m.height, m.theme).CanStack() {
-				m.opResult = "terminal too short to stack panes"
-				return m, nil
-			}
+			// The layout falls back to side by side when the terminal is
+			// too short for the stacked layout, so the choice can always be
+			// made: refusing the key here would leave a user who stacked
+			// the panes in a small window unable to unstack them.
 			m.panesStacked = !m.panesStacked
 			return m, nil
 		case nav.ActionSort:
