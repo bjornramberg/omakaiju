@@ -56,13 +56,3 @@ func (c *previewRenderCache) put(path string, version, width, height int, render
 	c.width = width
 	c.height = height
 }
-
-// reset drops the cached preview, so the next draw starts from scratch.
-func (c *previewRenderCache) reset() {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.rendered = ""
-}

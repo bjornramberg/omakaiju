@@ -210,7 +210,7 @@ every build, so it cannot drift away from what the keys actually do.
 | `Shift+S` | Stack file panes vertically / restore side by side |
 | `Shift+O` | Cycle sort order: name → size↓ → size↑ → name (dirs stay first) |
 | `Shift+I` | Toggle preview |
-| `Shift+P` | Fuzzy find (`j/k` navigate, type/backspace refines, `Enter` jumps, `Esc` exits) |
+| `Shift+P` | Fuzzy find (type to search, arrows or ctrl+j/k move, enter jumps). `Enter` selects the result; `Esc` exits |
 | `Shift+F` | Filter pane (per-pane, arrows keep the prompt open) |
 | `Shift+G` | Goto path |
 | `Shift+E` | Refresh active pane |
@@ -225,8 +225,10 @@ every build, so it cannot drift away from what the keys actually do.
 The shifted key is the whole binding: `Shift+G` opens the goto prompt and the
 unshifted `g` does nothing. In the file view only `q`, `Esc`, `Tab`, `Enter`,
 the arrows and `Space` work without a modifier — every other binding needs the
-shift. The overlays have their own keys: `j`/`k` move in the fuzzy finder, the
-arrows walk the key list, and typing searches in both.
+shift. The overlays have their own keys: typing searches in both, and the
+arrows walk both lists. In the fuzzy finder `Ctrl+J`/`Ctrl+K` also move (a
+terminal may send `Ctrl+J` as a newline), and `Enter` jumps to the result and
+leaves the cursor on it.
 
 Long copies show a progress bar; `Esc` cancels and removes only the partial
 file. A move that has to cross a filesystem — onto a share, say — is a copy

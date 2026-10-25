@@ -2,8 +2,11 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bjornramberg/omakaiju/internal/fs"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -55,6 +58,73 @@ func TestUpdatePanicKeepsPreUpdateState(t *testing.T) {
 
 	if m2.leftCursor != 2 {
 		t.Errorf("leftCursor = %d, want 2 (the pre-update state)", m2.leftCursor)
+	}
+}
+
+// A marked set changed by the failed update must be discarded with the rest
+// of it. Model is copied by value, but the map is a reference, so an in-place
+// mark would survive the recovery and leave the user with a selection they
+// never confirmed.
+func TestUpdatePanicDiscardsMarkedMutation(t *testing.T) {
+	m, dir := fixture(t)
+	keep := filepath.Join(dir, "alpha.txt")
+	m.marked = map[string]fs.Entry{
+		keep: {Name: "alpha.txt", Path: keep},
+	}
+	m.leftCursor = indexOf(m.visibleFiles(0), "beta.txt")
+	if m.leftCursor < 0 {
+		t.Fatal("beta.txt missing from the listing")
+	}
+	m.updateAfterHook = func() { panic("boom") }
+
+	// Shift+M marks beta.txt, which would add it to the shared map.
+	updated, _ := m.Update(shiftKey('m'))
+	m2 := updated.(Model)
+
+	if !m2.Crashed() {
+		t.Fatal("the crash was not recorded")
+	}
+	if len(m2.marked) != 1 {
+		t.Fatalf("marked = %v, want only the pre-update entry", m2.marked)
+	}
+	if _, ok := m2.marked[keep]; !ok {
+		t.Errorf("marked = %v, want %s still marked", m2.marked, keep)
+	}
+}
+
+// Sorting must not reorder the caller's backing array: an in-place sort in a
+// handler would leak out of a failed update, just like an in-place mark.
+func TestApplySortLeavesTheCallersSliceAlone(t *testing.T) {
+	m, _ := fixture(t)
+
+	original := []fs.Entry{
+		{Name: "b.txt", Path: "/b", Size: 1},
+		{Name: "a.txt", Path: "/a", Size: 2},
+	}
+	m.leftFiles = append([]fs.Entry(nil), original...)
+	m.leftSort = fs.SortByName
+	m.applySort(0)
+
+	if m.leftFiles[0].Name != "a.txt" {
+		t.Errorf("the model's listing was not sorted: %v", m.leftFiles)
+	}
+	if original[0].Name != "b.txt" {
+		t.Errorf("the caller's slice was reordered in place: %v", original)
+	}
+}
+
+// The listing handed to callers must not be the model's own array, or a
+// caller could change the pre-update state through it.
+func TestVisibleFilesDoesNotExposeTheModelsArray(t *testing.T) {
+	m, _ := fixture(t)
+
+	files := m.visibleFiles(0)
+	if len(files) == 0 {
+		t.Fatal("the fixture listing is empty")
+	}
+	files[0] = fs.Entry{Name: "hijacked"}
+	if m.leftFiles[0].Name == "hijacked" {
+		t.Error("visibleFiles handed out the model's backing array")
 	}
 }
 

@@ -170,49 +170,6 @@ func (k KeyList) maxShownRows() int {
 	return quota
 }
 
-// visibleWindow is the finder's window logic verbatim: cursor-centred on
-// overflow, with "..." markers showing where the list continues.
-func (k KeyList) visibleWindow(total int) (start, end int, above, below bool) {
-	quota := k.maxShownRows()
-	if total <= quota {
-		return 0, total, false, false
-	}
-
-	markers := 0
-	switch {
-	case quota >= 3:
-		markers = 2
-	case quota == 2:
-		markers = 1
-	}
-	capacity := quota - markers
-	if quota >= 3 && capacity < 1 {
-		capacity = 1
-	}
-
-	start = k.Cursor - capacity/2
-	if start < 0 {
-		start = 0
-	}
-	if start > total-capacity {
-		start = total - capacity
-	}
-	end = start + capacity
-	if end > total {
-		end = total
-	}
-
-	above = start > 0
-	below = end < total
-	if markers == 1 && above && below {
-		above = false
-	}
-	if markers == 0 {
-		above, below = false, false
-	}
-	return start, end, above, below
-}
-
 // emphasizeText renders text in a base style with every case-insensitive
 // occurrence of the query accented, restoring the finder's
 // matched-character treatment inside the key column and the descriptions
@@ -346,20 +303,6 @@ func selectableIndexToItemIndex(items []renderItem, selIdx int) int {
 		}
 	}
 	return len(items) - 1
-}
-
-// itemIndexToSelectableIndex converts an items index to the selectable-row index.
-func itemIndexToSelectableIndex(items []renderItem, itemIdx int) int {
-	count := 0
-	for i, it := range items {
-		if i == itemIdx {
-			return count
-		}
-		if it.kind == itemKeyRow {
-			count++
-		}
-	}
-	return count
 }
 
 // Render draws the panel; the result is meant to be overlaid on the live

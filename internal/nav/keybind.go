@@ -79,7 +79,7 @@ var Keybinds = []Keybind{
 	{"shift+s", ActionStack, "stack / unstack panes", SectionPaneView},
 	{"shift+o", ActionSort, "cycle sort order", SectionPaneView},
 	{"shift+i", ActionTogglePreview, "toggle preview", SectionPaneView},
-	{"shift+p", ActionFuzzyFind, "fuzzy find", SectionPaneView},
+	{"shift+p", ActionFuzzyFind, "fuzzy find (type to search, arrows or ctrl+j/k move, enter jumps)", SectionPaneView},
 	{"shift+f", ActionFilter, "filter pane", SectionPaneView},
 	{"shift+g", ActionGoto, "goto path", SectionPaneView},
 	{"shift+e", ActionRefresh, "refresh pane", SectionPaneView},

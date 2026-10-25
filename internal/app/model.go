@@ -422,8 +422,13 @@ type Model struct {
 	// updateHook and viewHook inject a fault into the update and render
 	// paths. They exist so the panic recovery can be exercised without
 	// waiting for a real bug to trip it; both are nil in production.
-	updateHook func()
-	viewHook   func()
+	//
+	// updateAfterHook runs once the message handler has finished and before
+	// its result is returned. It lets a test panic after a handler has made
+	// a change, which is the case the crash recovery has to discard.
+	updateHook      func()
+	updateAfterHook func()
+	viewHook        func()
 }
 
 func NewModel(cfg config.Config) Model {
@@ -857,12 +862,26 @@ func (m *Model) setSort(pane int, mode fs.SortMode) {
 }
 
 // applySort re-orders a pane's raw listing by its current sort mode.
+//
+// The sort happens on a copy. Model is copied by value on every update, but
+// a slice is a reference: sorting the model's own backing array in place
+// would leak out of a failed update and corrupt the state crash recovery
+// hands back.
 func (m *Model) applySort(pane int) {
 	if pane == 0 {
-		fs.SortEntriesBy(m.leftFiles, m.leftSort)
+		m.leftFiles = sortEntriesCopy(m.leftFiles, m.leftSort)
 	} else {
-		fs.SortEntriesBy(m.rightFiles, m.rightSort)
+		m.rightFiles = sortEntriesCopy(m.rightFiles, m.rightSort)
 	}
+}
+
+// sortEntriesCopy returns entries sorted by mode, leaving the caller's slice
+// and its backing array untouched.
+func sortEntriesCopy(entries []fs.Entry, mode fs.SortMode) []fs.Entry {
+	out := make([]fs.Entry, len(entries))
+	copy(out, entries)
+	fs.SortEntriesBy(out, mode)
+	return out
 }
 
 // cycleSort advances the active pane through name -> size↓ -> size↑ -> name,
@@ -890,8 +909,20 @@ func (m *Model) cycleSort(pane int) fs.SortMode {
 	return next
 }
 
+// visibleFiles returns the pane's listing after filtering.
+//
+// The result is never the model's own backing array: with no filter active
+// the caller gets a copy, and filtering already allocates. A caller that
+// reorders the slice it is handed therefore cannot change the model — and a
+// panic after such a change cannot leave it behind in the restored state.
 func (m Model) visibleFiles(pane int) []fs.Entry {
-	return nav.FilterEntries(m.rawFiles(pane), m.filterOf(pane))
+	files := m.rawFiles(pane)
+	if filter := m.filterOf(pane); filter != "" {
+		return nav.FilterEntries(files, filter)
+	}
+	out := make([]fs.Entry, len(files))
+	copy(out, files)
+	return out
 }
 
 func (m *Model) setRestore(pane int, name string) {
@@ -1035,9 +1066,13 @@ func loadPreviewCmd(path, stamp string, theme config.Theme) tea.Cmd {
 // failed update is discarded and the pre-update state is handed back, so the
 // app redraws and carries on.
 //
-// Model is a value type, so the copy this method holds is untouched by the
-// panic in update; returning it is exactly the state the user was in before
-// the keypress that triggered the fault.
+// Model is a value type, but some of its fields are references: the marked
+// set and the file slices. The handlers that change those copy them first
+// (handleMove and restoreMarks for the marks, applySort for the listing), and
+// visibleFiles never hands out the model's own array. That is what makes the
+// state this method holds genuinely untouched by a panic in update: returning
+// it is exactly the state the user was in before the keypress that triggered
+// the fault.
 func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	model = m
 	defer func() {
@@ -1064,6 +1099,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.updateHook != nil {
 		m.updateHook()
+	}
+	if m.updateAfterHook != nil {
+		defer m.updateAfterHook()
 	}
 	switch msg := msg.(type) {
 	case panicMsg:
@@ -1259,6 +1297,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.previewCacheStamp = ""
 		m.previewStamp = ""
 		m.previewLoading = false
+		// The rendered frame is cached under the preview's version, and an
+		// empty preview is drawn too: without a new version the cache would
+		// hand back the frame the old palette produced.
+		m.previewVersion++
 		// Re-arm: the previous wait command has returned, so listening must be
 		// resumed or only the first reload would ever take effect.
 		return m, tea.Batch(m.updatePreview(), m.waitThemeCmd())
@@ -1664,7 +1706,7 @@ func (m *Model) moveKeyListCursor(step int) {
 }
 
 func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	switch keyID(msg) {
 	case "esc":
 		m.clearFuzzy()
 		return m, nil
@@ -1672,16 +1714,20 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.fuzzyCursor < len(m.fuzzyResults) {
 			selected := m.fuzzyResults[m.fuzzyCursor]
 			dir := filepath.Dir(selected)
+			// Land the cursor on the result, not on the top of its
+			// directory. The listing load commits the path; the restore
+			// puts the cursor on the entry once its rows arrive.
+			m.setRestore(m.activePane, filepath.Base(selected))
 			m.clearFuzzy()
 			return m, m.beginLoad(m.activePane, dir)
 		}
 		return m, nil
-	case "j", "down":
+	case "down", "ctrl+j":
 		if m.fuzzyCursor < len(m.fuzzyResults)-1 {
 			m.fuzzyCursor++
 		}
 		return m, nil
-	case "k", "up":
+	case "up", "ctrl+k":
 		if m.fuzzyCursor > 0 {
 			m.fuzzyCursor--
 		}
@@ -1701,6 +1747,10 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Every other printable key — including j and k, which used to move the
+	// cursor — is part of the query. Navigation stays on the arrows, and on
+	// ctrl+j/ctrl+k for the users who reach for them; a terminal may send
+	// ctrl+j as a line feed, which is why the arrows remain.
 	if r, ok := printableKeyRune(msg); ok {
 		m.fuzzyInput += string(r)
 		cmd, started := m.refilterFuzzy()
@@ -1935,8 +1985,11 @@ func moverFailures(copier *fs.Copier) []opFailure {
 func (m *Model) recordOpResult(msg fileOpMsg) {
 	m.opResult = ""
 	// Any result ends the copy lifecycle, including a copier that never
-	// started, so the retry snapshot must not outlive it.
+	// started, so the retry snapshot must not outlive it. The file count was
+	// set when the paste was dispatched; a simple copy that took the
+	// blocking path reports through here without finishCopy having run.
 	m.copyClipboard = nil
+	m.copyFiles = 0
 	if len(msg.failures) > 0 {
 		m.restoreSelection(msg)
 		m.opErr = errors.New(msg.result())
@@ -1962,17 +2015,36 @@ func (m *Model) restoreSelection(msg fileOpMsg) {
 
 // restoreMarks puts the marked entries named by paths back into the marked
 // set. marks is the snapshot the transfer took, keyed by source path.
+//
+// The set is copied before it is extended. Model is copied by value on every
+// update, but a map is a reference: writing into the model's map in place
+// would survive a panic and be visible in the pre-update state Update
+// restores.
 func (m *Model) restoreMarks(marks map[string]fs.Entry, paths []string) {
+	var next map[string]fs.Entry
 	for _, path := range paths {
 		entry, ok := marks[path]
 		if !ok {
 			continue
 		}
-		if m.marked == nil {
-			m.marked = make(map[string]fs.Entry)
+		if next == nil {
+			next = cloneMarked(m.marked)
 		}
-		m.marked[entry.Path] = entry
+		next[entry.Path] = entry
 	}
+	if next != nil {
+		m.marked = next
+	}
+}
+
+// cloneMarked returns a marked set that can be changed without touching the
+// caller's map.
+func cloneMarked(marked map[string]fs.Entry) map[string]fs.Entry {
+	out := make(map[string]fs.Entry, len(marked)+1)
+	for path, entry := range marked {
+		out[path] = entry
+	}
+	return out
 }
 
 // restoreClipboard re-arms a paste selection a transfer consumed. A selection
@@ -2015,9 +2087,10 @@ func (m Model) handleMove() (tea.Model, tea.Cmd) {
 	}
 
 	entry := files[cursor]
-	if m.marked == nil {
-		m.marked = make(map[string]fs.Entry)
-	}
+	// Copy the set before changing it. Model is copied by value, but the map
+	// is shared with the state Update would restore after a panic, so an
+	// in-place mark or unmark would leak out of a failed update.
+	m.marked = cloneMarked(m.marked)
 
 	if _, exists := m.marked[entry.Path]; exists {
 		delete(m.marked, entry.Path)
@@ -2111,6 +2184,11 @@ func (m Model) cancelCopy() (tea.Model, tea.Cmd) {
 // and erring toward the simple path is cheaper than blocking the UI.
 const copySizeWalkLimit = 200000
 
+// pasteSizeWalk is the pre-paste size estimate. It is a variable so a test
+// can observe that the walk runs inside the paste command rather than on the
+// event loop.
+var pasteSizeWalk = copyTotalBytes
+
 // copyTotalBytes estimates how many bytes a paste will move, so the copy path
 // can decide whether the work deserves a progress bar.
 //
@@ -2118,6 +2196,11 @@ const copySizeWalkLimit = 200000
 // payload inside it. Summing that made a multi-gigabyte folder look tiny and
 // sent it down the blocking path with no progress at all. Directories are
 // therefore walked; files still just contribute their recorded size.
+//
+// The walk is disk work and must not run in Update: it stats every entry up to
+// copySizeWalkLimit, and on a large tree that would freeze the UI before the
+// progress notice could even be drawn. pasteCopyCmd calls it from the command
+// goroutine, where the other disk work happens.
 func copyTotalBytes(files []fs.Entry) int64 {
 	var total int64
 	budget := copySizeWalkLimit
@@ -2156,6 +2239,38 @@ func dirContentSize(root string, budget *int) int64 {
 	return total
 }
 
+// pasteCopyCmd estimates the paste and performs it, all in the background.
+//
+// The size walk decides whether the selection gets the steppable copier (and
+// its progress bar) or the simple blocking path. Doing that walk in Update
+// froze the whole UI on a large folder before the progress notice could be
+// shown; here it happens where the copy itself happens.
+func pasteCopyCmd(files []fs.Entry, dstDir string, gen int, clipboard *Clipboard) tea.Cmd {
+	return safeCmd("paste-copy", func() tea.Msg {
+		if pasteSizeWalk(files) >= copyProgressThreshold {
+			srcs := make([]string, 0, len(files))
+			for _, f := range files {
+				srcs = append(srcs, f.Path)
+			}
+			return startCopyCmd(srcs, dstDir, gen, clipboard)()
+		}
+
+		msg := fileOpMsg{verb: "pasted", clipboard: clipboard}
+		for _, f := range files {
+			dst := filepath.Join(dstDir, f.Name)
+			if filepath.Clean(dst) == filepath.Clean(f.Path) {
+				continue
+			}
+			if err := fs.CopyRecursive(f.Path, dst); err != nil {
+				msg.failures = append(msg.failures, opFailure{name: f.Name, path: f.Path, err: err})
+				continue
+			}
+			msg.succeeded++
+		}
+		return msg
+	})
+}
+
 // handlePaste drops everything into the active pane's current directory — the
 // pane the user is looking at is where a paste belongs, wherever the copy was
 // started. Tabbing to the other pane and pasting therefore targets that pane,
@@ -2185,8 +2300,11 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 
 	targetPath := m.rawPath(m.activePane)
 
-	// Large copies run through the steppable copier so progress is visible and
-	// the operation can be cancelled.
+	// A copy dispatches first and measures in the command. The size walk
+	// decides between the steppable copier — progress visible, cancellable —
+	// and the simple path, but it is disk work, so it must not run here: on a
+	// large tree it would freeze the UI before the notice below could be
+	// drawn. The command replaces the notice with the result when it lands.
 	if m.clipboard.Action == "copy" {
 		for _, file := range m.clipboard.Files {
 			dst := filepath.Join(targetPath, file.Name)
@@ -2195,24 +2313,20 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		if total := copyTotalBytes(m.clipboard.Files); total >= copyProgressThreshold {
-			srcs := make([]string, 0, len(m.clipboard.Files))
-			names := make([]string, 0, len(m.clipboard.Files))
-			for _, f := range m.clipboard.Files {
-				srcs = append(srcs, f.Path)
-				names = append(names, f.Name)
-			}
-			// Snapshot the selection before disarming it: a failure re-arms
-			// this exact paste so the user can retry.
-			clipboard := m.clipboard
-			m.clipboardOn = false
-			m.copyClipboard = &clipboard
-			m.copyFiles = len(m.clipboard.Files)
-			m.copyGen++
-			m.restoreLanded(m.activePane, names)
-			m.opResult = fmt.Sprintf("copying %d file(s)...", len(srcs))
-			return m, startCopyCmd(srcs, targetPath, m.copyGen, &clipboard)
+		names := make([]string, 0, len(m.clipboard.Files))
+		for _, f := range m.clipboard.Files {
+			names = append(names, f.Name)
 		}
+		// Snapshot the selection before disarming it: a failure re-arms
+		// this exact paste so the user can retry.
+		clipboard := m.clipboard
+		m.clipboardOn = false
+		m.copyClipboard = &clipboard
+		m.copyFiles = len(clipboard.Files)
+		m.copyGen++
+		m.restoreLanded(m.activePane, names)
+		m.opResult = fmt.Sprintf("copying %d file(s)...", len(names))
+		return m, pasteCopyCmd(clipboard.Files, targetPath, m.copyGen, &clipboard)
 	}
 
 	verb, gerund := "moved", "moving"

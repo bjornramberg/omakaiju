@@ -36,8 +36,6 @@ type progress struct {
 	filesDone int
 	// dstPath is the scratch file being written, so an abort can remove it.
 	dstPath string
-	// finalPath is the name the scratch file takes once it is whole.
-	finalPath string
 }
 
 // Copier copies a set of sources into a destination directory as a resumable

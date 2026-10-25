@@ -191,6 +191,12 @@ func TestRenameEscapeCancels(t *testing.T) {
 	m = typeString(t, m, "nope.txt")
 	m = esc(t, m)
 
+	if m.mode != inputNone {
+		t.Error("esc should leave rename mode")
+	}
+	if m.renameTarget != "" || m.inputBuf != "" {
+		t.Errorf("esc should clear the pending rename: target=%q input=%q", m.renameTarget, m.inputBuf)
+	}
 	if _, err := os.Stat(filepath.Join(dir, "alpha.txt")); err != nil {
 		t.Fatalf("original file should be untouched: %v", err)
 	}
@@ -213,6 +219,15 @@ func TestRenameSameNameIsNoOp(t *testing.T) {
 
 	if cmd != nil {
 		t.Error("renaming to the same name should not reload")
+	}
+	if m.mode != inputNone {
+		t.Error("a no-op rename should still leave rename mode")
+	}
+	if m.renameTarget != "" || m.inputBuf != "" {
+		t.Errorf("a no-op rename should clear the pending rename: target=%q input=%q", m.renameTarget, m.inputBuf)
+	}
+	if m.opResult != "" {
+		t.Errorf("a no-op rename should not report an operation: opResult = %q", m.opResult)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "alpha.txt")); err != nil {
 		t.Fatalf("file should still exist: %v", err)
@@ -1360,6 +1375,12 @@ func TestDeleteOnDirectoryTrees(t *testing.T) {
 	m = updated.(Model)
 	requireNoOpErrors(t, runBatch(t, cmd))
 
+	if m.confirmDelete {
+		t.Error("trashing should close the delete prompt")
+	}
+	if m.deleteTarget != "" {
+		t.Errorf("trashing should clear the delete target, got %q", m.deleteTarget)
+	}
 	if _, err := os.Stat(filepath.Join(dir, "subdir")); !os.IsNotExist(err) {
 		t.Error("trashing a directory should move the whole tree")
 	}
@@ -1411,8 +1432,7 @@ func TestEnterOnFileDispatchesOpen(t *testing.T) {
 	m, _ := fixture(t)
 	m = cursorOn(t, m, "alpha.txt")
 
-	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	m = updated.(Model)
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 
 	if cmd == nil {
 		t.Fatal("enter on a file should dispatch an open command")
@@ -1476,8 +1496,7 @@ func TestEnterOnDirectoryStillNavigates(t *testing.T) {
 	m, dir := fixture(t)
 	m = cursorOn(t, m, "subdir")
 
-	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	m = updated.(Model)
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 
 	if cmd == nil {
 		t.Fatal("enter on a directory should still dispatch a load")
@@ -1570,8 +1589,7 @@ func TestOpenMsgDoesNotReloadPanes(t *testing.T) {
 	m = cursorOn(t, m, "alpha.txt")
 
 	// A fileOpMsg would reload both panes; openMsg must not.
-	updated, cmd := m.Update(openMsg{name: "alpha.txt"})
-	m = updated.(Model)
+	_, cmd := m.Update(openMsg{name: "alpha.txt"})
 	if cmd != nil {
 		t.Error("openMsg should not dispatch a reload command")
 	}

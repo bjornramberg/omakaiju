@@ -91,12 +91,10 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
         timeout-minutes: 15
 
-      # staticcheck finds real issues, but the tree currently has 12
-      # pre-existing findings (unused functions and dead assignments in
-      # internal/app and internal/ui). Run it for visibility without failing
-      # CI until those are fixed; drop continue-on-error to make it a gate.
-      - name: Staticcheck (non-blocking)
-        continue-on-error: true
+      # staticcheck finds real issues — unused code, dead assignments, and
+      # the class of bug the compiler does not catch. The tree is clean, so
+      # this is a gate: a finding fails CI.
+      - name: Staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
         timeout-minutes: 10
 

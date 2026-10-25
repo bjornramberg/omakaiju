@@ -29,11 +29,6 @@ func shiftKey(r rune) tea.KeyMsg {
 	})
 }
 
-// ctrlKey returns a KeyPressMsg for a Ctrl+key combination.
-func ctrlKey(r rune) tea.KeyMsg {
-	return tea.KeyPressMsg(tea.Key{Code: r, Mod: tea.ModCtrl})
-}
-
 // space returns a KeyPressMsg for the Space key, shaped the way a terminal
 // actually delivers it: the space in Text and KeySpace in Code. Bubble Tea
 // names the keystroke "space", so the Text is what carries the character.

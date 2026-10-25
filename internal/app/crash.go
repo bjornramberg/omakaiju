@@ -102,16 +102,6 @@ func (c *crashState) count() int {
 	return len(c.reports)
 }
 
-// distinctCount is the number of different crash sites seen this session.
-func (c *crashState) distinctCount() int {
-	if c == nil {
-		return 0
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.distinct)
-}
-
 // exhausted reports whether the crash budget has been spent.
 func (c *crashState) exhausted() bool {
 	if c == nil {

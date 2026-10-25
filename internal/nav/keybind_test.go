@@ -71,13 +71,13 @@ func TestKeyRowsMergeAliases(t *testing.T) {
 		"stack / unstack panes":        "shift+s",
 		"cycle sort order":             "shift+o",
 		"toggle preview":               "shift+i",
-		"fuzzy find":                   "shift+p",
-		"filter pane":                  "shift+f",
-		"goto path":                    "shift+g",
-		"refresh pane":                 "shift+e",
-		"key list overlay":             "shift+k",
-		"quit":                         "shift+q",
-		"cancel / clear / back":        "esc",
+		"fuzzy find (type to search, arrows or ctrl+j/k move, enter jumps)": "shift+p",
+		"filter pane":           "shift+f",
+		"goto path":             "shift+g",
+		"refresh pane":          "shift+e",
+		"key list overlay":      "shift+k",
+		"quit":                  "shift+q",
+		"cancel / clear / back": "esc",
 	} {
 		if byDesc[desc] != keys {
 			t.Errorf("desc %q should merge into %q, got %q", desc, keys, byDesc[desc])

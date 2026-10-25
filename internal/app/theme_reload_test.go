@@ -87,6 +87,30 @@ func TestThemeHotReloadSurvivesRepeatedChanges(t *testing.T) {
 	}
 }
 
+// A theme change must not leave the old palette on screen. The drawn frame
+// is cached under the preview's version, so a reload has to move that
+// version — including when there is no preview to show, because the empty
+// panel is drawn too.
+func TestThemeReloadInvalidatesTheRenderedPreview(t *testing.T) {
+	m, _ := themeFixture(t)
+	m.width, m.height = 80, 24
+	m.previewPath = ""
+
+	// Draw the empty preview and let the cache keep the frame.
+	m.previewRender.put("", m.previewVersion, m.width, m.height, "frame in the old palette")
+
+	before := m.previewVersion
+	updated, _ := m.Update(themeReloadedMsg{theme: m.theme})
+	m = updated.(Model)
+
+	if m.previewVersion == before {
+		t.Fatal("the theme reload did not move the preview version")
+	}
+	if _, ok := m.previewRender.get("", m.previewVersion, m.width, m.height); ok {
+		t.Fatal("the frame drawn in the old palette is still served after a theme reload")
+	}
+}
+
 // The model has to own the watcher, otherwise closing it on quit is a no-op and
 // the inotify descriptor leaks.
 func TestThemeWatcherIsOwnedAndClosable(t *testing.T) {

@@ -127,6 +127,19 @@ func TestReadmeMakesNoStaleClaims(t *testing.T) {
 			t.Errorf("the README still documents %q, which is not a binding", stale)
 		}
 	}
+
+	// The fuzzy finder used to take j and k as cursor movement. That made
+	// both letters impossible to search for — "json" searched for "son" —
+	// so any claim that they navigate is stale now that they type.
+	for _, stale := range []string{
+		"`j`/`k` move in the fuzzy finder",
+		"j/k move in the fuzzy finder",
+		"`j/k` navigate",
+	} {
+		if strings.Contains(readme, stale) {
+			t.Errorf("the README still says %q of the fuzzy finder, where j and k type a search", stale)
+		}
+	}
 }
 
 // readmeKeyActions pulls the key column and the action column out of the
