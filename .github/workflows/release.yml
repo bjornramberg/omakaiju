@@ -5,29 +5,98 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
+# Release runs must never overlap. Two tags pushed together (v0.9.9 and
+# v0.10.0 on 2026-10-24) otherwise publish concurrently and race on GitHub's
+# mutable "latest" pointer. Serialise them: a superseded run must finish, so
+# cancel-in-progress stays false.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: true
 
+      # The trigger is a glob ("v*"), so it also matches tags like
+      # "vendor-fix". Only publish a real version tag.
+      - name: Validate tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$TAG' is not a version tag (expected vMAJOR.MINOR.PATCH, optionally with a pre-release or build suffix). Refusing to release."
+            exit 1
+          fi
+          echo "Tag '$TAG' is a valid version tag."
+
+      # A tag can point at any commit on any branch. Releases come from main.
+      - name: Verify the tagged commit is on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Commit $GITHUB_SHA (tag $GITHUB_REF_NAME) is not on main. Refusing to release."
+            exit 1
+          fi
+          echo "Commit $GITHUB_SHA is on origin/main."
+
+      # The same gate CI runs. A failing check must stop the release before
+      # GoReleaser can publish anything.
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+      - name: Test with the race detector
+        run: go test -race ./...
+
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
           distribution: goreleaser
-          version: latest
+          version: v2.19.0
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # GoReleaser runs with release.make_latest: false, so it never touches
+      # GitHub's latest pointer. Set it here, deterministically, from the
+      # highest semver tag regardless of which run finished first.
+      - name: Mark the highest version tag as latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+
+          TAG="$(git tag --sort=-v:refname | head -1)"
+          if [ -z "$TAG" ]; then
+            echo "::error::No tags found; cannot determine the highest version tag."
+            exit 1
+          fi
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::No GitHub release exists for $TAG; refusing to move the latest pointer to a release that was never published."
+            exit 1
+          fi
+
+          # Declarative and idempotent: re-running leaves the same state. A
+          # non-zero exit fails the job.
+          gh release edit "$TAG" --latest
+          echo "Marked $TAG as the latest release."

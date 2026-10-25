@@ -1,4 +1,12 @@
-omakaiju
+# The binary built at the repository root by `make build`. The leading slash
+# anchors the pattern to the root: an unanchored "omakaiju" also matches the
+# cmd/omakaiju source directory and would hide new files in the main package
+# from git.
+/omakaiju
+
+# GoReleaser's build output.
+dist/
+
 *.exe
 *.exe~
 *.dll
@@ -12,7 +20,6 @@ omakaiju
 .idea/
 *.swp
 *.swo
-*~
 *~
 
 # Local design notes. The tracked design document is the README: it is

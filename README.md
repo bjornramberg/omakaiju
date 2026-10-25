@@ -9,7 +9,7 @@ A modern, ultra-lightweight, dual-pane TUI file manager for Unix-like systems. B
 
 ## Why omakaiju?
 
-* **Blazing Fast & Ultra-Lightweight:** Launches in ~35ms with a footprint of ~23MB RAM as a single static binary with no daemons or runtime dependencies.
+* **Blazing Fast & Ultra-Lightweight:** Launches in ~35ms with a footprint of ~19MB RAM as a single static binary with no daemons or runtime dependencies.
 * **Dead Simple Keybindings:** Navigate with arrow keys, and press `Shift+K` for everything else. Keybindings are clean, sectioned, and fully filterable on the fly.
 * **Non-Blocking Asynchronous I/O:** Syntax highlighting, previews, fuzzy matching, and directory walks run strictly in the background—the UI never lags or freezes.
 * **Resilient & Crash-Proof:** Features built-in error recovery. Internal render or update panics are caught and reported in the status bar while your session stays active.
@@ -25,7 +25,15 @@ Install the latest prebuilt release with one command:
 curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.sh | sh
 ```
 
-The installer detects your architecture (`amd64`/`arm64`), verifies the download against published checksums, and atomically places the binary in `~/.local/bin`.
+The installer detects your architecture (`amd64`/`arm64`), verifies the download against published checksums, and atomically places the binary in `~/.local/bin`. It prints the version it installed, so you can see at a glance what you got.
+
+To pin a version instead of taking the latest:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.sh | sh -s -- v0.10.0
+```
+
+The version can also be given as `OMAKAIJU_VERSION=v0.10.0`, and `OMAKAIJU_PREFIX` chooses where it is installed (`~/.local` by default).
 
 ### System Requirements
 
@@ -87,16 +95,23 @@ omakaiju automatically reads colors from `~/.local/state/omarchy/current/theme/c
 
 ## Under the Hood
 
-### Footprint & Performance Benchmarks (v0.9.4)
+### Footprint & Performance
+
+Measured on the v0.10.0 release build (stripped, static) on an idle Linux desktop:
 
 | Metric              | Measurement                       |
 | ------------------- | --------------------------------- |
-| **Binary Size**     | ~9.4 MB (stripped)                |
-| **Resident Memory** | ~23 MB                            |
+| **Binary Size**     | ~9.4 MiB (stripped)               |
+| **Resident Memory** | ~19 MB                            |
 | **Startup Time**    | ~35 ms                            |
 | **Dependencies**    | 0 runtime dependencies, 0 daemons |
 
 > **Note on Binary Size:** The majority of the binary weight comes from Chroma's syntax highlighting engine and the Go runtime.
+
+The size is the released file, the memory is `VmRSS` from `/proc/<pid>/status`
+while a directory is listed, and the startup time is how long the process
+takes to reach its first frame. The memory figure moves with the size of the
+directory being listed and with the theme in use.
 
 ### Previews & Asset Preloading
 
@@ -114,19 +129,26 @@ This README is the design document. It is what users read on GitHub and in the r
 Requires Go 1.27+ on a Unix-like system.
 
 ```bash
-make build    # Build binary to ./omakaiju
+make build    # Build binary to ./omakaiju (static, like the release)
 make run      # Build and launch
 make test     # Run test suite
 make race     # Run test suite with race detector
 make lint     # Run go vet
+make install  # Install to $(PREFIX)/bin, honouring DESTDIR
 make clean    # Remove build artifacts
 ```
+
+`make build` produces the same static binary the release publishes, and stamps
+the version it was built from: the release version on a tagged checkout, and
+the distance from that tag otherwise.
 
 Alternatively, install directly via Go:
 
 ```bash
 go install github.com/bjornramberg/omakaiju/cmd/omakaiju@latest
 ```
+
+A binary installed that way has no version stamped into it and says `dev`.
 
 ### Automated Fuzz Testing
 
@@ -140,12 +162,17 @@ Fuzzing crashers are automatically written to `testdata/fuzz/` and replayed on s
 
 ### Manual Asset Downloads
 
-Pre-built binaries (`omakaiju_linux_amd64` / `omakaiju_linux_arm64`) and release tarballs are hosted on [GitHub Releases](https://github.com/bjornramberg/omakaiju/releases) along with `checksums.txt`:
+Pre-built binaries (`omakaiju_linux_amd64` / `omakaiju_linux_arm64`) and release tarballs are hosted on [GitHub Releases](https://github.com/bjornramberg/omakaiju/releases) along with `checksums.txt`. Name the version you want, so the download is the one you meant:
 
 ```bash
-curl -fsSL https://github.com/bjornramberg/omakaiju/releases/latest/download/omakaiju_linux_amd64 \
-  -o omakaiju && chmod +x omakaiju
+TAG=v0.10.0
+curl -fsSL "https://github.com/bjornramberg/omakaiju/releases/download/$TAG/omakaiju_linux_amd64" -o omakaiju
+curl -fsSL "https://github.com/bjornramberg/omakaiju/releases/download/$TAG/checksums.txt" -o checksums.txt
+grep 'omakaiju_linux_amd64$' checksums.txt | sha256sum -c -
+chmod +x omakaiju
 ```
+
+`releases/latest/download/<file>` works too, and serves whatever GitHub currently marks as the latest release.
 
 ---
 

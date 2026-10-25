@@ -1,5 +1,13 @@
 version: 2
 
+release:
+  # Never claim GitHub's mutable "latest" pointer implicitly. Two release runs
+  # can publish close together, and whichever finishes last would otherwise
+  # win (on 2026-10-24, v0.9.9 beat v0.10.0 and install.sh served the old
+  # build). The release workflow sets "latest" explicitly, after publishing,
+  # from the highest semver tag.
+  make_latest: false
+
 builds:
   - id: omakaiju
     binary: omakaiju
