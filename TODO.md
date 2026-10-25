@@ -26,25 +26,6 @@ that is where the check belongs.
 Fix: sanitise at the fs boundary and flag entries that are absolute or that
 climb out of the archive.
 
-### 19. Opening a file can pass an option to the handler
-
-`internal/fs/open.go:25` runs the desktop handler with the path as a bare
-argument. There is no shell, so this is not command injection — but a file
-named `-a` or `--help` is parsed by `gio open` as an option rather than as
-the thing to open.
-
-Fix: put `--` before the path where the handler supports it.
-
-Verify: a file named `--help` opens the file.
-
-### 20. The handler process is never reaped
-
-`internal/fs/open.go:36` calls `Process.Release()`, which drops the handle
-without waiting. Every file opened leaves a zombie for the rest of the
-session.
-
-Fix: wait for the child in a goroutine instead of releasing it.
-
 ### 21. The trash is the home trash only
 
 `internal/fs/trash.go:20` always uses the XDG home trash, and

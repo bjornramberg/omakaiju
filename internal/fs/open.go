@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // openers are tried in order.
@@ -31,9 +32,37 @@ var openRunner = func(name string, args ...string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	// Release the child so it becomes a zombie reaped by init rather than
-	// lingering; the TUI has no interest in its exit status.
-	return cmd.Process.Release()
+	// Wait in the background. A handler may stay up for as long as the user
+	// keeps its window open, so waiting inline would freeze the TUI. Releasing
+	// the child instead, as this used to, leaves it behind as a zombie for the
+	// rest of the session. A goroutine blocks neither the caller nor exit: Go
+	// does not wait for goroutines when main returns. The exit status is of no
+	// interest—Start succeeding is all that launching the opener promises.
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+// handlerArgument turns path into an argument the desktop handler cannot read
+// as an option. Such a name is only reachable as a relative path, since
+// absolute paths begin with "/"; prefixing it with "./" makes it unambiguously
+// a path.
+//
+// Neither opener can be relied on to accept a "--" separator instead:
+//
+//   - gio parses its arguments with GOption. A "--" is normally stripped, but
+//     GOption keeps it in the argument list when the following argument still
+//     begins with a dash, so "gio open -- --help" tries to open a file named
+//     "--" as well as the file "--help".
+//   - xdg-open rejects any argument beginning with a dash, including "--"
+//     ("unexpected option"), unless XDG_UTILS_ENABLE_DOUBLE_HYPEN is set. Its
+//     manual recommends an absolute path or a "./" prefix for relative ones.
+//
+// The "./" prefix is accepted by both and leaves ordinary names untouched.
+func handlerArgument(path string) string {
+	if strings.HasPrefix(path, "-") {
+		return "./" + path
+	}
+	return path
 }
 
 // OpenFile asks the desktop to open path with its default handler.
@@ -53,7 +82,7 @@ func OpenFile(path string) error {
 			continue
 		}
 
-		args := append(append([]string{}, opener[1:]...), path)
+		args := append(append([]string{}, opener[1:]...), handlerArgument(path))
 		if err := openRunner(opener[0], args...); err != nil {
 			lastErr = fmt.Errorf("%s: %w", opener[0], err)
 			continue
