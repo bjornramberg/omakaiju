@@ -270,8 +270,15 @@ func NewCopier(srcs []string, dstDir string) (*Copier, error) {
 	c := &Copier{}
 	for _, src := range srcs {
 		// Copying a directory into its own subtree would make the copy
-		// discover the directories it is creating and nest forever.
-		if inside, err := isInside(src, dstDir); err == nil && inside {
+		// discover the directories it is creating and nest forever. The
+		// comparison is on resolved paths, so a destination that is a
+		// symlink into the source is caught too. A path that cannot be
+		// resolved is refused rather than assumed safe.
+		inside, err := isInside(src, dstDir)
+		if err != nil {
+			return nil, fmt.Errorf("copy: cannot check whether %s is inside %s: %w", dstDir, src, err)
+		}
+		if inside {
 			return nil, fmt.Errorf("copy: cannot copy %s into itself", src)
 		}
 		if err := c.add(src, dstDir); err != nil {

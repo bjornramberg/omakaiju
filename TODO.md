@@ -16,18 +16,6 @@ operations should be signed (#34).
 
 ## Correctness and robustness
 
-### 16. The copy-into-itself guard compares paths as written
-
-`internal/fs/fs.go:409` (`isInside`) compares the source and the destination
-lexically. A destination directory that is a symlink into the source tree
-passes the check, and the copy then writes into the source tree, recursing
-until the depth bound stops it.
-
-Fix: resolve both paths before comparing, or compare the device and inode of
-the destination's parent with the source tree.
-
-Verify: a destination that is a symlink into the source must be refused.
-
 ### 17. Archive listing has no decompression budget
 
 `internal/fs/archive.go:52` and `internal/fs/archive.go:93` read a gzip

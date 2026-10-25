@@ -240,8 +240,15 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 	}
 
 	// Copying a directory into its own subtree would make the copy
-	// discover the directories it is creating and nest forever.
-	if inside, err := isInside(src, dst); err == nil && inside {
+	// discover the directories it is creating and nest forever. The
+	// comparison is made on resolved paths, so a destination that is a
+	// symlink into the source is caught too. A path that cannot be
+	// resolved is refused rather than assumed safe.
+	inside, err := isInside(src, dst)
+	if err != nil {
+		return fmt.Errorf("copy: cannot check whether %s is inside %s: %w", dst, src, err)
+	}
+	if inside {
 		return fmt.Errorf("copy: cannot copy %s into itself", src)
 	}
 
@@ -428,16 +435,33 @@ func scratchName(dir string) (string, error) {
 }
 
 // isInside reports whether child is parent or lies beneath it.
+//
+// The comparison is made on the paths the filesystem reaches, not on the
+// spellings the caller gave. A destination directory that is a symlink into
+// the source tree is the same tree, and writing into it would recurse into
+// the copy's own output; comparing the names as written misses that. Both
+// sides are resolved, and a ".." is applied to the directory the path has
+// actually reached rather than to the components as written, because a ".."
+// after a symlink names the target's parent.
+//
+// A copy's destination usually does not exist yet, so only the deepest
+// existing ancestor is resolved; the names below it are re-attached as they
+// are. A component that does not exist cannot be a symlink, and it is about
+// to be created as a directory.
+//
+// Resolution fails closed. A path that cannot be inspected, or a symlink
+// chain that does not end, is an error: the caller refuses the copy rather
+// than risk one that writes into its own source. The error is not a "no".
 func isInside(parent, child string) (bool, error) {
-	pAbs, err := filepath.Abs(parent)
+	p, err := resolveForCompare(parent)
 	if err != nil {
 		return false, err
 	}
-	cAbs, err := filepath.Abs(child)
+	c, err := resolveForCompare(child)
 	if err != nil {
 		return false, err
 	}
-	rel, err := filepath.Rel(pAbs, cAbs)
+	rel, err := filepath.Rel(p, c)
 	if err != nil {
 		return false, err
 	}
@@ -445,6 +469,107 @@ func isInside(parent, child string) (bool, error) {
 		return true, nil
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
+}
+
+// resolveForCompare returns the path the filesystem reaches for path.
+//
+// It is a symlink resolution that tolerates a missing tail. The destination
+// of a copy normally does not exist yet, so EvalSymlinks cannot resolve it as
+// a whole. Here every component that exists is resolved — including the
+// symlinks in the ancestors and a ".." that follows one — and the components
+// that do not exist yet are appended unchanged. A name below a name that does
+// not exist cannot be a symlink, so there is nothing left to resolve there.
+//
+// The first component that cannot be inspected is an error. So is a chain of
+// more than maxSymlinkHops links; the kernel would refuse such a path too,
+// and a resolution that gave up and guessed could allow a copy into itself.
+func resolveForCompare(path string) (string, error) {
+	const maxSymlinkHops = 255
+
+	raw, err := absolutePath(path)
+	if err != nil {
+		return "", err
+	}
+
+	sep := string(filepath.Separator)
+	// The components still to process. Splitting the raw path keeps a ".."
+	// in place: cleaning the path first would resolve it before the symlink
+	// it follows, which is the bug this function exists to avoid.
+	pending := strings.Split(raw, sep)
+	resolved := sep
+	// missing records that a component did not exist. Everything below it
+	// is a name the copy is about to create, not a link to follow.
+	missing := false
+	hops := 0
+
+	for i := 0; i < len(pending); i++ {
+		part := pending[i]
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			// resolved is already free of symlinks, so its parent is the
+			// directory a ".." really reaches.
+			resolved = filepath.Dir(resolved)
+			continue
+		}
+
+		if missing {
+			resolved = filepath.Join(resolved, part)
+			continue
+		}
+
+		next := filepath.Join(resolved, part)
+		info, err := os.Lstat(next)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return "", err
+			}
+			missing = true
+			resolved = next
+			continue
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			resolved = next
+			continue
+		}
+
+		hops++
+		if hops > maxSymlinkHops {
+			return "", fmt.Errorf("%s: too many levels of symbolic links", path)
+		}
+		target, err := os.Readlink(next)
+		if err != nil {
+			return "", err
+		}
+		if filepath.IsAbs(target) {
+			resolved = sep
+		}
+		// Splicing the target in at this point resolves it the same way as
+		// the rest of the path: its own ".." and its own links are handled
+		// by the loop, not guessed at.
+		targetParts := strings.Split(target, sep)
+		pending = append(targetParts, pending[i+1:]...)
+		i = -1
+	}
+
+	return resolved, nil
+}
+
+// absolutePath makes path absolute without cleaning it.
+//
+// filepath.Abs cleans the path, which would resolve a ".." before the
+// symlink it follows. The caller's components have to stay in the order they
+// were written so each one can be resolved as the filesystem sees it.
+func absolutePath(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return path, nil
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return wd + string(filepath.Separator) + path, nil
 }
 
 // Move relocates src to dst.
