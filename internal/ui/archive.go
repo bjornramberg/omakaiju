@@ -19,7 +19,7 @@ func ArchiveLines(entries []fs.ArchiveEntry, truncated bool, theme config.Theme,
 	for _, e := range entries {
 		// Entry names come from the archive and may hold raw bytes; the styled
 		// row built below is ours and must be left alone.
-		name := SanitizeDisplay(e.Name)
+		name := SanitizeName(e.Name)
 		style := theme.FileItem()
 		if e.IsDir {
 			name = strings.TrimSuffix(name, "/") + "/"

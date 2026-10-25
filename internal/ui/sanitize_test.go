@@ -1,8 +1,11 @@
 package ui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-func TestSanitizeDisplayReplacesControlBytes(t *testing.T) {
+func TestSanitizeNameReplacesControlBytes(t *testing.T) {
 	cases := map[string]struct {
 		in   string
 		want string
@@ -14,26 +17,38 @@ func TestSanitizeDisplayReplacesControlBytes(t *testing.T) {
 		"delete":          {in: "x\x7fy", want: "x\uFFFDy"},
 		"c1 control":      {in: "x\u009by", want: "x\uFFFDy"},
 		"invalid utf8":    {in: "a\xffb", want: "a\uFFFDb"},
-		"keeps tab":       {in: "a\tb", want: "a\tb"},
+		"tab":             {in: "a\tb", want: "a b"},
 		"keeps text":      {in: "plain ascii", want: "plain ascii"},
 		"keeps cjk":       {in: "\u5fbd\u9677\u5b50", want: "\u5fbd\u9677\u5b50"},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := SanitizeDisplay(tc.in); got != tc.want {
-				t.Errorf("SanitizeDisplay(%q) = %q, want %q", tc.in, got, tc.want)
+			if got := SanitizeName(tc.in); got != tc.want {
+				t.Errorf("SanitizeName(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
 }
 
-// Sanitized output must contain nothing the terminal could act on.
-func TestSanitizeDisplayLeavesNoDangerousRunes(t *testing.T) {
+// A tab is one cell in a rendered row, not a cursor instruction, so the strict
+// path replaces it with exactly one space.
+func TestSanitizeNameReplacesTabWithSingleSpace(t *testing.T) {
+	got := SanitizeName("ab\tcd.txt")
+	if got != "ab cd.txt" {
+		t.Errorf("SanitizeName(%q) = %q, want %q", "ab\tcd.txt", got, "ab cd.txt")
+	}
+	if strings.ContainsRune(got, '\t') {
+		t.Error("a tab survived name sanitisation")
+	}
+}
+
+// Sanitized names must contain nothing the terminal could act on.
+func TestSanitizeNameLeavesNoDangerousRunes(t *testing.T) {
 	in := "d8:announce\x1b[2J\x00\r\xff\tend\x1b]0;title\x07"
 
-	for _, r := range SanitizeDisplay(in) {
-		if r < 0x20 && r != '\t' {
+	for _, r := range SanitizeName(in) {
+		if r < 0x20 {
 			t.Errorf("control rune %U survived sanitization", r)
 		}
 		if r == 0x7f || (r >= 0x80 && r <= 0x9f) {
@@ -42,10 +57,10 @@ func TestSanitizeDisplayLeavesNoDangerousRunes(t *testing.T) {
 	}
 }
 
-func TestSanitizeLinesLeavesSafeInputUnchanged(t *testing.T) {
+func TestSanitizeContentLinesLeavesSafeInputUnchanged(t *testing.T) {
 	lines := []string{"package main", "func f() {}", ""}
 
-	got := SanitizeLines(lines)
+	got := SanitizeContentLines(lines)
 	if len(got) != len(lines) {
 		t.Fatalf("length changed: %d, want %d", len(got), len(lines))
 	}
@@ -56,10 +71,21 @@ func TestSanitizeLinesLeavesSafeInputUnchanged(t *testing.T) {
 	}
 }
 
-func TestSanitizeLinesDoesNotMutateInput(t *testing.T) {
+// Content is the file's own text, so a tab there is indentation and stays.
+// Only the name and path sanitizer turns a tab into a space.
+func TestSanitizeContentLinesKeepsTab(t *testing.T) {
+	lines := []string{"all:", "\tgo build ./..."}
+
+	got := SanitizeContentLines(lines)
+	if got[1] != "\tgo build ./..." {
+		t.Errorf("content tab was altered: got %q, want %q", got[1], "\tgo build ./...")
+	}
+}
+
+func TestSanitizeContentLinesDoesNotMutateInput(t *testing.T) {
 	lines := []string{"safe", "bad\x1b[2J"}
 
-	_ = SanitizeLines(lines)
+	_ = SanitizeContentLines(lines)
 
 	if lines[1] != "bad\x1b[2J" {
 		t.Errorf("input was mutated: %q", lines[1])

@@ -157,7 +157,7 @@ func (f FuzzyFinder) Render() string {
 		if f.Root != "" {
 			// The root is a filesystem path, so it may carry control bytes
 			// that a terminal would act on instead of drawing.
-			label = "scanning " + SanitizeDisplay(f.Root)
+			label = "scanning " + SanitizeName(f.Root)
 		}
 		// The animation appears only once the user has typed something to
 		// wait for, so an instant walk shows nothing rather than a flash.
@@ -245,8 +245,8 @@ func (f FuzzyFinder) position() string {
 // shared long prefix makes full paths hard to scan. The matched characters are
 // emphasised in the filename.
 func (f FuzzyFinder) renderRow(path string, active bool, width int) string {
-	name := SanitizeDisplay(filepath.Base(path))
-	dir := SanitizeDisplay(filepath.Dir(path))
+	name := SanitizeName(filepath.Base(path))
+	dir := SanitizeName(filepath.Dir(path))
 
 	// One cell is reserved for the leading marker space so active and inactive
 	// rows stay aligned.

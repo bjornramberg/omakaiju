@@ -90,6 +90,24 @@ func TestFuzzyFinderSanitizesRoot(t *testing.T) {
 	assertNoInjection(t, "fuzzy root", f.Render())
 }
 
+// The preview body is raw file text. A tab in a Makefile is significant
+// indentation, so the content path keeps it rather than substituting a space
+// the way the name path does. The renderer then expands it to its tab stop.
+func TestPreviewBodyKeepsTab(t *testing.T) {
+	theme := config.DefaultTheme()
+	lines := []string{"all:", "\tgo build ./..."}
+
+	p := NewPreview(80, 16, theme).SetPath("/tmp/Makefile")
+	out := p.RenderText(lines, nil)
+
+	if !strings.Contains(out, "    go build ./...") {
+		t.Errorf("the preview body lost its tab:\n%q", out)
+	}
+	if strings.Contains(out, replacementRune+"go build") {
+		t.Errorf("the preview body replaced its tab:\n%q", out)
+	}
+}
+
 // The preview body is deliberately the one surface that keeps its ANSI: it is
 // produced by our highlighter, and stripping it would remove the colouring.
 func TestPreviewBodyKeepsHighlighterANSI(t *testing.T) {

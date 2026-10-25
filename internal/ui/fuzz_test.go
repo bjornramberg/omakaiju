@@ -48,11 +48,11 @@ func FuzzEmphasizeText(f *testing.F) {
 	})
 }
 
-// FuzzSanitizeDisplay covers the sanitiser that every filename passes
+// FuzzSanitizeName covers the sanitiser that every filename passes
 // through before it reaches the screen. A filename may legally contain a
 // newline or an escape byte on Linux, and the sanitiser exists to stop those
 // from acting on the terminal.
-func FuzzSanitizeDisplay(f *testing.F) {
+func FuzzSanitizeName(f *testing.F) {
 	seeds := []string{
 		"",
 		"normal.txt",
@@ -70,10 +70,14 @@ func FuzzSanitizeDisplay(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, s string) {
-		out := SanitizeDisplay(s)
+		out := SanitizeName(s)
 		// The sanitiser must not leave an escape byte in the output.
 		if strings.ContainsRune(out, '\x1b') {
 			t.Errorf("an escape byte survived: %q -> %q", s, out)
+		}
+		// Nor a tab: on a name it would move the cursor, not indent text.
+		if strings.ContainsRune(out, '\t') {
+			t.Errorf("a tab survived name sanitisation: %q -> %q", s, out)
 		}
 	})
 }

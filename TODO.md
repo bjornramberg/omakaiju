@@ -103,15 +103,6 @@ must leave two payloads in the trash.
 
 ## UI polish
 
-### 23. A tab in a filename breaks the row
-
-`internal/ui/sanitize.go:54` keeps tabs, and the width arithmetic counts a
-tab as no cells at all while Lipgloss expands it to four. A file named
-`ab<TAB>cd.txt` renders as two lines, and the column stops lining up.
-
-Fix: replace tabs (and the other control characters) with a space in names.
-Tabs stay in preview content, where they are the file's own.
-
 ### 24. Archive rows overflow the preview
 
 `internal/ui/archive.go:16` budgets the member's name, appends the size, and

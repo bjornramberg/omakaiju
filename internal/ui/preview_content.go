@@ -125,7 +125,7 @@ func Load(path string, theme config.Theme) Content {
 		}
 		// Clean at ingest so neither the highlighter nor the preview
 		// cache ever holds raw bytes from the file.
-		lines = SanitizeLines(lines)
+		lines = SanitizeContentLines(lines)
 		return Content{
 			Kind:          KindText,
 			Text:          lines,

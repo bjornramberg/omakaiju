@@ -95,7 +95,7 @@ func (f FileItem) Render() string {
 	// addition after it. TruncateName preserves it as the directory suffix,
 	// so a long dirname is cut to exactly its budget instead of one cell
 	// past it, which used to spill the row and wrap the permissions.
-	name := SanitizeDisplay(f.Entry.Name)
+	name := SanitizeName(f.Entry.Name)
 	if f.Entry.IsDir {
 		name += "/"
 	}

@@ -55,7 +55,7 @@ func clipLines(lines []string, maxCells int) []string {
 // header renders the preview title, clipped to the panel so a long filename
 // cannot overflow the border on a narrow column.
 func (p Preview) header(name string) string {
-	return p.Theme.AccentText().Bold(true).Render(TruncateName(SanitizeDisplay(name), p.ContentWidth()))
+	return p.Theme.AccentText().Bold(true).Render(TruncateName(SanitizeName(name), p.ContentWidth()))
 }
 
 // panel renders the preview frame with a MaxWidth backstop, so even a
@@ -195,7 +195,7 @@ func (p Preview) renderText(lines, highlighted []string, truncated bool) string 
 		// Highlighted output is emitted by our own formatter and already
 		// carries trusted ANSI colour codes, so running it through the
 		// sanitizer here would strip the highlighting itself.
-		body = SanitizeLines(lines)
+		body = SanitizeContentLines(lines)
 	}
 
 	totalLines := len(body)
@@ -245,7 +245,7 @@ func (p Preview) RenderTextFromFile(path string) string {
 	}
 	// Clean before highlighting, so the formatter is never handed bytes that
 	// could reach the terminal.
-	lines = SanitizeLines(lines)
+	lines = SanitizeContentLines(lines)
 
 	p.path = path
 	highlighted := splitLines(Highlight(path, strings.Join(lines, "\n"), OmarchyStyle(p.Theme)))
@@ -322,7 +322,7 @@ func (p Preview) ArchiveNotice(path, message string) string {
 	header := p.header(filepath.Base(path))
 	// The message can embed an operating-system error, and those name the
 	// path, which is filesystem data.
-	return p.panel(header + "\n\n" + p.Theme.StatusText().Render(SanitizeDisplay(message)))
+	return p.panel(header + "\n\n" + p.Theme.StatusText().Render(SanitizeName(message)))
 }
 
 func (p Preview) RenderDirectory(path string) string {
@@ -362,7 +362,7 @@ func (p Preview) RenderError(err error) string {
 	// Operating-system errors embed the path they failed on, and a path is
 	// filesystem data: it may contain control bytes that would act on the
 	// terminal rather than being drawn.
-	return p.panel("Error: " + SanitizeDisplay(err.Error()))
+	return p.panel("Error: " + SanitizeName(err.Error()))
 }
 
 func (p Preview) generateHexDump(path string, maxBytes int) (string, error) {
