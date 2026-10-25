@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 type member struct {
@@ -96,6 +97,52 @@ func names(entries []ArchiveEntry) []string {
 	return out
 }
 
+// zeroMember describes a .tgz member worth of zeros. Writing a gigabyte of
+// zeros through gzip keeps the archive on disk small without buffering the
+// payload in memory.
+type zeroMember struct {
+	name string
+	size int64
+}
+
+func writeZeroTarGz(t *testing.T, dir, name string, members []zeroMember) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	zeros := make([]byte, 1<<20)
+	for _, m := range members {
+		hdr := &tar.Header{Name: m.name, Mode: 0o644, Size: m.size, Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		remaining := m.size
+		for remaining > 0 {
+			chunk := int64(len(zeros))
+			if chunk > remaining {
+				chunk = remaining
+			}
+			if _, err := tw.Write(zeros[:chunk]); err != nil {
+				t.Fatal(err)
+			}
+			remaining -= chunk
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestListZip(t *testing.T) {
 	dir := t.TempDir()
 	path := writeZip(t, dir, "test.zip", []member{
@@ -164,9 +211,12 @@ func TestListTarGz(t *testing.T) {
 		{name: "inner.txt", body: "data"},
 	}, true)
 
-	entries, _, err := ListArchive(path)
+	entries, truncated, err := ListArchive(path)
 	if err != nil {
 		t.Fatalf("tar.gz listing failed: %v", err)
+	}
+	if truncated {
+		t.Error("small tar.gz should not be truncated")
 	}
 	if len(entries) != 1 || entries[0].Name != "inner.txt" {
 		t.Errorf("entries = %v, want [inner.txt]", names(entries))
@@ -247,6 +297,97 @@ func TestListTarTruncatesAtScanCap(t *testing.T) {
 	}
 	if len(entries) != maxArchiveScan {
 		t.Errorf("entries = %d, want %d", len(entries), maxArchiveScan)
+	}
+}
+
+func TestListZipTruncatesAtScanCap(t *testing.T) {
+	dir := t.TempDir()
+	members := make([]member, 0, maxArchiveScan+10)
+	for i := 0; i < maxArchiveScan+10; i++ {
+		members = append(members, member{name: "f" + itoa(i) + ".txt", body: "x"})
+	}
+	path := writeZip(t, dir, "big.zip", members)
+
+	entries, truncated, err := ListArchive(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated {
+		t.Error("large zip should report truncation")
+	}
+	if len(entries) != maxArchiveScan {
+		t.Errorf("entries = %d, want %d", len(entries), maxArchiveScan)
+	}
+	dropped := "f" + itoa(maxArchiveScan+9) + ".txt"
+	for _, e := range entries {
+		if e.Name == dropped {
+			t.Errorf("entry %q past the cap should not be listed", dropped)
+		}
+	}
+}
+
+// A single member larger than the decompression budget must be reported as a
+// truncated listing (the member is still named) without decompressing it.
+func TestListTgzHugeMemberIsBoundedAndTruncated(t *testing.T) {
+	// The budget is lowered so the test exercises the same path with an
+	// archive that is cheap to write; the size of the budget is not what is
+	// under test.
+	restore := maxArchiveDecompress
+	maxArchiveDecompress = 1 << 20
+	t.Cleanup(func() { maxArchiveDecompress = restore })
+
+	dir := t.TempDir()
+	const memberSize = 4 << 20
+	path := writeZeroTarGz(t, dir, "huge.tgz", []zeroMember{{name: "big.bin", size: memberSize}})
+
+	start := time.Now()
+	entries, truncated, err := ListArchive(path)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("listing a member larger than the budget failed: %v", err)
+	}
+	if !truncated {
+		t.Error("a member larger than the budget should report truncation")
+	}
+	if len(entries) != 1 || entries[0].Name != "big.bin" {
+		t.Fatalf("entries = %v, want [big.bin]", names(entries))
+	}
+	if entries[0].Size != memberSize {
+		t.Errorf("size = %d, want %d", entries[0].Size, int64(memberSize))
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("listing took %v; the budget should stop it early", elapsed)
+	}
+	t.Logf("listed a member larger than the budget in %v", elapsed)
+}
+
+// When the budget runs out while walking a valid, complete archive, the
+// listing is cut short rather than reported as an error.
+func TestListTgzBudgetCutIsTruncationNotError(t *testing.T) {
+	// As above: a small budget and a small archive exercise the same path.
+	restore := maxArchiveDecompress
+	maxArchiveDecompress = 1 << 20
+	t.Cleanup(func() { maxArchiveDecompress = restore })
+
+	dir := t.TempDir()
+	// The first member consumes the budget exactly, so reaching the second
+	// header finds no bytes left. The archive itself is not corrupt; there is
+	// simply no budget left to walk it.
+	path := writeZeroTarGz(t, dir, "cut.tgz", []zeroMember{
+		{name: "fill.bin", size: maxArchiveDecompress - 512},
+		{name: "tail.txt", size: 4},
+	})
+
+	entries, truncated, err := ListArchive(path)
+	if err != nil {
+		t.Fatalf("budget cut should not be an error: %v", err)
+	}
+	if !truncated {
+		t.Error("budget cut should report truncation")
+	}
+	if got := names(entries); len(got) != 1 || got[0] != "fill.bin" {
+		t.Errorf("entries = %v, want [fill.bin]", got)
 	}
 }
 

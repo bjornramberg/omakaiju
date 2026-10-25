@@ -16,22 +16,6 @@ operations should be signed (#34).
 
 ## Correctness and robustness
 
-### 17. Archive listing has no decompression budget
-
-`internal/fs/archive.go:52` and `internal/fs/archive.go:93` read a gzip
-stream and walk tar headers; `tar.Next` decompresses each member's payload
-to reach the next header, so a small archive that declares a huge member
-keeps the preview worker busy for as long as it takes to decompress it.
-`internal/fs/archive.go:75` reads a zip's central directory with no cap at
-all, while the tar path has one (`maxArchiveScan`, `internal/fs/archive.go:20`).
-
-Fix: wrap the gzip reader in an `io.LimitReader`, cap the zip entries like
-the tar ones, and report the cut as truncation rather than as an archive
-with fewer members.
-
-Verify: a `.tgz` holding a gigabyte of zeros must list in bounded time and
-say it was truncated.
-
 ### 18. Archive entry names come back raw
 
 The fs layer hands out the member names as the archive stores them: control
