@@ -83,11 +83,14 @@ func TestEnteringDirectoryChangesPath(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(Model)
-	if want := filepath.Join(dir, "subdir"); m.leftPath != want {
-		t.Fatalf("after enter: leftPath = %q, want %q", m.leftPath, want)
-	}
 	if cmd == nil {
 		t.Fatal("enter should return a load command")
+	}
+	// The path is committed with the listing, so it changes when the load
+	// lands rather than the instant the key is pressed.
+	m = loadDir(t, m, 0)
+	if want := filepath.Join(dir, "subdir"); m.leftPath != want {
+		t.Fatalf("after enter: leftPath = %q, want %q", m.leftPath, want)
 	}
 }
 
@@ -97,11 +100,12 @@ func TestParentDirectoryNavigation(t *testing.T) {
 
 	updated, cmd := m.Update(arrow(tea.KeyLeft))
 	m = updated.(Model)
-	if m.leftPath != dir {
-		t.Fatalf("after left: leftPath = %q, want %q", m.leftPath, dir)
-	}
 	if cmd == nil {
 		t.Fatal("left should return a load command")
+	}
+	m = loadDir(t, m, 0)
+	if m.leftPath != dir {
+		t.Fatalf("after left: leftPath = %q, want %q", m.leftPath, dir)
 	}
 }
 
@@ -267,7 +271,9 @@ func TestPreviewIsHighlightedForSourceFile(t *testing.T) {
 
 func loadDir(t *testing.T, m Model, pane int) Model {
 	t.Helper()
-	path := m.rawPath(pane)
+	// The pane may be waiting for a load; its target is the path the queued
+	// command would report, and where navigation has already moved on to.
+	path := m.targetPath(pane)
 	files, err := fs.ReadDir(path)
 	if err != nil {
 		t.Fatal(err)

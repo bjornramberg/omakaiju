@@ -62,8 +62,13 @@ func TruncateName(name string, maxCells int) string {
 	return truncateMiddle(name, maxCells)
 }
 
-// TrimPathLeft shortens a path by dropping leading components, since the tail of
-// a path is the part that identifies where you are.
+// TrimPathLeft shortens a path by dropping leading components, since the tail
+// of a path is the part that identifies where you are.
+//
+// It always keeps the final component and marks the dropped components with an
+// ellipsis. Without the marker a shortened path looks like a real one, and
+// without the final component a deep path could collapse to "/" and claim the
+// user is at the filesystem root.
 func TrimPathLeft(path string, maxCells int) string {
 	if maxCells <= 0 {
 		return ""
@@ -76,32 +81,56 @@ func TrimPathLeft(path string, maxCells int) string {
 		return ellipsis
 	}
 
-	parts := strings.Split(path, "/")
-	if len(parts) <= 2 {
+	// A path that is only separators is the root; there is no component to
+	// preserve and no elision to make.
+	trimmed := strings.TrimRight(path, "/")
+	if trimmed == "" {
 		return TruncateEnd(path, maxCells)
 	}
 
-	// Keep the leading separator so it still reads as an absolute path.
-	head := parts[0] + "/"
-	for i := len(parts) - 1; i >= 2; i-- {
-		candidate := head + strings.Join(parts[i:], "/")
-		if ansi.StringWidth(candidate) > maxCells {
+	absolute := strings.HasPrefix(path, "/")
+	parts := strings.Split(trimmed, "/")
+	// An absolute path's leading separator is not a component.
+	if absolute && len(parts) > 0 && parts[0] == "" {
+		parts = parts[1:]
+	}
+	if len(parts) == 0 {
+		return TruncateEnd(path, maxCells)
+	}
+
+	// The marker says leading components were dropped. An absolute path keeps
+	// its leading slash so it still reads as absolute.
+	marker := ellipsis + "/"
+	if absolute {
+		marker = "/" + ellipsis + "/"
+	}
+
+	last := parts[len(parts)-1]
+	avail := maxCells - ansi.StringWidth(marker)
+	if avail < 1 {
+		// Too narrow for the marker and a component. Keep as much of the
+		// final component as fits, led by the root when the path is
+		// absolute; the ellipsis still marks the shortening.
+		if absolute && maxCells >= 2 {
+			return "/" + TruncateName(last, maxCells-1)
+		}
+		return TruncateName(last, maxCells)
+	}
+
+	// Keep as many trailing components as fit, so the result still locates
+	// the user rather than showing only the final name.
+	tail := last
+	for i := len(parts) - 2; i >= 0; i-- {
+		candidate := parts[i] + "/" + tail
+		if ansi.StringWidth(candidate) > avail {
 			break
 		}
-		head = candidate
+		tail = candidate
 	}
-	// Whatever is left is the tail that fit, or the shortest useful slice.
-	tail := strings.Join(parts[len(parts)-1:], "/")
-	if ansi.StringWidth(head) == 0 {
-		return TruncateEnd("/"+tail, maxCells)
+	if ansi.StringWidth(tail) > avail {
+		tail = TruncateName(tail, avail)
 	}
-	// The first component and its separator may not fit on their own. The
-	// path is then cut to the budget rather than allowed to overflow into
-	// the neighbouring column.
-	if ansi.StringWidth(head) > maxCells {
-		return TruncateEnd(head, maxCells)
-	}
-	return head
+	return marker + tail
 }
 
 // TruncateEnd clips s to maxCells cells, marking the cut with a trailing

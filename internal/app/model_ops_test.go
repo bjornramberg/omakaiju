@@ -666,12 +666,17 @@ func TestPasteSkipsEntryAlreadyInTarget(t *testing.T) {
 	m = updated.(Model)
 
 	// The marked entry already sits in the active pane's directory, so the
-	// paste has nothing to redistribute.
+	// paste has nothing to redistribute. The marks must survive: they are
+	// still staged for a paste into the other pane, exactly as a yanked
+	// selection survives the same case.
 	updated, _ = m.Update(shiftKey('v'))
 	m = updated.(Model)
 
-	if m.opResult != "nothing to move" {
-		t.Errorf("opResult = %q, want %q", m.opResult, "nothing to move")
+	if m.opResult != "already in this directory" {
+		t.Errorf("opResult = %q, want %q", m.opResult, "already in this directory")
+	}
+	if len(m.marked) != 1 {
+		t.Errorf("marked = %d, want the mark kept for a paste elsewhere", len(m.marked))
 	}
 }
 
@@ -1546,11 +1551,15 @@ func TestRightOnSymlinkToDirectoryEnters(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("right on a symlinked directory should dispatch a load")
 	}
-	if msg, ok := cmd().(dirLoadedMsg); !ok {
+	msg, ok := cmd().(dirLoadedMsg)
+	if !ok {
 		t.Fatalf("right dispatched %T, want dirLoadedMsg", cmd())
-	} else if msg.path != link {
+	}
+	if msg.path != link {
 		t.Errorf("entered %q, want %q", msg.path, link)
 	}
+	updated, _ = m.Update(msg)
+	m = updated.(Model)
 	if m.leftPath != link {
 		t.Errorf("leftPath = %q, want %q", m.leftPath, link)
 	}

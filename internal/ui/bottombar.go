@@ -38,7 +38,7 @@ func (b BottomBar) Render() string {
 	}
 
 	if b.Error != "" {
-		return b.line(b.Theme.ErrorText().Render(" Error: " + b.Error))
+		return b.line(b.Theme.ErrorText().Render(" Error: " + SanitizeDisplay(b.Error)))
 	}
 
 	if b.Input != "" {
@@ -55,7 +55,9 @@ func (b BottomBar) Render() string {
 	}
 
 	if b.OpResult != "" {
-		return b.line(b.Theme.AccentText().Render(" " + b.OpResult))
+		// Operation results quote file names, which are filesystem data and
+		// may contain bytes the terminal would interpret.
+		return b.line(b.Theme.AccentText().Render(" " + SanitizeDisplay(b.OpResult)))
 	}
 
 	hints := b.Theme.StatusText().Render("shift+k:keys  q:quit")

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/bjornramberg/omakaiju/internal/config"
 )
@@ -154,7 +155,9 @@ func (f FuzzyFinder) Render() string {
 	case f.Loading:
 		label := "scanning"
 		if f.Root != "" {
-			label = "scanning " + f.Root
+			// The root is a filesystem path, so it may carry control bytes
+			// that a terminal would act on instead of drawing.
+			label = "scanning " + SanitizeDisplay(f.Root)
 		}
 		// The animation appears only once the user has typed something to
 		// wait for, so an instant walk shows nothing rather than a flash.
@@ -285,9 +288,13 @@ func (f FuzzyFinder) Selected() string {
 }
 
 // highlight emphasises the characters that matched the query. Names that no
-// longer match are shown plainly rather than marked. Matching is a case
-// insensitive subsequence scan done byte-wise without allocating lowered
-// copies, since this runs for every visible row on every frame.
+// longer match are shown plainly rather than marked.
+//
+// Both matching and styling work on runes, not bytes. A UTF-8 character is
+// several bytes, so the old byte walk emphasised one byte at a time and wrote
+// each with string(byte), which turns it into the rune with that code point:
+// "日本語.txt" rendered as mojibake. A rune is always written whole, so the
+// name is exactly as stored apart from the styling.
 func (f FuzzyFinder) highlight(name string) string {
 	if f.Input == "" {
 		return name
@@ -299,33 +306,33 @@ func (f FuzzyFinder) highlight(name string) string {
 	var sb strings.Builder
 	// Matched spans are few; the builder only grows for the visible rows.
 	sb.Grow(len(name) + len(f.Input)*8)
+	pattern := []rune(f.Input)
 	pi := 0
-	for i := 0; i < len(name); i++ {
-		if pi < len(f.Input) && lowerByte(name[i]) == lowerByte(f.Input[pi]) {
-			sb.WriteString(f.Theme.AccentText().Bold(true).Render(string(name[i])))
+	for _, r := range name {
+		if pi < len(pattern) && unicode.ToLower(r) == unicode.ToLower(pattern[pi]) {
+			sb.WriteString(f.Theme.AccentText().Bold(true).Render(string(r)))
 			pi++
 			continue
 		}
-		_ = sb.WriteByte(name[i])
+		sb.WriteRune(r)
 	}
 	return sb.String()
 }
 
 // subseqMatchLower reports whether pattern is a case-insensitive subsequence
-// of text, using ASCII folding without allocating lowered copies.
+// of text. It compares runes so a multi-byte query matches a whole character
+// rather than a byte inside one, and folds case with unicode.ToLower so the
+// match stays case-insensitive beyond ASCII.
 func subseqMatchLower(pattern, text string) bool {
+	patternRunes := []rune(pattern)
 	pi := 0
-	for i := 0; i < len(text) && pi < len(pattern); i++ {
-		if lowerByte(text[i]) == lowerByte(pattern[pi]) {
+	for _, r := range text {
+		if pi >= len(patternRunes) {
+			break
+		}
+		if unicode.ToLower(r) == unicode.ToLower(patternRunes[pi]) {
 			pi++
 		}
 	}
-	return pi >= len(pattern)
-}
-
-func lowerByte(b byte) byte {
-	if b >= 'A' && b <= 'Z' {
-		return b + ('a' - 'A')
-	}
-	return b
+	return pi >= len(patternRunes)
 }

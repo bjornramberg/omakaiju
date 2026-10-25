@@ -41,8 +41,12 @@ func TestRightArrowEntersDirectory(t *testing.T) {
 	m, dir := fixture(t)
 	m = cursorOn(t, m, "subdir")
 
-	updated, _ := m.Update(arrow(tea.KeyRight))
+	updated, cmd := m.Update(arrow(tea.KeyRight))
 	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("right arrow should dispatch the directory load")
+	}
+	m = loadDir(t, m, 0)
 
 	if m.leftPath != filepath.Join(dir, "subdir") {
 		t.Errorf("leftPath = %q, want the subdirectory", m.leftPath)
@@ -189,8 +193,12 @@ func TestLeftArrowLeavesDirectoryWhileFiltering(t *testing.T) {
 	m.mode = inputFilter
 	m.setFilter(0, "")
 
-	updated, _ := m.Update(arrow(tea.KeyLeft))
+	updated, cmd := m.Update(arrow(tea.KeyLeft))
 	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("left arrow should dispatch the directory load")
+	}
+	m = loadDir(t, m, 0)
 
 	if m.leftPath != dir {
 		t.Errorf("leftPath = %q, want the parent %q", m.leftPath, dir)

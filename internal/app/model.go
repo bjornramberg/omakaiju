@@ -198,6 +198,10 @@ type openMsg struct {
 type themeReloadedMsg struct {
 	theme config.Theme
 	err   error
+	// closed reports that the watcher was shut down and cannot be waited on
+	// again. Any other error is transient, and the wait is re-armed so one
+	// inotify hiccup does not end hot-reload for the rest of the session.
+	closed bool
 }
 
 // fuzzyTickMsg drives the spinner while a walk is in progress. The animation
@@ -212,7 +216,11 @@ type splashTickMsg struct{}
 type previewLoadedMsg struct {
 	// path is the file the preview belongs to. A preview for a file the
 	// cursor has already left is stale and is dropped.
-	path    string
+	path string
+	// stamp identifies the file's contents at the time it was read: its size
+	// and modification time. A preview keyed on the path alone would keep
+	// showing a file that has since been edited, overwritten or replaced.
+	stamp   string
 	content ui.Content
 }
 
@@ -278,6 +286,13 @@ type Model struct {
 	rightPath   string
 	rightFiles  []fs.Entry
 	rightCursor int
+	// leftPending/rightPending hold the path of a listing the pane is still
+	// waiting for. The pane's path and listing are committed together when
+	// that listing arrives, so a failed load leaves both as they were.
+	// Navigation uses the pending path meanwhile, which keeps "enter, then
+	// leave" heading for the parent of the directory just entered.
+	leftPending  string
+	rightPending string
 	// loadErr reports a directory-listing failure. It is deliberately
 	// separate from opErr: a pane reload must never erase the outcome of a
 	// file operation, and an operation must not erase a listing error.
@@ -330,6 +345,13 @@ type Model struct {
 	previewContent ui.Content
 	// previewCachePath is the file previewContent belongs to.
 	previewCachePath string
+	// previewCacheStamp identifies the version of that file previewContent
+	// was read from. Together with the path it is the preview's identity.
+	previewCacheStamp string
+	// previewStamp identifies the version the in-flight preview request was
+	// made for, so a second request for the same unchanged file is not
+	// dispatched while the first is still running.
+	previewStamp string
 	// previewVersion counts the changes to the preview. The render cache
 	// uses it to tell a changed preview from an unchanged one.
 	previewVersion int
@@ -660,7 +682,7 @@ func (m Model) waitThemeCmd() tea.Cmd {
 			select {
 			case event, ok := <-watcher.Events():
 				if !ok {
-					return themeReloadedMsg{err: fmt.Errorf("theme watcher closed")}
+					return themeReloadedMsg{err: fmt.Errorf("theme watcher closed"), closed: true}
 				}
 				if !relevantThemeEvent(event.Name, path, omarchyPath) {
 					continue
@@ -683,9 +705,13 @@ func (m Model) waitThemeCmd() tea.Cmd {
 					// The watcher was closed, which also closes the events
 					// channel. Returning here ends the wait cleanly instead
 					// of spinning on a closed channel.
-					return themeReloadedMsg{err: fmt.Errorf("theme watcher closed")}
+					return themeReloadedMsg{err: fmt.Errorf("theme watcher closed"), closed: true}
 				}
 				if err != nil {
+					// The watcher is still alive, so this is a transient
+					// failure. Update reports it and arms the wait again;
+					// returning here without re-arming is what used to stop
+					// theme switches from ever being noticed again.
 					return themeReloadedMsg{err: err}
 				}
 			}
@@ -745,6 +771,51 @@ func (m *Model) setPath(pane int, path string) {
 	} else {
 		m.rightPath = path
 	}
+}
+
+// targetPath is where the pane is heading: the path of a load already in
+// flight, or the committed path when nothing is pending. Navigation works
+// from it so a second keypress applies to the directory the first one asked
+// for, even before its listing has arrived.
+func (m Model) targetPath(pane int) string {
+	if pane == 0 {
+		if m.leftPending != "" {
+			return m.leftPending
+		}
+		return m.leftPath
+	}
+	if m.rightPending != "" {
+		return m.rightPending
+	}
+	return m.rightPath
+}
+
+func (m *Model) setPending(pane int, path string) {
+	if pane == 0 {
+		m.leftPending = path
+	} else {
+		m.rightPending = path
+	}
+}
+
+// beginLoad records the path a pane is heading to and dispatches the load.
+// The path is not committed here: the result commits it, so a failed read
+// leaves the header naming the directory whose rows are still on screen.
+func (m *Model) beginLoad(pane int, path string) tea.Cmd {
+	m.setPending(pane, path)
+	return loadDirCmd(pane, path)
+}
+
+// reloadPaneCmd refreshes a pane without abandoning a navigation already in
+// flight for it.
+func (m *Model) reloadPaneCmd(pane int) tea.Cmd {
+	return m.beginLoad(pane, m.targetPath(pane))
+}
+
+// reloadPanesCmd refreshes both panes. It is the reload every file operation
+// ends with.
+func (m *Model) reloadPanesCmd() tea.Cmd {
+	return tea.Batch(m.reloadPaneCmd(0), m.reloadPaneCmd(1))
 }
 
 func (m Model) filterOf(pane int) string {
@@ -892,6 +963,11 @@ func (m *Model) clampCursor(pane int) {
 // and the user pressed an arrow key to move the cursor. Doing it here would
 // make every keypress wait for the disk.
 //
+// The preview is identified by its path and its stamp (size and modification
+// time). Keying it on the path alone meant a file edited, overwritten or
+// replaced on disk kept showing its old contents until the cursor left it and
+// came back.
+//
 // The returned command must be dispatched by the caller.
 func (m *Model) updatePreview() tea.Cmd {
 	files := m.visibleFiles(m.activePane)
@@ -902,27 +978,52 @@ func (m *Model) updatePreview() tea.Cmd {
 		m.previewPath = ""
 	}
 
-	if m.previewPath == m.previewCachePath {
+	if m.previewPath == "" {
+		// No preview is being shown, so any load still in flight no longer
+		// matters and must not leave the panel marked as loading.
+		m.previewLoading = false
+		if m.previewCachePath != "" {
+			m.previewContent = ui.Content{}
+			m.previewCachePath = ""
+			m.previewCacheStamp = ""
+			m.previewVersion++
+		}
 		return nil
 	}
 
-	// The cached preview belongs to another file. Drop it so the panel
-	// shows something honest rather than the previous file's contents.
+	stamp := previewStamp(m.previewPath)
+	if m.previewPath == m.previewCachePath && stamp == m.previewCacheStamp {
+		return nil
+	}
+
+	// The cached preview belongs to another file, or to an older version of
+	// this one. Drop it so the panel shows something honest rather than the
+	// previous contents.
 	m.previewContent = ui.Content{}
 	m.previewCachePath = ""
+	m.previewCacheStamp = ""
+	m.previewStamp = stamp
 	m.previewVersion++
-	m.previewLoading = m.previewPath != ""
+	m.previewLoading = true
 
-	if m.previewPath == "" {
-		return nil
+	return loadPreviewCmd(m.previewPath, stamp, m.theme)
+}
+
+// previewStamp identifies a file's contents. Size and modification time are
+// enough to notice an edit, an overwrite or a rename over the old file, all of
+// which leave the path unchanged.
+func previewStamp(path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
 	}
-	return loadPreviewCmd(m.previewPath, m.theme)
+	return fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
 }
 
 // loadPreviewCmd gathers a preview in the background.
-func loadPreviewCmd(path string, theme config.Theme) tea.Cmd {
+func loadPreviewCmd(path, stamp string, theme config.Theme) tea.Cmd {
 	return safeCmd("preview", func() tea.Msg {
-		return previewLoadedMsg{path: path, content: ui.Load(path, theme)}
+		return previewLoadedMsg{path: path, stamp: stamp, content: ui.Load(path, theme)}
 	})
 }
 
@@ -982,8 +1083,15 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.path != m.previewPath {
 			return m, nil
 		}
+		// The file changed again while it was being read. The content just
+		// gathered is already out of date, so ask for the current version
+		// instead of displaying it.
+		if msg.stamp != m.previewStamp {
+			return m, m.updatePreview()
+		}
 		m.previewContent = msg.content
 		m.previewCachePath = msg.path
+		m.previewCacheStamp = msg.stamp
 		m.previewVersion++
 		m.previewLoading = false
 		return m, nil
@@ -994,11 +1102,25 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case dirLoadedMsg:
+		// A load for a path the pane has since left is stale. Committing it
+		// would drag the pane back to that directory — and operations would
+		// then run there — even though the user's last action was to leave
+		// it. Bubble Tea runs every command in its own goroutine, so the
+		// results of two navigation keypresses can arrive in either order.
+		if msg.path != m.targetPath(msg.pane) {
+			return m, nil
+		}
 		if msg.err != nil {
+			// The listing never arrived, so the path is not committed. The
+			// header keeps naming the directory whose rows are on screen,
+			// and the failure is reported instead of leaving the two out of
+			// step.
+			m.setPending(msg.pane, "")
 			m.loadErr = msg.err
 			return m, nil
 		}
 		m.loadErr = nil
+		m.setPending(msg.pane, "")
 		if msg.pane == 0 {
 			m.leftPath = msg.path
 			m.leftFiles = msg.files
@@ -1076,10 +1198,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				marks:     marks,
 				skipped:   skipped,
 			})
-			return m, tea.Batch(
-				loadDirCmd(0, m.leftPath),
-				loadDirCmd(1, m.rightPath),
-			)
+			return m, m.reloadPanesCmd()
 		}
 
 		if msg.done {
@@ -1101,16 +1220,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					marks:     marks,
 					skipped:   skipped,
 				})
-				return m, tea.Batch(
-					loadDirCmd(0, m.leftPath),
-					loadDirCmd(1, m.rightPath),
-				)
+				return m, m.reloadPanesCmd()
 			}
 			m.recordOpResult(fileOpMsg{verb: "copied", succeeded: files})
-			return m, tea.Batch(
-				loadDirCmd(0, m.leftPath),
-				loadDirCmd(1, m.rightPath),
-			)
+			return m, m.reloadPanesCmd()
 		}
 
 		return m, stepCopyCmd(msg.copier, msg.gen)
@@ -1122,22 +1235,30 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// lives apart from loadErr precisely so the listing refresh that
 		// follows an operation cannot erase the operation's error.
 		m.recordOpResult(msg)
-		return m, tea.Batch(
-			loadDirCmd(0, m.leftPath),
-			loadDirCmd(1, m.rightPath),
-		)
+		return m, m.reloadPanesCmd()
 
 	case themeReloadedMsg:
 		if msg.err != nil {
-			// A closed watcher only happens on shutdown; keep the old theme
-			// rather than blanking the UI.
-			return m, nil
+			if msg.closed {
+				// The watcher was shut down for good; keep the old theme
+				// rather than blanking the UI, and stop listening.
+				return m, nil
+			}
+			// A transient watcher failure — inotify's queue overflow on a
+			// busy state directory is the realistic one — must not end
+			// hot-reload for the rest of the session. Report it and listen
+			// again.
+			m.loadErr = fmt.Errorf("theme watcher: %w", msg.err)
+			return m, m.waitThemeCmd()
 		}
 		m.theme = msg.theme
 		// Colours changed, so the highlighted preview must be rebuilt.
 		// Clearing the cached path makes updatePreview load it again, this
 		// time with the new palette.
 		m.previewCachePath = ""
+		m.previewCacheStamp = ""
+		m.previewStamp = ""
+		m.previewLoading = false
 		// Re-arm: the previous wait command has returned, so listening must be
 		// resumed or only the first reload would ever take effect.
 		return m, tea.Batch(m.updatePreview(), m.waitThemeCmd())
@@ -1284,16 +1405,20 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			files := m.visibleFiles(m.activePane)
 			cursor := m.rawCursor(m.activePane)
 			if cursor < len(files) && files[cursor].IsDir {
-				newPath := files[cursor].Path
-				m.setPath(m.activePane, newPath)
-				return m, loadDirCmd(m.activePane, newPath)
+				return m, m.beginLoad(m.activePane, files[cursor].Path)
 			}
 			if cursor < len(files) {
 				return m, openCmd(files[cursor].Path, files[cursor].Name)
 			}
 			return m, nil
 		case nav.ActionRefresh:
-			return m, loadDirCmd(m.activePane, m.rawPath(m.activePane))
+			// Refresh the listing and the preview: Shift+E is the way to
+			// pick up a file another program has changed without moving
+			// the cursor off it.
+			return m, tea.Batch(
+				m.reloadPaneCmd(m.activePane),
+				m.updatePreview(),
+			)
 		case nav.ActionFuzzyFind:
 			root := m.rawPath(m.activePane)
 			m.fuzzyActive = true
@@ -1547,13 +1672,8 @@ func (m Model) handleFuzzyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.fuzzyCursor < len(m.fuzzyResults) {
 			selected := m.fuzzyResults[m.fuzzyCursor]
 			dir := filepath.Dir(selected)
-			if m.activePane == 0 {
-				m.leftPath = dir
-			} else {
-				m.rightPath = dir
-			}
 			m.clearFuzzy()
-			return m, loadDirCmd(m.activePane, dir)
+			return m, m.beginLoad(m.activePane, dir)
 		}
 		return m, nil
 	case "j", "down":
@@ -1629,15 +1749,14 @@ func (m Model) handleNavAction(action nav.Action) (tea.Model, tea.Cmd) {
 		}
 		return m, m.updatePreview()
 	case nav.ActionLeft:
-		currentPath := m.rawPath(m.activePane)
+		currentPath := m.targetPath(m.activePane)
 		parent := filepath.Dir(currentPath)
 		if parent != currentPath {
 			// Record the directory being left so the parent listing can
 			// put the cursor back on it. The name comes from the path,
 			// not the current listing, which may have changed since entry.
 			m.setRestore(m.activePane, filepath.Base(currentPath))
-			m.setPath(m.activePane, parent)
-			return m, loadDirCmd(m.activePane, parent)
+			return m, m.beginLoad(m.activePane, parent)
 		}
 		return m, nil
 	case nav.ActionRight:
@@ -1647,9 +1766,7 @@ func (m Model) handleNavAction(action nav.Action) (tea.Model, tea.Cmd) {
 		files := m.visibleFiles(m.activePane)
 		cursor := m.rawCursor(m.activePane)
 		if cursor < len(files) && files[cursor].IsDir {
-			newPath := files[cursor].Path
-			m.setPath(m.activePane, newPath)
-			return m, loadDirCmd(m.activePane, newPath)
+			return m, m.beginLoad(m.activePane, files[cursor].Path)
 		}
 		return m, nil
 	}
@@ -1759,7 +1876,11 @@ func (m Model) commitInput() (tea.Model, tea.Cmd) {
 }
 
 // commitGoto resolves the typed path and navigates the active pane to it.
-// On invalid path, keeps the prompt open and sets loadErr for display.
+//
+// A failure is shown rather than swallowed: the prompt closes, so the bottom
+// bar can present the error, and the message names both the path and the
+// reason. The path is not committed until its listing arrives, so a directory
+// that cannot be read leaves the pane exactly where it was.
 func (m Model) commitGoto() (tea.Model, tea.Cmd) {
 	path := m.inputBuf
 	if path == "" {
@@ -1768,18 +1889,25 @@ func (m Model) commitGoto() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	expanded := expandPath(path, m.rawPath(m.activePane))
+	expanded := expandPath(path, m.targetPath(m.activePane))
 
-	if info, err := os.Stat(expanded); err == nil && info.IsDir() {
+	info, err := os.Stat(expanded)
+	if err != nil {
 		m.mode = inputNone
 		m.inputBuf = ""
-		m.setPath(m.activePane, expanded)
-		return m, loadDirCmd(m.activePane, expanded)
+		m.loadErr = fmt.Errorf("goto %s: %w", expanded, err)
+		return m, nil
+	}
+	if !info.IsDir() {
+		m.mode = inputNone
+		m.inputBuf = ""
+		m.loadErr = fmt.Errorf("goto %s: not a directory", expanded)
+		return m, nil
 	}
 
-	// Invalid - keep prompt open, show error
-	m.loadErr = fmt.Errorf("not a directory: %s", path)
-	return m, nil
+	m.mode = inputNone
+	m.inputBuf = ""
+	return m, m.beginLoad(m.activePane, expanded)
 }
 
 // moverFailures converts the entries a mover could not move into the
@@ -1857,7 +1985,7 @@ func (m *Model) restoreClipboard(clipboard *Clipboard) {
 }
 
 func (m Model) loadActive() tea.Cmd {
-	return loadDirCmd(m.activePane, m.rawPath(m.activePane))
+	return m.reloadPaneCmd(m.activePane)
 }
 
 func (m Model) handleYank() (tea.Model, tea.Cmd) {
@@ -1974,10 +2102,7 @@ func (m Model) cancelCopy() (tea.Model, tea.Cmd) {
 	m.restoreClipboard(clipboard)
 
 	m.opResult = verb + " cancelled"
-	return m, tea.Batch(
-		loadDirCmd(0, m.leftPath),
-		loadDirCmd(1, m.rightPath),
-	)
+	return m, m.reloadPanesCmd()
 }
 
 // copySizeWalkLimit bounds how many entries the pre-copy size walk visits, so
@@ -2125,6 +2250,10 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 // Entries that vanished from disk, or that already sit in the destination,
 // are skipped so a stale mark cannot fail the whole batch. The pane is left
 // pointing at one of the entries that arrived, not at the top of the listing.
+//
+// A paste with nothing to move keeps the marks. They are still staged, so
+// tabbing to the destination and pasting there has to work; clearing them
+// made the two-step move the clipboard also supports impossible for marks.
 func (m Model) pasteMarks() (tea.Model, tea.Cmd) {
 	targetPath := m.rawPath(m.activePane)
 
@@ -2133,14 +2262,18 @@ func (m Model) pasteMarks() (tea.Model, tea.Cmd) {
 	var srcs []string
 	marks := make(map[string]fs.Entry, len(m.marked))
 	skipped := 0
+	alreadyHere := 0
+	missing := 0
 	for _, entry := range m.marked {
 		if _, err := os.Stat(entry.Path); err != nil {
 			skipped++
+			missing++
 			continue
 		}
 		dst := filepath.Join(targetPath, entry.Name)
 		if filepath.Clean(dst) == filepath.Clean(entry.Path) {
 			skipped++
+			alreadyHere++
 			continue
 		}
 		items = append(items, opItem{name: entry.Name, src: entry.Path, dst: dst})
@@ -2150,13 +2283,20 @@ func (m Model) pasteMarks() (tea.Model, tea.Cmd) {
 	}
 	dstDir := targetPath
 
-	m.marked = nil
-	m.restoreLanded(m.activePane, landed)
-
 	if len(items) == 0 {
-		m.opResult = "nothing to move"
+		// Nothing was consumed, so nothing is cleared. Saying the entries
+		// are already here matches the clipboard path, which keeps its
+		// selection in the same case.
+		if alreadyHere > 0 && missing == 0 {
+			m.opResult = "already in this directory"
+		} else {
+			m.opResult = "nothing to move"
+		}
 		return m, nil
 	}
+
+	m.marked = nil
+	m.restoreLanded(m.activePane, landed)
 
 	// The moves have not run yet, so report that they are starting rather
 	// than claiming they are done. The final count comes back in the batch

@@ -118,7 +118,7 @@ func (p Preview) RenderContent(c Content) string {
 	case KindError:
 		return p.RenderError(c.Err)
 	case KindText:
-		return p.RenderText(c.Text, c.Highlighted)
+		return p.renderText(c.Text, c.Highlighted, c.TextTruncated)
 	case KindBinary:
 		return p.renderBinaryContent(c)
 	case KindImage:
@@ -176,6 +176,13 @@ func (p Preview) renderMetadataContent(c Content) string {
 // counting and highlighted carries the colourised text; when highlighted is
 // empty the raw lines are shown unhighlighted.
 func (p Preview) RenderText(lines, highlighted []string) string {
+	return p.renderText(lines, highlighted, false)
+}
+
+// renderText is RenderText with the option to say the preview stopped at its
+// load cap. The cap is applied away from the render path; the panel only
+// reports it.
+func (p Preview) renderText(lines, highlighted []string, truncated bool) string {
 	chrome := 8
 	maxVisible := p.Height - chrome
 	if maxVisible < 1 {
@@ -204,14 +211,21 @@ func (p Preview) RenderText(lines, highlighted []string) string {
 	// from Chroma are not overridden.
 	content := strings.Join(body, "\n")
 
-	footer := ""
-	if totalLines > maxVisible {
-		footer = p.Theme.StatusText().Render(fmt.Sprintf("... (%d more lines)", totalLines-maxVisible))
-	} else {
-		footer = p.Theme.StatusText().Render(fmt.Sprintf("%d lines", totalLines))
+	var footer string
+	switch {
+	case truncated && totalLines > maxVisible:
+		footer = fmt.Sprintf("... (%d more lines, file cut short)", totalLines-maxVisible)
+	case truncated:
+		// The loader stopped at its byte or line cap, so even the lines it
+		// did read are not the whole file.
+		footer = "file cut short (preview limit)"
+	case totalLines > maxVisible:
+		footer = fmt.Sprintf("... (%d more lines)", totalLines-maxVisible)
+	default:
+		footer = fmt.Sprintf("%d lines", totalLines)
 	}
 
-	return p.panel(header + "\n\n" + content + "\n\n" + footer)
+	return p.panel(header + "\n\n" + content + "\n\n" + p.Theme.StatusText().Render(footer))
 }
 
 func (p Preview) RenderTextFromFile(path string) string {
@@ -250,7 +264,10 @@ func splitLines(s string) []string {
 
 func (p Preview) RenderBinary(path string) string {
 	header := p.header(filepath.Base(path))
-	hexDump := p.generateHexDump(path, 256)
+	hexDump, err := p.generateHexDump(path, 256)
+	if err != nil {
+		return p.RenderError(err)
+	}
 	footer := p.Theme.StatusText().Render("binary file")
 
 	return p.panel(header + "\n\n" + hexDump + "\n\n" + footer)
@@ -303,7 +320,9 @@ func (p Preview) RenderArchive(lines []string) string {
 // ArchiveNotice frames a non-listable archive message in the preview panel.
 func (p Preview) ArchiveNotice(path, message string) string {
 	header := p.header(filepath.Base(path))
-	return p.panel(header + "\n\n" + p.Theme.StatusText().Render(message))
+	// The message can embed an operating-system error, and those name the
+	// path, which is filesystem data.
+	return p.panel(header + "\n\n" + p.Theme.StatusText().Render(SanitizeDisplay(message)))
 }
 
 func (p Preview) RenderDirectory(path string) string {
@@ -337,13 +356,29 @@ func (p Preview) RenderMetadata(path string) string {
 }
 
 func (p Preview) RenderError(err error) string {
-	return p.panel("Error: " + err.Error())
+	if err == nil {
+		return p.panel("Error: unknown error")
+	}
+	// Operating-system errors embed the path they failed on, and a path is
+	// filesystem data: it may contain control bytes that would act on the
+	// terminal rather than being drawn.
+	return p.panel("Error: " + SanitizeDisplay(err.Error()))
 }
 
-func (p Preview) generateHexDump(path string, maxBytes int) string {
+func (p Preview) generateHexDump(path string, maxBytes int) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	// Only a regular file may be streamed. A FIFO would block the render
+	// path forever and a device has no end to read.
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("read: %s is not a regular file", path)
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
-		return p.Theme.ErrorText().Render("Error reading file")
+		return "", err
 	}
 	defer f.Close()
 
@@ -374,5 +409,5 @@ func (p Preview) generateHexDump(path string, maxBytes int) string {
 	// A hex row is a fixed 76 cells, which is wider than a narrow preview
 	// column, so clip it before it reaches the frame.
 	return p.Theme.Text().Render(strings.Join(clipLines(
-		strings.Split(sb.String(), "\n"), p.ContentWidth()), "\n"))
+		strings.Split(sb.String(), "\n"), p.ContentWidth()), "\n")), nil
 }

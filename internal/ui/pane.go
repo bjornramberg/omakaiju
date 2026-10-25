@@ -67,11 +67,13 @@ func (p Pane) Render() string {
 		statusRows = 2 // blank line plus the status row
 		status = fmt.Sprintf("%d/%d", len(p.Files), p.TotalFiles)
 		if p.Status != "" {
-			status += "  " + p.Status
+			// The status can quote a filesystem name, which may contain
+			// control bytes. Clean it before it reaches the terminal.
+			status += "  " + SanitizeDisplay(p.Status)
 		}
 	} else if p.Status != "" {
 		statusRows = 1
-		status = p.Status
+		status = SanitizeDisplay(p.Status)
 	}
 
 	listRows := p.Height - 4 - 2 - statusRows
@@ -100,14 +102,14 @@ func (p Pane) Render() string {
 	if p.Active {
 		headerStyle = p.Theme.PaneHeaderActive()
 	}
-	header := headerStyle.Width(inner).MaxWidth(inner).Render(marker + sep + TruncateName(p.Path, pathWidth))
+	header := headerStyle.Width(inner).MaxWidth(inner).Render(marker + sep + TruncateName(SanitizeDisplay(p.Path), pathWidth))
 
 	var body string
 	if len(p.Files) == 0 {
 		// One placeholder row, padded out so the frame keeps its height.
 		msg := "empty directory"
 		if p.Filter != "" {
-			msg = "no matches for " + p.Filter
+			msg = "no matches for " + SanitizeDisplay(p.Filter)
 		}
 		body = p.Theme.StatusText().Render(TruncateName(msg, inner))
 	} else {
