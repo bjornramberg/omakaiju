@@ -155,7 +155,13 @@ func SortEntriesBy(entries []Entry, mode SortMode) {
 	})
 }
 
-// Copy copies a single file, keeping its permission bits.
+// Copy copies a single file, keeping its mode and times.
+//
+// The mode is the whole mode: the permission bits and the setuid, setgid and
+// sticky bits. The modification and access times are carried too. Ownership
+// and ACLs are not, because they cannot be set without privileges; extended
+// attributes and sparseness are not either, and a sparse source arrives with
+// all its blocks.
 //
 // A symlink is recreated as a symlink rather than followed: copying a link
 // to a directory would otherwise fail with "is a directory", and copying a
@@ -175,7 +181,7 @@ func Copy(src, dst string) error {
 	if !info.Mode().IsRegular() {
 		return &refusedEntry{verb: "copy", path: src}
 	}
-	return copyFileAtomic(src, dst, info.Mode())
+	return copyFileAtomic(src, dst, info)
 }
 
 // copyMaxDepth bounds the recursion. A tree nested deeper than this is
@@ -184,6 +190,12 @@ func Copy(src, dst string) error {
 const copyMaxDepth = 256
 
 // CopyRecursive copies src to dst, recursing into directories.
+//
+// Files keep their whole mode and their times. Directories are made writable
+// while the copy fills them, then given the source's exact mode and times once
+// their contents are in place; the time cannot be set earlier because writing
+// into a directory moves its time forward again. Ownership, ACLs, extended
+// attributes and sparseness are not carried over.
 //
 // Symlinks are copied as symlinks and never followed. Following them is
 // what turns a copy into a runaway: a link to an ancestor makes the copy
@@ -224,7 +236,7 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 		if !info.Mode().IsRegular() {
 			return &refusedEntry{verb: "copy", path: src}
 		}
-		return copyFileAtomic(src, dst, info.Mode())
+		return copyFileAtomic(src, dst, info)
 	}
 
 	// Copying a directory into its own subtree would make the copy
@@ -244,12 +256,12 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 	// then leaves the destination as it was, instead of a half-filled
 	// directory the user has to clear out by hand before trying again.
 	if _, err := os.Lstat(dst); os.IsNotExist(err) {
-		return copyDirAtomic(src, dst, visited, depth, info.Mode().Perm())
+		return copyDirAtomic(src, dst, visited, depth, info)
 	}
 
 	visited = append(visited, info)
 
-	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+	if err := os.MkdirAll(dst, info.Mode()); err != nil {
 		return err
 	}
 
@@ -277,7 +289,11 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 // The rename is atomic, so the destination either holds the whole tree or
 // is not there at all. A copy that fails leaves the scratch directory
 // behind, and that is removed.
-func copyDirAtomic(src, dst string, visited []os.FileInfo, depth int, mode os.FileMode) error {
+//
+// The scratch directory is writable while the tree is built, then given the
+// source's exact mode and times. Writing the contents moves the directory's
+// time forward again, so setting it any earlier would not survive.
+func copyDirAtomic(src, dst string, visited []os.FileInfo, depth int, info os.FileInfo) error {
 	dir := filepath.Dir(dst)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -293,9 +309,15 @@ func copyDirAtomic(src, dst string, visited []os.FileInfo, depth int, mode os.Fi
 		return err
 	}
 
-	// The scratch directory was created private. The copy carries the
-	// source's permissions.
-	if err := os.Chmod(tmp, mode); err != nil {
+	// The scratch directory holds everything now, so it can take the
+	// source's exact mode — setuid, setgid and sticky bits included — and
+	// the source's times. MkdirTemp was private and writable, which is what
+	// let the contents be written into it.
+	if err := setCopyMode(tmp, info.Mode()); err != nil {
+		os.RemoveAll(tmp)
+		return err
+	}
+	if err := setCopyTimes(tmp, timesOf(info)); err != nil {
 		os.RemoveAll(tmp)
 		return err
 	}
@@ -428,7 +450,9 @@ func isInside(parent, child string) (bool, error) {
 // Move relocates src to dst.
 //
 // A rename is the move: it is atomic, it costs nothing, and the file is
-// either in one place or the other. It only works within one filesystem,
+// either in one place or the other. It keeps the same inode, so within one
+// filesystem everything the entry carries — mode, times, ownership, ACLs and
+// xattrs — goes with it untouched. It only works within one filesystem,
 // though, so a move onto a share — or between two shares — comes back as a
 // cross-device link error. That case is handled by copying the file across
 // and removing the original, but only once the copy has been written,

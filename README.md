@@ -248,6 +248,12 @@ Copies and moves never expose a half-written file, and never lose one.
   nothing it made for itself is left lying around. In a folder copy the files
   it had already finished stay: they are whole, and they are the ones the
   copy was asked for.
+* A copy keeps the file's mode — including the setuid, setgid and sticky
+  bits — and its modification and access times. A copied directory gets the
+  source's mode and times once its contents are in place, so the umask cannot
+  mask them and writing the tree does not make the directory look newer.
+  Ownership, ACLs, extended attributes and sparseness are not carried over:
+  a sparse file arrives with all its blocks.
 * A move between filesystems — onto an SMB share, say — is a rename the kernel
   refuses, so omakaiju copies the file across and removes the original. The
   original is only removed once the copy has landed and been verified.

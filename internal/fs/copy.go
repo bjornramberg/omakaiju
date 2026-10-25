@@ -95,9 +95,13 @@ type Copier struct {
 	// every frame.
 	total atomic.Int64
 
-	// jobMode is the permission bits of the file being written, so the
-	// finished copy can carry them over.
+	// jobMode is the full mode of the file being written, so the finished
+	// copy can carry it over. Perm is not enough: the setuid, setgid and
+	// sticky bits are part of the mode too.
 	jobMode os.FileMode
+	// jobTimes are the source's times for the file being written. They are
+	// set on the scratch file before it is renamed into place.
+	jobTimes copyTimes
 
 	// move makes the copier remove each source once its copy has landed.
 	// It is set for a move across filesystems, where a rename is not
@@ -130,6 +134,12 @@ type Copier struct {
 	// that is cancelled or fails takes them away again, so the user's
 	// folder is not left with an empty tree in it.
 	createdDirs []string
+	// createdMeta are the directories the copy made whose source's mode
+	// and times it knows. A directory cannot be given its final mode or
+	// times while its contents are still being written: writing moves its
+	// time forward again, and a read-only mode would stop the copy. They
+	// are applied once the whole copy has landed.
+	createdMeta []createdDir
 	// copyPending counts the copy jobs and directories that still have to
 	// run. It is atomic because a UI may read it while Step advances.
 	copyPending atomic.Int64
@@ -157,9 +167,13 @@ type copyJob struct {
 	src  string
 	dst  string
 	size int64
-	// mode carries the permission bits of the source, so the copy can keep
-	// them.
+	// mode carries the source's full mode, so the copy can keep it
+	// exactly, setuid, setgid and sticky bits included.
 	mode os.FileMode
+	// times are the source's access and modification times, as they were
+	// when the copy was queued. They are set on the scratch file before it
+	// is renamed into place.
+	times copyTimes
 	// modTime is when the source was last changed, as it was when the copy
 	// was queued. A source that changed since then is not the file that was
 	// copied, so a move leaves it alone.
@@ -228,8 +242,25 @@ type dirJob struct {
 	path string
 	// src is the directory the destination was copied from. A move empties
 	// the original, and this is where it goes once it is empty.
-	src  string
+	src string
+	// mode is the source directory's full mode, including the setuid,
+	// setgid and sticky bits. It is applied once the directory holds
+	// everything it is meant to.
 	mode os.FileMode
+	// times are the source directory's times. Writing the contents moves
+	// the directory's time forward again, so they are applied last.
+	times copyTimes
+}
+
+// createdDir is a directory the copy made, with the metadata of the source
+// directory it stands for.
+//
+// A directory that was already at the destination is not one of these: it is
+// the user's, and the copy leaves its mode and times alone.
+type createdDir struct {
+	path  string
+	mode  os.FileMode
+	times copyTimes
 }
 
 // NewCopier scans srcs and prepares to copy them into dstDir. The total size is
@@ -323,6 +354,7 @@ func (c *Copier) add(src, dstDir string) error {
 			dst:     dst,
 			size:    info.Size(),
 			mode:    info.Mode(),
+			times:   timesOf(info),
 			modTime: info.ModTime().UnixNano(),
 		})
 		return nil
@@ -347,9 +379,10 @@ func (c *Copier) add(src, dstDir string) error {
 			// The directory has to exist even when it holds no files, or a
 			// copy of an empty folder would produce nothing at all.
 			c.dirs = append(c.dirs, dirJob{
-				path: filepath.Join(root, rel),
-				src:  filepath.Join(src, rel),
-				mode: fi.Mode().Perm(),
+				path:  filepath.Join(root, rel),
+				src:   filepath.Join(src, rel),
+				mode:  fi.Mode(),
+				times: timesOf(fi),
 			})
 			if c.move {
 				c.srcDirs = append(c.srcDirs, filepath.Join(src, rel))
@@ -361,6 +394,7 @@ func (c *Copier) add(src, dstDir string) error {
 			dst:     filepath.Join(root, rel),
 			size:    fi.Size(),
 			mode:    fi.Mode(),
+			times:   timesOf(fi),
 			modTime: fi.ModTime().UnixNano(),
 		}
 		switch {
@@ -545,12 +579,22 @@ func (c *Copier) Step() (done bool, err error) {
 		}
 		dirs := len(c.dirs)
 		for _, dir := range c.dirs {
-			// Every directory the copy had to make is remembered, so a
-			// copy that is cancelled can take it away again rather than
-			// leave an empty tree behind.
-			if err := mkdirAllTracked(dir.path, dir.mode, &c.createdDirs); err != nil {
+			// The directory is created writable by its owner so the copy
+			// can fill it. Its exact mode is applied later, once it holds
+			// everything: a read-only source directory would otherwise
+			// refuse the contents meant for it, and writing them moves its
+			// time forward again.
+			created, err := mkdirAllTracked(dir.path, dir.mode|0o700, &c.createdDirs)
+			if err != nil {
 				c.stop()
 				return false, err
+			}
+			if created {
+				c.createdMeta = append(c.createdMeta, createdDir{
+					path:  dir.path,
+					mode:  dir.mode,
+					times: dir.times,
+				})
 			}
 		}
 		c.dirs = nil
@@ -738,7 +782,7 @@ func (c *Copier) openCurrent() error {
 		}
 	}
 
-	if err := mkdirAllTracked(dir, 0o755, &c.createdDirs); err != nil {
+	if _, err := mkdirAllTracked(dir, 0o755, &c.createdDirs); err != nil {
 		if src != nil {
 			src.Close()
 		}
@@ -783,6 +827,7 @@ func (c *Copier) openCurrent() error {
 	c.dstPath = tmp.Name()
 	c.finalPath = job.dst
 	c.jobMode = job.mode
+	c.jobTimes = job.times
 	c.fileDone = 0
 	c.fileSize = job.size
 	// Publish the scratch file's path straight away, so an abort that
@@ -794,9 +839,13 @@ func (c *Copier) openCurrent() error {
 // finishCurrent puts a finished copy in place.
 //
 // The scratch file is flushed, checked against what was written, given the
-// source's permissions and renamed over the destination. The rename is
+// source's mode and times and renamed over the destination. The rename is
 // atomic, so the destination is never seen half-written: it holds either the
 // old content or the whole new one.
+//
+// The mode and times are set on the scratch file before the rename, so a
+// failure to apply them takes the scratch file away and leaves the
+// destination exactly as it was.
 //
 // The destination that was there before is held by a link until the new file
 // has been confirmed, so a replacement that turns out not to have landed can
@@ -864,10 +913,19 @@ func (c *Copier) finishCurrent() error {
 		return fail(fmt.Errorf("copy: %s is incomplete (%d of %d bytes)", c.currentName(), written.Size(), c.fileDone))
 	}
 
-	if c.jobMode.Perm() != 0 {
-		if err := os.Chmod(name, c.jobMode.Perm()); err != nil {
-			return fail(err)
-		}
+	// The scratch file was created with the default mode, so the exact bits
+	// are set here — the permission bits and the setuid, setgid and sticky
+	// bits the source carried. A copy that loses a bit is not the file the
+	// user asked for.
+	//
+	// The times go on the scratch file too, before the rename. A copy that
+	// kept the moment it was made instead of the source's time would look
+	// newer than the file it came from, which is what many tools compare.
+	if err := setCopyMode(name, c.jobMode); err != nil {
+		return fail(err)
+	}
+	if err := setCopyTimes(name, c.jobTimes); err != nil {
+		return fail(err)
 	}
 
 	// A move never replaces a destination that is already there. Planning
@@ -1028,6 +1086,14 @@ func (c *Copier) complete() (bool, error) {
 		c.renamePending.Store(0)
 		return false, err
 	}
+	// The tree is whole, so the directories can take their exact mode and
+	// the source's times. This cannot happen when they are created: writing
+	// their contents moves the time forward, and a read-only mode would
+	// refuse the contents.
+	if err := c.finishDirs(); err != nil {
+		c.stop()
+		return false, err
+	}
 	// The copy landed, so the directories it made are the user's now and
 	// are not to be taken away.
 	c.createdDirs = nil
@@ -1040,6 +1106,35 @@ func (c *Copier) complete() (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+// finishDirs gives every directory the copy made its source's mode and times.
+//
+// It runs once the copy is whole, because writing a directory's contents moves
+// its time forward again: a directory's time can only be set when nothing else
+// is going to be written into it. The deepest directory is finished first, so
+// a parent is still traversable while its children are being finalised.
+//
+// A failure is recorded against the directory and returned, never dropped: a
+// directory that arrives without its mode could be readable by people it was
+// not meant for, and one that arrives without its time makes the tree look
+// newer than it is.
+func (c *Copier) finishDirs() error {
+	for i := len(c.createdMeta) - 1; i >= 0; i-- {
+		dir := c.createdMeta[i]
+		if err := setCopyMode(dir.path, dir.mode); err != nil {
+			err = fmt.Errorf("copy: %s: cannot set the directory's mode: %w", dir.path, err)
+			c.recordFailure(dir.path, err)
+			return err
+		}
+		if err := setCopyTimes(dir.path, dir.times); err != nil {
+			err = fmt.Errorf("copy: %s: cannot set the directory's times: %w", dir.path, err)
+			c.recordFailure(dir.path, err)
+			return err
+		}
+	}
+	c.createdMeta = nil
+	return nil
 }
 
 // settleMove removes the sources of a move, now that every file has landed
@@ -1252,13 +1347,22 @@ func (c *Copier) removeCreatedDirs() {
 // directories the copy had to make so a cancelled copy can take them away
 // again. A directory that was already there is not recorded: it is the
 // user's, and it stays.
-func mkdirAllTracked(dir string, mode os.FileMode, created *[]string) error {
+//
+// Every directory it made is given mode explicitly. os.MkdirAll only passes
+// the mode to the create, where the process umask masks it, so a directory
+// created under a umask of 022 would not arrive as the 0777 it was asked for.
+// The caller passes a mode its owner can write to while the copy fills the
+// directory; the exact mode is applied once its contents are in place.
+//
+// It reports whether dir itself was created, so the caller knows whether the
+// directory's source metadata is its to apply.
+func mkdirAllTracked(dir string, mode os.FileMode, created *[]string) (bool, error) {
 	var missing []string
 	for p := filepath.Clean(dir); ; p = filepath.Dir(p) {
 		if _, err := os.Lstat(p); err == nil {
 			break
 		} else if !os.IsNotExist(err) {
-			return err
+			return false, err
 		}
 		missing = append(missing, p)
 		if parent := filepath.Dir(p); parent == p {
@@ -1266,14 +1370,23 @@ func mkdirAllTracked(dir string, mode os.FileMode, created *[]string) error {
 		}
 	}
 	if err := os.MkdirAll(dir, mode); err != nil {
-		return err
+		return false, err
 	}
 	// Shallowest first, so removeCreatedDirs, which walks backwards, takes
 	// the deepest directory away first.
+	madeDir := false
 	for i := len(missing) - 1; i >= 0; i-- {
 		*created = append(*created, missing[i])
+		if filepath.Clean(missing[i]) == filepath.Clean(dir) {
+			madeDir = true
+		}
+		// The umask has already been applied to the create. Set the mode
+		// explicitly so the copy's directory keeps the bits it was given.
+		if err := setCopyMode(missing[i], mode); err != nil {
+			return false, err
+		}
 	}
-	return nil
+	return madeDir, nil
 }
 
 // acquireStep takes ownership of the fields Step mutates. A cancel holds it

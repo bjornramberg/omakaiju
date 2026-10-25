@@ -55,9 +55,15 @@ func SameFile(a, b string) (bool, error) {
 // truncated write — a share that dropped the connection, a full disk — is
 // caught while the previous file is still intact.
 //
+// The source's mode and times are set on the scratch file before the rename,
+// for the same reason: a copy that cannot carry them fails with dst exactly as
+// it was. Ownership and ACLs are not carried, because they cannot be set
+// without privileges; extended attributes and sparseness are not carried
+// either, and a sparse source arrives with all its blocks.
+//
 // The source is never modified. A copy that cannot finish leaves dst exactly
 // as it was.
-func copyFileAtomic(src, dst string, mode os.FileMode) error {
+func copyFileAtomic(src, dst string, info os.FileInfo) error {
 	same, err := SameFile(src, dst)
 	if err != nil {
 		return err
@@ -125,9 +131,17 @@ func copyFileAtomic(src, dst string, mode os.FileMode) error {
 	}
 
 	// The scratch file was created with the default mode, so the exact bits
-	// are set here. A copied script that loses its executable bit is a
-	// surprise the user would not expect from a file manager.
-	if err := os.Chmod(tmpName, mode.Perm()); err != nil {
+	// are set here — the permission bits and the setuid, setgid and sticky
+	// bits. A copied script that loses its executable bit, or a copied
+	// helper that loses its setuid bit, is a surprise the user would not
+	// expect from a file manager.
+	if err := setCopyMode(tmpName, info.Mode()); err != nil {
+		return err
+	}
+	// The times go on the scratch file before the rename, so a failure here
+	// leaves the destination untouched and the copy carries the source's
+	// modification and access times rather than the moment it was made.
+	if err := setCopyTimes(tmpName, timesOf(info)); err != nil {
 		return err
 	}
 
@@ -384,13 +398,28 @@ func renameIntoPlace(tmp, dst string) error {
 // Every file is written through a scratch file and renamed into place, so a
 // failure part way through leaves the files that did land complete, and the
 // rest of the tree untouched.
+//
+// A directory is made writable while it is filled and only then given the
+// source's exact mode and times. Its time cannot be set at creation: each
+// entry written into it moves that time forward again.
 func copyTree(src, dst string) error {
 	info, err := os.Stat(src)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+	_, statErr := os.Lstat(dst)
+	created := os.IsNotExist(statErr)
+	// The owner's write and search bits stay on while the copy fills the
+	// directory. The exact mode is applied after the contents are in place.
+	if err := os.MkdirAll(dst, info.Mode()|0o700); err != nil {
 		return err
+	}
+	if created {
+		// MkdirAll's mode is masked by the umask, so the writable mode has
+		// to be set explicitly before anything is written into it.
+		if err := setCopyMode(dst, info.Mode()|0o700); err != nil {
+			return err
+		}
 	}
 	entries, err := os.ReadDir(src)
 	if err != nil {
@@ -417,10 +446,21 @@ func copyTree(src, dst string) error {
 			// forever. Refuse it by name instead.
 			return &refusedEntry{verb: "move", path: srcPath}
 		default:
-			if err := copyFileAtomic(srcPath, dstPath, entryInfo.Mode()); err != nil {
+			if err := copyFileAtomic(srcPath, dstPath, entryInfo); err != nil {
 				return err
 			}
 		}
+	}
+	if !created {
+		// The directory was already there: it is not the copy's to give a
+		// mode or a time to.
+		return nil
+	}
+	if err := setCopyMode(dst, info.Mode()); err != nil {
+		return err
+	}
+	if err := setCopyTimes(dst, timesOf(info)); err != nil {
+		return err
 	}
 	return nil
 }
@@ -530,7 +570,7 @@ func moveAcrossDevices(src, dst string) error {
 		return &refusedEntry{verb: "move", path: src}
 	}
 
-	if err := copyFileAtomic(src, dst, info.Mode()); err != nil {
+	if err := copyFileAtomic(src, dst, info); err != nil {
 		return err
 	}
 
