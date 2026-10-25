@@ -46,12 +46,10 @@ func (b BottomBar) Render() string {
 	}
 
 	// An active copy takes over the bar so progress is not hidden behind a
-	// stale result message.
+	// stale result message. It goes through line() like every other state so
+	// the bar stays BottomBarHeight rows whether or not a copy is running.
 	if b.Progress != nil {
-		return b.Theme.BottomBar().
-			Width(b.Width).
-			MaxWidth(b.Width).
-			Render(b.Progress.Render(b.Width - 4))
+		return b.line(b.Progress.Render(b.contentWidth()))
 	}
 
 	if b.OpResult != "" {

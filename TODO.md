@@ -75,14 +75,6 @@ must leave two payloads in the trash.
 
 ## UI polish
 
-### 25. The progress bar is two rows where the layout expects three
-
-`internal/ui/bottombar.go:50` draws the progress bar without the height the
-other branches pin, so the frame is a row short and the panes jump when a
-copy starts or stops.
-
-Fix: draw the progress through the same helper the other branches use.
-
 ### 26. Stacked panes are not reconsidered when the terminal shrinks
 
 `internal/ui/layout.go:110` (`CanStack`) is consulted when the user toggles
