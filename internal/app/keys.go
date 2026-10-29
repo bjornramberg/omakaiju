@@ -194,6 +194,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = inputAdd
 		m.inputBuf = ""
 		return m, nil
+	case nav.ActionAddDir:
+		m.mode = inputAddDir
+		m.inputBuf = ""
+		return m, nil
 	case nav.ActionRename:
 		files := m.visibleFiles(m.activePane)
 		cursor := m.rawCursor(m.activePane)

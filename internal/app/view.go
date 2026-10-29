@@ -118,7 +118,10 @@ func (m Model) view() tea.View {
 		bottomBar.Prompt = "filter"
 		bottomBar.PromptInput = m.inputBuf
 	case inputAdd:
-		bottomBar.Prompt = "new (dir/)"
+		bottomBar.Prompt = "new file"
+		bottomBar.PromptInput = m.inputBuf
+	case inputAddDir:
+		bottomBar.Prompt = "new directory"
 		bottomBar.PromptInput = m.inputBuf
 	case inputRename:
 		bottomBar.Prompt = "rename"

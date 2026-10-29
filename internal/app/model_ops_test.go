@@ -60,33 +60,226 @@ func TestAddCreatesFile(t *testing.T) {
 	}
 }
 
-func TestAddCreatesDirectoryWithTrailingSlash(t *testing.T) {
+// Shift+A is the file key now, so a trailing slash is refused rather than
+// quietly making a directory. The refusal points at the key that makes one.
+func TestAddRefusesTrailingSlash(t *testing.T) {
 	m, dir := fixture(t)
 
 	updated, _ := m.Update(shiftKey('a'))
 	m = updated.(Model)
 	m = typeString(t, m, "newdir/")
-	m, _ = enter(t, m)
+	m, cmd := enter(t, m)
 
-	info, err := os.Stat(filepath.Join(dir, "newdir"))
+	if cmd != nil {
+		t.Error("a refused name should not reload the pane")
+	}
+	if m.opErr == nil {
+		t.Fatal("a trailing slash should be refused")
+	}
+	if !strings.Contains(m.opErr.Error(), "Shift+N") {
+		t.Errorf("opErr = %q, want the directory key named", m.opErr)
+	}
+	if m.opResult != "" {
+		t.Errorf("opResult = %q, want no creation reported", m.opResult)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "newdir")); !os.IsNotExist(err) {
+		t.Error("a refused trailing slash must not create a directory")
+	}
+}
+
+// The two create keys open their own prompts. Shift+A used to be the only
+// one, and the trailing slash chose the type.
+func TestAddKeysOpenTheirOwnPrompts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		key    rune
+		mode   inputMode
+		prompt string
+	}{
+		{"file", 'a', inputAdd, "new file"},
+		{"directory", 'n', inputAddDir, "new directory"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := fixture(t)
+			m.width, m.height = 120, 40
+
+			updated, _ := m.Update(shiftKey(tc.key))
+			m = updated.(Model)
+
+			if m.mode != tc.mode {
+				t.Fatalf("mode = %v, want %v", m.mode, tc.mode)
+			}
+			if !strings.Contains(m.View().Content, tc.prompt) {
+				t.Errorf("prompt does not show %q", tc.prompt)
+			}
+		})
+	}
+}
+
+// Shift+N creates exactly one directory, and the cursor lands on it when the
+// reload arrives instead of staying at the top of the listing.
+func TestAddDirectoryCreatesAndLandsCursor(t *testing.T) {
+	m, dir := fixture(t)
+
+	updated, _ := m.Update(shiftKey('n'))
+	m = updated.(Model)
+	if m.mode != inputAddDir {
+		t.Fatal("Shift+N should enter the directory prompt")
+	}
+	m = typeString(t, m, "zzzdir")
+	m, cmd := enter(t, m)
+	if cmd == nil {
+		t.Fatal("creating a directory should reload the pane")
+	}
+
+	m = loadDir(t, m, 0)
+
+	if m.opErr != nil {
+		t.Fatalf("creating a directory failed: %v", m.opErr)
+	}
+	if m.opResult != "created dir zzzdir" {
+		t.Errorf("opResult = %q, want %q", m.opResult, "created dir zzzdir")
+	}
+	info, err := os.Stat(filepath.Join(dir, "zzzdir"))
 	if err != nil {
 		t.Fatalf("directory not created: %v", err)
 	}
 	if !info.IsDir() {
-		t.Error("newdir should be a directory")
+		t.Error("zzzdir should be a directory")
 	}
-	// The trailing slash must be trimmed from the stored entry name.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	count := 0
 	for _, e := range entries {
-		if e.Name() == "newdir/" {
-			t.Errorf("entry name kept the trailing slash: %q", e.Name())
+		if e.Name() == "zzzdir" {
+			count++
 		}
 	}
-	if m.opResult != "created dir newdir" {
-		t.Errorf("opResult = %q, want %q", m.opResult, "created dir newdir")
+	if count != 1 {
+		t.Errorf("found %d entries named zzzdir, want exactly 1", count)
+	}
+
+	idx := indexOf(m.visibleFiles(0), "zzzdir")
+	if idx <= 0 {
+		t.Fatalf("zzzdir is at index %d, want it sorted below the first row", idx)
+	}
+	if m.rawCursor(0) != idx {
+		t.Errorf("cursor = %d, want %d (the directory just created)", m.rawCursor(0), idx)
+	}
+}
+
+// A name that is already taken is refused, and the app says so instead of
+// reporting a directory it did not create.
+func TestAddDirectoryRefusesExistingName(t *testing.T) {
+	m, dir := fixture(t)
+
+	updated, _ := m.Update(shiftKey('n'))
+	m = updated.(Model)
+	m = typeString(t, m, "subdir")
+	m, cmd := enter(t, m)
+
+	if cmd != nil {
+		t.Error("a refused directory should not reload the pane")
+	}
+	if m.opErr == nil {
+		t.Fatal("an existing name should be refused")
+	}
+	got := m.opErr.Error()
+	if !strings.Contains(got, "subdir") {
+		t.Errorf("opErr = %q, want the taken name named", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "exist") {
+		t.Errorf("opErr = %q, want the reason the name is refused", got)
+	}
+	if m.opResult != "" {
+		t.Errorf("opResult = %q, want no creation reported", m.opResult)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "subdir")); err != nil || !info.IsDir() {
+		t.Errorf("the existing directory should be left alone: %v", err)
+	}
+}
+
+// A create prompt takes a name, not a path: a separator or "." or ".." would
+// put the new entry outside the pane the user is looking at.
+func TestAddRefusesNamesThatArePaths(t *testing.T) {
+	for _, mode := range []struct {
+		name string
+		key  rune
+	}{
+		{"file", 'a'},
+		{"directory", 'n'},
+	} {
+		for _, name := range []string{"a/b", ".", ".."} {
+			t.Run(mode.name+"/"+name, func(t *testing.T) {
+				m, dir := fixture(t)
+
+				updated, _ := m.Update(shiftKey(mode.key))
+				m = updated.(Model)
+				m = typeString(t, m, name)
+				m, cmd := enter(t, m)
+
+				if cmd != nil {
+					t.Error("a refused name should not reload the pane")
+				}
+				if m.opErr == nil {
+					t.Fatalf("%q should be refused", name)
+				}
+				if m.opResult != "" {
+					t.Errorf("opResult = %q, want no creation reported", m.opResult)
+				}
+				if _, err := os.Stat(filepath.Join(dir, "a")); !os.IsNotExist(err) {
+					t.Error("the refused name must not create anything")
+				}
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 3 {
+					t.Errorf("directory changed unexpectedly: %d entries, want 3", len(entries))
+				}
+			})
+		}
+	}
+}
+
+// The rename prompt is the same escape in the same place, so it applies the
+// same rule: a separator or "." or ".." is refused and the entry stays put.
+func TestRenameRefusesNamesThatArePaths(t *testing.T) {
+	for _, name := range []string{"a/b", ".", ".."} {
+		t.Run(name, func(t *testing.T) {
+			m, dir := fixture(t)
+			m = moveCursorTo(t, m, "alpha.txt")
+
+			updated, _ := m.Update(shiftKey('r'))
+			m = updated.(Model)
+			if m.mode != inputRename {
+				t.Fatal("Shift+R should enter rename mode")
+			}
+			for i := 0; i < len("alpha.txt"); i++ {
+				updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+				m = updated.(Model)
+			}
+			m = typeString(t, m, name)
+			m, cmd := enter(t, m)
+
+			if cmd != nil {
+				t.Error("a refused name should not reload the pane")
+			}
+			if m.opErr == nil {
+				t.Fatalf("%q should be refused", name)
+			}
+			if m.opResult != "" {
+				t.Errorf("opResult = %q, want no rename reported", m.opResult)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "alpha.txt")); err != nil {
+				t.Errorf("the original should be untouched: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "a")); !os.IsNotExist(err) {
+				t.Error("the refused name must not create anything")
+			}
+		})
 	}
 }
 

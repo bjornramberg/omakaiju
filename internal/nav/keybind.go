@@ -25,6 +25,7 @@ const (
 	ActionDelete
 	ActionMark
 	ActionAdd
+	ActionAddDir
 	ActionRename
 	ActionJump
 )
@@ -72,7 +73,8 @@ var Keybinds = []Keybind{
 	{"shift+v", ActionPaste, "paste into this pane", SectionFileOps},
 	{"shift+d", ActionDelete, "delete", SectionFileOps},
 	{"shift+m", ActionMark, "mark / unmark", SectionFileOps},
-	{"shift+a", ActionAdd, "add file / directory", SectionFileOps},
+	{"shift+a", ActionAdd, "add file", SectionFileOps},
+	{"shift+n", ActionAddDir, "add directory", SectionFileOps},
 	{"shift+r", ActionRename, "rename", SectionFileOps},
 
 	// Pane / View (Shift + key)

@@ -49,7 +49,6 @@ var readmePhrases = map[string]string{
 	"switch pane":                  "Toggle active pane",
 	"jump to file by first letter": "Jump to first file",
 	"stack / unstack panes":        "Stack file panes vertically",
-	"add file / directory":         "Add file/directory",
 	"refresh pane":                 "Refresh active pane",
 	"cancel / clear / back":        "Cancel copy",
 }

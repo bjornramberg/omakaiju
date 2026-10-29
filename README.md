@@ -201,7 +201,8 @@ every build, so it cannot drift away from what the keys actually do.
 | `Shift+V` | Paste into this pane (y-staged copy, or move marked entries there) |
 | `Shift+D` | Delete prompt: `t`rash (default, also `y`/`Enter`), `f`orce delete, `n`/`Esc` cancel |
 | `Shift+M` | Mark / unmark entry (repeat to select several for bulk move) |
-| `Shift+A` | Add file/directory (trailing `/` creates a directory) |
+| `Shift+A` | Add file |
+| `Shift+N` | Add directory |
 | `Shift+R` | Rename entry under cursor |
 
 ### Pane / View (Shift + key)

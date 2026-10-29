@@ -236,6 +236,7 @@ const (
 	inputNone inputMode = iota
 	inputFilter
 	inputAdd
+	inputAddDir
 	inputRename
 	inputGoto
 )

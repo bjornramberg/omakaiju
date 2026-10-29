@@ -47,6 +47,7 @@ func TestSpaceKeyTypesIntoPrompt(t *testing.T) {
 		{"rename", inputRename},
 		{"filter", inputFilter},
 		{"add", inputAdd},
+		{"add directory", inputAddDir},
 		{"goto", inputGoto},
 	}
 	for _, tc := range modes {

@@ -628,8 +628,14 @@ func CreateFile(path string) error {
 	return f.Close()
 }
 
+// CreateDir creates exactly one directory at path.
+//
+// It is deliberately not MkdirAll: the app creates a new entry in a pane, and
+// a path that already exists is not that entry. Mkdir reports the existing
+// name as an error, so the app cannot announce a directory it did not make;
+// MkdirAll would silently succeed on a name that is already taken.
 func CreateDir(path string) error {
-	return os.MkdirAll(path, 0755)
+	return os.Mkdir(path, 0o755)
 }
 
 type FileType int

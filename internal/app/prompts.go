@@ -81,6 +81,28 @@ func (m Model) handleInputKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// entryNameError reports why name cannot be the name of one entry in a pane.
+//
+// A name is one component, not a path. A separator would make the prompt
+// create something outside the pane the user is looking at, and "." and ".."
+// would name the directory itself or its parent. A trailing slash is refused
+// separately: it used to be how a directory was requested, so the refusal
+// points at the key that now does that job.
+//
+// An empty name is not an error here; callers treat it as a cancelled prompt.
+func entryNameError(name string) error {
+	if strings.HasSuffix(name, string(filepath.Separator)) || strings.HasSuffix(name, "/") {
+		return fmt.Errorf("a directory is made with Shift+N, not a trailing slash")
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("%q is not a valid name", name)
+	}
+	if strings.ContainsRune(name, filepath.Separator) || strings.ContainsRune(name, '/') {
+		return fmt.Errorf("a name must not contain a path separator")
+	}
+	return nil
+}
+
 func (m Model) commitInput() (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case inputFilter:
@@ -88,29 +110,39 @@ func (m Model) commitInput() (tea.Model, tea.Cmd) {
 		m.inputBuf = ""
 		return m, nil
 
-	case inputAdd:
+	case inputAdd, inputAddDir:
 		name := m.inputBuf
+		isDir := m.mode == inputAddDir
 		m.mode = inputNone
 		m.inputBuf = ""
 		if name == "" {
 			return m, nil
 		}
-		isDir := strings.HasSuffix(name, "/")
-		name = strings.TrimSuffix(name, "/")
-		if name == "" {
+		if err := entryNameError(name); err != nil {
+			m.recordOpResult(singularResult("created", name, err))
 			return m, nil
 		}
 
 		path := filepath.Join(m.rawPath(m.activePane), name)
+		var err error
+		verb := "created"
 		if isDir {
-			m.recordOpResult(singularResult("created dir", name, fs.CreateDir(path)))
+			verb = "created dir"
+			err = fs.CreateDir(path)
 		} else {
-			m.recordOpResult(singularResult("created", name, fs.CreateFile(path)))
+			err = fs.CreateFile(path)
 		}
+		m.recordOpResult(singularResult(verb, name, err))
+		if err != nil {
+			return m, nil
+		}
+		// Land the cursor on the entry that was just made, the way a copy
+		// or a move lands on what it created. The reload applies it.
+		m.setRestore(m.activePane, name)
 		return m, m.loadActive()
 
 	case inputRename:
-		name := strings.TrimSuffix(m.inputBuf, "/")
+		name := m.inputBuf
 		target := m.renameTarget
 		m.mode = inputNone
 		m.inputBuf = ""
@@ -118,11 +150,20 @@ func (m Model) commitInput() (tea.Model, tea.Cmd) {
 		if name == "" || target == "" {
 			return m, nil
 		}
+		// The rename prompt is the same escape in the same place: a name
+		// with a separator or ".." would move the entry out of the pane.
+		if err := entryNameError(name); err != nil {
+			m.recordOpResult(singularResult("renamed", name, err))
+			return m, nil
+		}
 		if name == filepath.Base(target) {
 			return m, nil
 		}
 		err := fs.Move(target, filepath.Join(filepath.Dir(target), name))
 		m.recordOpResult(singularResult("renamed", name, err))
+		if err != nil {
+			return m, nil
+		}
 		return m, m.loadActive()
 	}
 
