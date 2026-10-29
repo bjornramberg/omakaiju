@@ -16,34 +16,6 @@ operations should be signed (#34).
 
 ## Correctness and robustness
 
-### 21. The trash is the home trash only
-
-`internal/fs/trash.go:20` always uses the XDG home trash, and
-`internal/fs/trash.go:66` refuses anything on another filesystem. The
-freedesktop spec wants a per-filesystem trash (`$topdir/.Trash-$uid`), so
-deleting something on an external drive, on tmpfs or on a share always falls
-back to permanent deletion — which is the one thing the trash is for.
-
-There is also no restore and no empty (issue #2): the `.trashinfo` files
-are written well enough for `gio trash --restore` to read them, but the app
-cannot restore what it trashed.
-
-Fix: implement the topdir trash — created 0700, refusing a symlinked or
-foreign-owned one — and add `Restore` and `EmptyTrash`.
-
-### 22. Two trashes of the same name can collide
-
-`internal/fs/trash.go:82` chooses a free name by looking, and then renames
-into it. A second trash of the same basename — from another instance, or
-from a desktop file manager sharing the trash — can replace the first
-payload and its info file.
-
-Fix: reserve the name by creating the info file with `O_CREATE|O_EXCL`
-before the rename, or link and unlink and retry on a collision.
-
-Verify: trashing two files with the same name from different directories
-must leave two payloads in the trash.
-
 ## UI polish
 
 ### 27. A 40-column terminal is too narrow to use
