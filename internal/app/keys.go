@@ -81,6 +81,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// that set a restore of their own set it after this, so it survives.
 	m.clearRestores()
 
+	if m.confirmEmptyTrash {
+		return m.handleConfirmEmptyTrash(msg)
+	}
+
 	if m.confirmDelete {
 		return m.handleConfirmDelete(msg)
 	}
@@ -127,10 +131,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	action := nav.Lookup(keyStr)
 	switch action {
 	case nav.ActionQuit:
-		if m.themeWatcher != nil {
-			m.themeWatcher.Close()
-		}
-		return m, tea.Quit
+		return m.requestQuit()
 	case nav.ActionTab:
 		m.activePane = 1 - m.activePane
 		return m, m.updatePreview()
@@ -216,6 +217,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handlePaste()
 	case nav.ActionDelete:
 		return m.handleDelete()
+	case nav.ActionOpenTrash:
+		return m.openTrash()
 	case nav.ActionTogglePreview:
 		m.previewHidden = !m.previewHidden
 		return m, nil

@@ -50,7 +50,10 @@ type Model struct {
 	clipboardOn   bool
 	confirmDelete bool
 	deleteTarget  string
-	opResult      string
+	// confirmEmptyTrash holds the quit prompt open while the user decides
+	// whether the home trash should be emptied on the way out.
+	confirmEmptyTrash bool
+	opResult          string
 
 	// marked accumulates entries selected with m for a bulk move to the other
 	// pane. Keyed by absolute path so it survives directory changes.

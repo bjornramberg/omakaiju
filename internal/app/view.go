@@ -133,6 +133,8 @@ func (m Model) view() tea.View {
 		if m.copier != nil {
 			progress := ui.NewProgress(m.copier, m.theme)
 			bottomBar.Progress = &progress
+		} else if m.confirmEmptyTrash {
+			bottomBar.Input = "there are items in the trash — empty it? (y)es / (n)o (Esc quits without emptying)"
 		} else if m.confirmDelete {
 			bottomBar.Input = filepath.Base(m.deleteTarget) + "? (t)rash / (f)orce / (n)o"
 		} else if m.crashErr != nil {

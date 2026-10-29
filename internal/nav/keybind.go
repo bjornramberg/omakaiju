@@ -28,6 +28,7 @@ const (
 	ActionAddDir
 	ActionRename
 	ActionJump
+	ActionOpenTrash
 )
 
 // Section groups actions for the key-list overlay.
@@ -76,6 +77,7 @@ var Keybinds = []Keybind{
 	{"shift+a", ActionAdd, "add file", SectionFileOps},
 	{"shift+n", ActionAddDir, "add directory", SectionFileOps},
 	{"shift+r", ActionRename, "rename", SectionFileOps},
+	{"shift+t", ActionOpenTrash, "open the trash", SectionFileOps},
 
 	// Pane / View (Shift + key)
 	{"shift+s", ActionStack, "stack / unstack panes", SectionPaneView},

@@ -204,6 +204,7 @@ every build, so it cannot drift away from what the keys actually do.
 | `Shift+A` | Add file |
 | `Shift+N` | Add directory |
 | `Shift+R` | Rename entry under cursor |
+| `Shift+T` | Open the trash in the active pane |
 
 ### Pane / View (Shift + key)
 | Key | Action |
@@ -220,7 +221,7 @@ every build, so it cannot drift away from what the keys actually do.
 ### System
 | Key | Action |
 |-----|--------|
-| `q` / `Shift+Q` | Quit |
+| `q` / `Shift+Q` | Quit (asks whether to empty a non-empty home trash first) |
 | `Esc` | Cancel copy / dismiss prompt / clear filter |
 
 The shifted key is the whole binding: `Shift+G` opens the goto prompt and the
@@ -235,6 +236,11 @@ Long copies show a progress bar; `Esc` cancels and removes only the partial
 file. A move that has to cross a filesystem — onto a share, say — is a copy
 followed by the removal of the original, so it gets a bar and a cancel of its
 own.
+
+Quitting with items in the trash asks whether to empty it. Answering yes
+empties the home trash and quits; answering no — or pressing `Esc` — quits and
+leaves the trash alone. Only the home trash is covered, because the
+per-filesystem trashes are not walked.
 
 ### File operations are safe by construction
 
