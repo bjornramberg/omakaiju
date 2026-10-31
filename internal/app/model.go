@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/bjornramberg/omakaiju/internal/config"
 	"github.com/bjornramberg/omakaiju/internal/fs"
@@ -87,6 +88,15 @@ type Model struct {
 	themeWatcher  *fs.Watcher
 	previewPath   string
 	previewHidden bool
+
+	// debugActive toggles the hidden debug pane. It lives for the session only.
+	debugActive bool
+	// debugStats is the last runtime sample. It is written by the tick handler
+	// (and once when the pane opens), never by the render path, so nothing is
+	// sampled while the pane is closed.
+	debugStats ui.DebugStats
+	// startedAt anchors the debug pane's uptime.
+	startedAt time.Time
 
 	// previewContent is the gathered preview for previewPath. It is built
 	// in the background so the render path never waits for the disk.
@@ -177,9 +187,25 @@ type Model struct {
 	updateHook      func()
 	updateAfterHook func()
 	viewHook        func()
+
+	// startup measures the time from the process starting to the first frame
+	// reaching the terminal. It is nil when nothing is measuring, which is
+	// every test and every build that is not the real program.
+	startup *StartupTracker
 }
 
-func NewModel(cfg config.Config) Model {
+// Option configures a model at construction.
+type Option func(*Model)
+
+// WithStartup attaches a startup tracker to the model, so the debug pane can
+// show how long the app took to reach the screen.
+func WithStartup(tracker *StartupTracker) Option {
+	return func(m *Model) {
+		m.startup = tracker
+	}
+}
+
+func NewModel(cfg config.Config, opts ...Option) Model {
 	theme, err := config.LoadTheme(cfg.ThemePath)
 	if err != nil {
 		theme = config.DefaultTheme()
@@ -199,6 +225,7 @@ func NewModel(cfg config.Config) Model {
 		rightCursor:   0,
 		crash:         &crashState{},
 		previewRender: &previewRenderCache{},
+		startedAt:     time.Now(),
 	}
 
 	// The watcher belongs to the model so it can be closed on quit and so the
@@ -214,6 +241,12 @@ func NewModel(cfg config.Config) Model {
 			_ = watcher.Watch(dir)
 		}
 		m.themeWatcher = watcher
+	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&m)
+		}
 	}
 
 	return m

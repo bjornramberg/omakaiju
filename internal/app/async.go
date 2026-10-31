@@ -29,6 +29,15 @@ func fuzzyTickCmd() tea.Cmd {
 	}))
 }
 
+// debugTickCmd schedules the next debug-pane sample. It is one-shot on
+// purpose: Update re-issues it only while the pane is open, so closing the pane
+// leaves no ticker, goroutine or sampler behind.
+func debugTickCmd() tea.Cmd {
+	return safeCmd("debug-tick", tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
+		return debugTickMsg{}
+	}))
+}
+
 // splashTickCmd advances the version splash one frame. Update re-issues it
 // until the splash has fully faded out, then lets the loop end so no ticker
 // outlives the animation.

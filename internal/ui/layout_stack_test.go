@@ -95,7 +95,7 @@ func TestLayoutStackedRenderExactFit(t *testing.T) {
 		bottom := NewBottomBar(tc.w, theme)
 
 		out := l.Render(top.Render(), left.Render(), right.Render(),
-			preview.RenderFile("", 0), bottom.Render())
+			preview.RenderFile("", 0), "", bottom.Render())
 		lines := strings.Split(out, "\n")
 		if len(lines) != tc.h {
 			t.Errorf("%dx%d: rendered %d rows", tc.w, tc.h, len(lines))

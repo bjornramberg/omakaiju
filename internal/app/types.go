@@ -183,6 +183,10 @@ type themeReloadedMsg struct {
 // and cannot hold it itself.
 type fuzzyTickMsg struct{}
 
+// debugTickMsg drives one debug-pane sample. Update re-issues it only while
+// the pane is open, so a tick that outlives it is dropped.
+type debugTickMsg struct{}
+
 // splashTickMsg advances the version splash animation in the bottom bar.
 type splashTickMsg struct{}
 

@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	"github.com/bjornramberg/omakaiju/internal/app"
 	"github.com/bjornramberg/omakaiju/internal/config"
@@ -15,6 +16,11 @@ import (
 )
 
 func main() {
+	// The moment the program was entered, which is the fallback for when the
+	// process started. The kernel's own record is better and is asked for
+	// below, but this is always available.
+	entered := time.Now()
+
 	// A panic that escapes the program would leave the terminal in raw mode
 	// with no echo, which reads as a dead shell to the user. Restoring it
 	// here is the last line of defence; the app's own recovery handles the
@@ -43,8 +49,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	m := app.NewModel(cfg)
-	p := tea.NewProgram(m)
+	// The tracker is the program's output as well as its stopwatch: the
+	// moment the first frame reaches the terminal is the moment the startup
+	// is over.
+	tracker := app.NewStartupTracker(os.Stdout, app.ProcessStart(entered))
+
+	m := app.NewModel(cfg, app.WithStartup(tracker))
+	p := tea.NewProgram(m, tea.WithOutput(tracker))
 
 	// SIGHUP is what a terminal sends when the window closes. Bubble Tea
 	// handles SIGINT and SIGTERM but not SIGHUP, so without this the shell
