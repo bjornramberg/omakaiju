@@ -2,9 +2,11 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/bjornramberg/omakaiju/internal/ui"
+	"github.com/bjornramberg/omakaiju/internal/version"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -42,6 +44,7 @@ func (m Model) view() tea.View {
 	layout := ui.NewLayout(m.width, m.height, m.theme)
 	layout.PanesStacked = m.panesStacked
 	layout.PreviewHidden = m.previewHidden
+	layout.DebugActive = m.debugActive
 
 	// Before the first WindowSizeMsg the size is still zero, and a terminal
 	// dragged below the minimum has nowhere to draw. Both would otherwise hand
@@ -86,7 +89,7 @@ func (m Model) view() tea.View {
 	var previewRendered string
 	if !m.previewHidden {
 		previewWidth := layout.PreviewWidth()
-		previewHeight := layout.MainAreaHeight()
+		previewHeight := layout.PreviewHeight()
 
 		// An unchanged preview is not redrawn. Measuring a styled line is
 		// expensive, and the frame rate is wasted work when nothing about
@@ -109,6 +112,28 @@ func (m Model) view() tea.View {
 			}
 			m.previewRender.put(m.previewPath, m.previewVersion, previewWidth, previewHeight, previewRendered)
 		}
+	}
+
+	var debugRendered string
+	if m.debugActive && layout.DebugVisible() {
+		debug := ui.NewDebug(layout.RightColumnWidth(), layout.DebugHeight(), m.theme)
+		debug.Info = ui.DebugInfo{
+			Stats:         m.debugStats,
+			Version:       version.Display(),
+			PID:           os.Getpid(),
+			ActivePath:    m.rawPath(m.activePane),
+			Entries:       len(m.visibleFiles(m.activePane)),
+			Cursor:        m.rawCursor(m.activePane),
+			Marked:        len(m.marked),
+			Sort:          m.sortOf(m.activePane).Label(),
+			Filter:        m.filterOf(m.activePane),
+			PreviewPath:   m.previewPath,
+			PreviewHidden: m.previewHidden,
+			ThemePath:     m.cfg.ThemePath,
+			Width:         m.width,
+			Height:        m.height,
+		}
+		debugRendered = debug.Render()
 	}
 
 	bottomBar := ui.NewBottomBar(m.width, m.theme)
@@ -154,7 +179,7 @@ func (m Model) view() tea.View {
 	}
 	bottomRendered := bottomBar.Render()
 
-	view := layout.Render(topBar.Render(), leftRendered, rightRendered, previewRendered, bottomRendered)
+	view := layout.Render(topBar.Render(), leftRendered, rightRendered, previewRendered, debugRendered, bottomRendered)
 
 	// The finder sits on top of the finished layout rather than replacing it,
 	// so the panes stay visible and the terminal is not left with a blank

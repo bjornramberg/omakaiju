@@ -277,6 +277,16 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fuzzySpinner++
 		return m, fuzzyTickCmd()
 
+	case debugTickMsg:
+		// A tick outliving the pane it was sampling must not restart the
+		// loop. The flag is the only thing that decides, so closing the pane
+		// stops the work on the very next tick.
+		if !m.debugActive {
+			return m, nil
+		}
+		m.debugStats = m.sampleDebugStats()
+		return m, debugTickCmd()
+
 	case splashTickMsg:
 		m.splashStep++
 		if ui.SplashActive(m.splashStep) {

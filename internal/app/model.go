@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/bjornramberg/omakaiju/internal/config"
 	"github.com/bjornramberg/omakaiju/internal/fs"
@@ -87,6 +88,15 @@ type Model struct {
 	themeWatcher  *fs.Watcher
 	previewPath   string
 	previewHidden bool
+
+	// debugActive toggles the hidden debug pane. It lives for the session only.
+	debugActive bool
+	// debugStats is the last runtime sample. It is written by the tick handler
+	// (and once when the pane opens), never by the render path, so nothing is
+	// sampled while the pane is closed.
+	debugStats ui.DebugStats
+	// startedAt anchors the debug pane's uptime.
+	startedAt time.Time
 
 	// previewContent is the gathered preview for previewPath. It is built
 	// in the background so the render path never waits for the disk.
@@ -199,6 +209,7 @@ func NewModel(cfg config.Config) Model {
 		rightCursor:   0,
 		crash:         &crashState{},
 		previewRender: &previewRenderCache{},
+		startedAt:     time.Now(),
 	}
 
 	// The watcher belongs to the model so it can be closed on quit and so the

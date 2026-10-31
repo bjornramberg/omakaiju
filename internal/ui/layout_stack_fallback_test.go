@@ -54,7 +54,7 @@ func TestLayoutStackedFallsBackWhenTerminalShrinks(t *testing.T) {
 		t.Error("falling back must not change the user's choice")
 	}
 
-	out := l.Render("top", "LEFT", "RIGHT", "", "bottom")
+	out := l.Render("top", "LEFT", "RIGHT", "", "", "bottom")
 	if !rowContains(out, "LEFT", "RIGHT") {
 		t.Errorf("panes are not side by side:\n%s", out)
 	}
@@ -68,7 +68,7 @@ func TestLayoutStackedChoiceRememberedAfterShrink(t *testing.T) {
 	l.PanesStacked = true
 
 	l.Height = 12
-	if out := l.Render("top", "LEFT", "RIGHT", "", "bottom"); !rowContains(out, "LEFT", "RIGHT") {
+	if out := l.Render("top", "LEFT", "RIGHT", "", "", "bottom"); !rowContains(out, "LEFT", "RIGHT") {
 		t.Fatalf("shrunk layout did not fall back to side by side:\n%s", out)
 	}
 
@@ -82,7 +82,7 @@ func TestLayoutStackedChoiceRememberedAfterShrink(t *testing.T) {
 	if got, want := l.PaneHeight(true)+l.PaneHeight(false), l.MainAreaHeight(); got != want {
 		t.Errorf("regrown panes sum to %d, want %d", got, want)
 	}
-	out := l.Render("top", "LEFT", "RIGHT", "", "bottom")
+	out := l.Render("top", "LEFT", "RIGHT", "", "", "bottom")
 	if rowContains(out, "LEFT", "RIGHT") {
 		t.Errorf("panes stayed side by side instead of returning to stacked:\n%s", out)
 	}
