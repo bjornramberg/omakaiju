@@ -22,9 +22,12 @@ type DebugStats struct {
 // DebugInfo is everything the debug pane draws. The values are gathered by the
 // caller; the pane only formats and frames them.
 type DebugInfo struct {
-	Stats         DebugStats
-	Version       string
-	PID           int
+	Stats   DebugStats
+	Version string
+	PID     int
+	// StartedAt is when the app began, so the pane can show the boot time
+	// next to the uptime.
+	StartedAt     time.Time
 	ActivePath    string
 	Entries       int
 	Cursor        int
@@ -148,6 +151,7 @@ func (d Debug) rows() []string {
 		d.row("goroutines", fmt.Sprintf("%d", stats.Goroutines)),
 		d.row("gc", fmt.Sprintf("%d", stats.NumGC)),
 		d.row("uptime", uptime.Round(time.Second).String()),
+		d.row("started", d.startedValue()),
 		d.row("path", d.pathValue(d.Info.ActivePath, "(none)")),
 		d.row("entries", entries),
 		d.row("marked", fmt.Sprintf("%d", d.Info.Marked)),
@@ -157,6 +161,18 @@ func (d Debug) rows() []string {
 		d.row("theme", d.pathValue(d.Info.ThemePath, "(built-in palette)")),
 		d.row("size", fmt.Sprintf("%dx%d", d.Info.Width, d.Info.Height)),
 	}
+}
+
+// startedValue renders when the app was started.
+//
+// The boot time is what a bug report wants next to the uptime: one says
+// how long it has been running, the other says when it began, and the
+// two together place the run on a timeline.
+func (d Debug) startedValue() string {
+	if d.Info.StartedAt.IsZero() {
+		return "(none)"
+	}
+	return d.Info.StartedAt.Format("2006-01-02 15:04:05")
 }
 
 func (d Debug) Render() string {

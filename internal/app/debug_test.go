@@ -14,10 +14,10 @@ import (
 // ctrlD builds a Ctrl+D press the way a terminal delivers it: the base key in
 // Code and ctrl in Mod.
 func ctrlD() tea.KeyMsg {
-	return tea.KeyPressMsg(tea.Key{Code: 'd', Mod: tea.ModCtrl})
+	return tea.KeyPressMsg(tea.Key{Code: 'b', Text: "B", ShiftedCode: 'B', Mod: tea.ModShift})
 }
 
-// ctrl+d is deliberately not a nav binding: it toggles the hidden pane
+// Shift+B is deliberately not a nav binding: it toggles the hidden pane
 // directly, so it never appears in the keybinding table.
 func TestDebugPaneTogglesWithCtrlD(t *testing.T) {
 	m, _ := fixture(t)
@@ -30,7 +30,7 @@ func TestDebugPaneTogglesWithCtrlD(t *testing.T) {
 	updated, cmd := m.Update(ctrlD())
 	m = updated.(Model)
 	if !m.debugActive {
-		t.Fatal("ctrl+d should open the debug pane")
+		t.Fatal("Shift+B should open the debug pane")
 	}
 	if cmd == nil {
 		t.Fatal("opening the pane should schedule the first sample tick")
@@ -39,7 +39,7 @@ func TestDebugPaneTogglesWithCtrlD(t *testing.T) {
 	updated, cmd = m.Update(ctrlD())
 	m = updated.(Model)
 	if m.debugActive {
-		t.Fatal("ctrl+d should close the debug pane")
+		t.Fatal("Shift+B should close the debug pane")
 	}
 	if cmd != nil {
 		t.Fatal("closing the pane must return no command")
@@ -57,7 +57,7 @@ func TestDebugPaneClosedSchedulesNothingAndDropsLateTick(t *testing.T) {
 	updated, cmd := m.Update(ctrlD())
 	m = updated.(Model)
 	if m.debugActive {
-		t.Fatal("ctrl+d should close the pane")
+		t.Fatal("Shift+B should close the pane")
 	}
 	if cmd != nil {
 		t.Fatal("closing the pane must not clone the tick loop")

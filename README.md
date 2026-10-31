@@ -289,13 +289,14 @@ Copies and moves never expose a half-written file, and never lose one.
 
 ## Debug pane (hidden)
 
-`Ctrl+D` toggles a debug pane in the bottom-right corner, underneath the file
+`Shift+B` toggles a debug pane in the bottom-right corner, underneath the file
 preview. It is deliberately not listed in the keybinding tables above.
 
 The pane reports the release version, process id, heap in use and total memory
-taken from the OS, goroutine and GC counts, uptime, the active pane's path,
-entry count and cursor, the marked count, sort mode and filter, the previewed
-path, the theme path, and the terminal size. It samples the runtime every
+taken from the OS, goroutine and GC counts, how long the app has been running
+and when it started, the active pane's path, entry count and cursor, the
+marked count, sort mode and filter, the previewed path, the theme path, and
+the terminal size. It samples the runtime every
 500 ms — twice a second — and only while it is open: closing it leaves no
 ticker, goroutine or sampler running. In a terminal too short to give both the
 preview and the pane three rows, the pane stays hidden and the preview keeps

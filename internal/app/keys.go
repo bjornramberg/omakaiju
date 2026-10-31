@@ -112,11 +112,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	keyStr := keyID(msg)
 
-	// ctrl+d toggles the hidden debug pane. It is handled here rather than
+	// Shift+B toggles the hidden debug pane. It is handled here rather than
 	// through nav.Lookup so it never appears in the keybinding table or the
 	// help overlay; the README documents it instead. Opening samples once and
 	// starts the tick; closing stops both and returns no command.
-	if keyStr == "ctrl+d" {
+	if keyStr == "shift+b" {
 		m.debugActive = !m.debugActive
 		if !m.debugActive {
 			return m, nil

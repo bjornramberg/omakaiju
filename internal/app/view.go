@@ -121,6 +121,7 @@ func (m Model) view() tea.View {
 			Stats:         m.debugStats,
 			Version:       version.Display(),
 			PID:           os.Getpid(),
+			StartedAt:     m.startedAt,
 			ActivePath:    m.rawPath(m.activePane),
 			Entries:       len(m.visibleFiles(m.activePane)),
 			Cursor:        m.rawCursor(m.activePane),
