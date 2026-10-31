@@ -294,9 +294,15 @@ preview. It is deliberately not listed in the keybinding tables above.
 
 The pane reports the release version, process id, heap in use and total memory
 taken from the OS, goroutine and GC counts, how long the app has been running
-and when it started, the active pane's path, entry count and cursor, the
-marked count, sort mode and filter, the previewed path, the theme path, and
-the terminal size. It samples the runtime every
+and when it started, how long the startup itself took, the active pane's
+path, entry count and cursor, the marked count, sort mode and filter, the
+previewed path, the theme path, and the terminal size.
+
+The startup is measured where the bytes leave: from the process starting to
+the first frame reaching the terminal, which is the wait a user actually
+experiences. It includes the time the runtime spent starting up and the
+time the terminal took to answer the capability queries the renderer asks
+on the way in. It samples the runtime every
 500 ms — twice a second — and only while it is open: closing it leaves no
 ticker, goroutine or sampler running. In a terminal too short to give both the
 preview and the pane three rows, the pane stays hidden and the preview keeps

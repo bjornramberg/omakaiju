@@ -27,7 +27,10 @@ type DebugInfo struct {
 	PID     int
 	// StartedAt is when the app began, so the pane can show the boot time
 	// next to the uptime.
-	StartedAt     time.Time
+	StartedAt time.Time
+	// Startup is how long the app took to reach the screen: from the process
+	// starting to the first frame reaching the terminal.
+	Startup       time.Duration
 	ActivePath    string
 	Entries       int
 	Cursor        int
@@ -152,6 +155,7 @@ func (d Debug) rows() []string {
 		d.row("gc", fmt.Sprintf("%d", stats.NumGC)),
 		d.row("uptime", uptime.Round(time.Second).String()),
 		d.row("started", d.startedValue()),
+		d.row("startup", d.startupValue()),
 		d.row("path", d.pathValue(d.Info.ActivePath, "(none)")),
 		d.row("entries", entries),
 		d.row("marked", fmt.Sprintf("%d", d.Info.Marked)),
@@ -173,6 +177,19 @@ func (d Debug) startedValue() string {
 		return "(none)"
 	}
 	return d.Info.StartedAt.Format("2006-01-02 15:04:05")
+}
+
+// startupValue renders how long the app took to reach the screen.
+//
+// The number is measured where the bytes leave, so it includes the time
+// the runtime spent starting up and the time the terminal took to answer
+// the capability queries — which is what a user waiting for the window
+// actually waits through.
+func (d Debug) startupValue() string {
+	if d.Info.Startup <= 0 {
+		return "(pending)"
+	}
+	return d.Info.Startup.Round(100 * time.Microsecond).String()
 }
 
 func (d Debug) Render() string {

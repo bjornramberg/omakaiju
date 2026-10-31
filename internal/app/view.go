@@ -122,6 +122,7 @@ func (m Model) view() tea.View {
 			Version:       version.Display(),
 			PID:           os.Getpid(),
 			StartedAt:     m.startedAt,
+			Startup:       m.startup.Elapsed(),
 			ActivePath:    m.rawPath(m.activePane),
 			Entries:       len(m.visibleFiles(m.activePane)),
 			Cursor:        m.rawCursor(m.activePane),
@@ -205,6 +206,10 @@ func (m Model) view() tea.View {
 		keyList.Cursor = m.keyListCursor
 		view = ui.OverlayCentered(view, keyList.Render(), m.width)
 	}
+
+	// The frame is composed. The next write to the terminal is the one the
+	// user sees, so this is the moment the startup is measured from.
+	m.startup.FrameReady()
 
 	return tea.NewView(view)
 }

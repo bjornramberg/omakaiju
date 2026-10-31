@@ -187,9 +187,25 @@ type Model struct {
 	updateHook      func()
 	updateAfterHook func()
 	viewHook        func()
+
+	// startup measures the time from the process starting to the first frame
+	// reaching the terminal. It is nil when nothing is measuring, which is
+	// every test and every build that is not the real program.
+	startup *StartupTracker
 }
 
-func NewModel(cfg config.Config) Model {
+// Option configures a model at construction.
+type Option func(*Model)
+
+// WithStartup attaches a startup tracker to the model, so the debug pane can
+// show how long the app took to reach the screen.
+func WithStartup(tracker *StartupTracker) Option {
+	return func(m *Model) {
+		m.startup = tracker
+	}
+}
+
+func NewModel(cfg config.Config, opts ...Option) Model {
 	theme, err := config.LoadTheme(cfg.ThemePath)
 	if err != nil {
 		theme = config.DefaultTheme()
@@ -225,6 +241,12 @@ func NewModel(cfg config.Config) Model {
 			_ = watcher.Watch(dir)
 		}
 		m.themeWatcher = watcher
+	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&m)
+		}
 	}
 
 	return m
