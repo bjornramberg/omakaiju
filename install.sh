@@ -12,10 +12,29 @@
 # Options:
 #   OMAKAIJU_PREFIX=/usr/local  install prefix   (default: $HOME/.local)
 #   OMAKAIJU_VERSION=v0.9.0     release version (default: latest)
+#
+#   OMAKAIJU_ALLOW_UNSIGNED=1   install a release that carries no signature
+#                               (for the releases published before signing)
 set -eu
 
 REPO="bjornramberg/omakaiju"
 BIN_NAME="omakaiju"
+
+# The public key the releases are signed with.
+#
+# The checksum file is fetched from the same release as the binary, so on its
+# own it proves only that the download arrived intact: a release that was
+# tampered with would serve a binary and a checksum that agree with each
+# other. The signature is what says the release is ours. The key is pinned
+# here, in the script the user fetched, so the trust does not depend on the
+# server that served the files.
+#
+# The matching private key lives in the repository's secrets and never leaves
+# the release workflow. The public key is also published as
+# RELEASE_KEY.pub.pem, so it can be checked against another source.
+RELEASE_PUBLIC_KEY='-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEA1CBQJaZySQh+W9wPTozB43IR0jItzQVh/qGl3lp2ByQ=
+-----END PUBLIC KEY-----'
 
 # NOTE: this must stay in the "${1:-...}" form -- under `set -u`, dash
 # evaluates $1 inside "${OMAKAIJU_VERSION:-$1}" even when the env var is
@@ -24,16 +43,22 @@ BIN_NAME="omakaiju"
 VERSION="${1:-${OMAKAIJU_VERSION:-}}"
 PREFIX="${OMAKAIJU_PREFIX:-$HOME/.local}"
 
+# Where the releases are fetched from. It can be pointed somewhere else for
+# a mirror or a test; the signature still has to check out against the key
+# pinned in this script, so a different host cannot serve a different
+# binary.
+BASE_URL="${OMAKAIJU_BASE_URL:-https://github.com/$REPO/releases}"
+
 if [ -n "$VERSION" ]; then
   # The release tags carry a leading "v" (v0.10.0), while users naturally
   # type 0.10.0 -- and /releases/download/0.10.0/... does not exist. Accept
   # both forms by normalising to the tagged form before building the URL.
   VERSION="v${VERSION#v}"
-  URL_BASE="https://github.com/$REPO/releases/download/$VERSION"
+  URL_BASE="$BASE_URL/download/$VERSION"
   RELEASE="release $VERSION"
 else
   # 'latest/download' always resolves to the newest release.
-  URL_BASE="https://github.com/$REPO/releases/latest/download"
+  URL_BASE="$BASE_URL/latest/download"
   RELEASE="the latest release"
 fi
 
@@ -51,6 +76,7 @@ esac
 TARBALL="${BIN_NAME}_linux_${ARCH}.tar.gz"
 TARBALL_URL="$URL_BASE/$TARBALL"
 CHECKSUMS_URL="$URL_BASE/checksums.txt"
+SIGNATURE_URL="$URL_BASE/checksums.txt.sig"
 
 command -v curl >/dev/null 2>&1 || { echo "error: curl is required." >&2; exit 1; }
 
@@ -109,12 +135,60 @@ download() {
   exit 1
 }
 
-# The checksum file is fetched from the same release as the binary, so it
-# proves the download arrived intact but cannot prove the release is
-# authentic. Signing the releases would close that gap; for now the
-# checksum is what there is to check.
 download "$TARBALL_URL" "$TMPDIR_DL/$TARBALL" "linux/$ARCH build ($TARBALL)"
 download "$CHECKSUMS_URL" "$TMPDIR_DL/checksums.txt" "checksums.txt"
+# The signature is optional in the sense that an old release may not have
+# one, but its absence has to be noticed rather than passed over.
+if ! curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+    -o "$TMPDIR_DL/checksums.txt.sig" -w '%{http_code}' "$SIGNATURE_URL" \
+    2>"$TMPDIR_DL/curl.err" >/dev/null; then
+  rm -f "$TMPDIR_DL/checksums.txt.sig"
+fi
+
+# The signature is what makes the release ours: the checksum file comes from
+# the same place as the binary, so without a signature a tampered release
+# would serve a binary and a checksum that agree with each other.
+#
+# The signature covers the checksum file, and the checksum covers the
+# binary, so checking the signature first and the checksum second covers the
+# whole chain from the key to the binary on disk.
+echo "==> Verifying signature"
+verify_signature() {
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "error: openssl is required to verify the release signature." >&2
+    echo "       Install it (openssl 3.0 or newer), or set" >&2
+    echo "       OMAKAIJU_ALLOW_UNSIGNED=1 to install without checking." >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$RELEASE_PUBLIC_KEY" >"$TMPDIR_DL/release-key.pub.pem"
+
+  # -rawin is what makes this an Ed25519 signature over the file's bytes;
+  # it needs OpenSSL 3.0 or newer.
+  if ! openssl pkeyutl -verify -rawin -pubin \
+      -inkey "$TMPDIR_DL/release-key.pub.pem" \
+      -in "$TMPDIR_DL/checksums.txt" \
+      -sigfile "$TMPDIR_DL/checksums.txt.sig" >/dev/null 2>"$TMPDIR_DL/openssl.err"; then
+    echo "error: the release signature does not check out." >&2
+    sed 's/^/       /' "$TMPDIR_DL/openssl.err" >&2 || true
+    echo "       The download was not installed." >&2
+    exit 1
+  fi
+}
+
+# The releases published before signing carry no signature. They can still be
+# installed, but only when the user says so: a release that has no signature
+# is not authenticated, and pretending otherwise would make the check theatre.
+if [ -f "$TMPDIR_DL/checksums.txt.sig" ]; then
+  verify_signature
+elif [ "${OMAKAIJU_ALLOW_UNSIGNED:-}" = "1" ]; then
+  echo "==> WARNING: this release is not signed; installing it unchecked."
+else
+  echo "error: $RELEASE carries no signature, so it cannot be verified." >&2
+  echo "       Newer releases are signed. To install this one anyway, set" >&2
+  echo "       OMAKAIJU_ALLOW_UNSIGNED=1." >&2
+  exit 1
+fi
 
 echo "==> Verifying checksum"
 (

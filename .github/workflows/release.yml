@@ -66,6 +66,25 @@ jobs:
       - name: Test with the race detector
         run: go test -race ./...
 
+      # The release is signed with a key whose private half lives here and
+      # nowhere else. It is written to a file for the signing step; the file
+      # is private to the runner and is gone when the job ends.
+      #
+      # A missing key stops the release: publishing an unsigned release
+      # quietly would undo the point of signing.
+      - name: Prepare the signing key
+        env:
+          SIGNING_KEY: ${{ secrets.OMAKAIJU_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SIGNING_KEY:-}" ]; then
+            echo "::error::The OMAKAIJU_SIGNING_KEY secret is not set. Refusing to publish an unsigned release."
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$SIGNING_KEY" > "$RUNNER_TEMP/omakaiju-signing-key.pem"
+          echo "OMAKAIJU_SIGNING_KEY_PATH=$RUNNER_TEMP/omakaiju-signing-key.pem" >> "$GITHUB_ENV"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:

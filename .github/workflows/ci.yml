@@ -99,7 +99,14 @@ jobs:
         timeout-minutes: 10
 
       - name: Shellcheck installer
-        run: shellcheck install.sh
+        run: shellcheck install.sh scripts/installer_test.sh
+
+      # The installer puts a binary on the PATH. This checks that it only
+      # does so when the release's signature checks out: a tampered binary, a
+      # tampered checksum file, a signature from another key and an unsigned
+      # release all have to be refused.
+      - name: Test the installer
+        run: sh scripts/installer_test.sh
 
       - name: Upload binary artifact
         if: github.event_name == 'push'

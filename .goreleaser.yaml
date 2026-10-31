@@ -40,3 +40,27 @@ archives:
 
 checksum:
   name_template: checksums.txt
+
+# The checksum file is fetched from the same release as the binary, so on its
+# own it proves only that the download arrived intact. The signature is what
+# says the release is ours: it covers the checksum file, and the checksum
+# covers the binary.
+#
+# The key is an Ed25519 key whose private half lives in the repository's
+# secrets and never leaves the release workflow. The public half is pinned
+# in install.sh and published as RELEASE_KEY.pub.pem.
+signs:
+  - id: release
+    artifacts: checksum
+    cmd: openssl
+    args:
+      - "pkeyutl"
+      - "-sign"
+      - "-rawin"
+      - "-inkey"
+      - "{{ .Env.OMAKAIJU_SIGNING_KEY_PATH }}"
+      - "-in"
+      - "${artifact}"
+      - "-out"
+      - "${signature}"
+    signature: "${artifact}.sig"

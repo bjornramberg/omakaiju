@@ -25,20 +25,54 @@ Install the latest prebuilt release with one command:
 curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.sh | sh
 ```
 
-The installer detects your architecture (`amd64`/`arm64`), verifies the download against published checksums, and atomically places the binary in `~/.local/bin`. It prints the version it installed, so you can see at a glance what you got.
+The installer detects your architecture (`amd64`/`arm64`), verifies that the release is signed by the project's key, verifies the download against the signed checksums, and atomically places the binary in `~/.local/bin`. It prints the version it installed, so you can see at a glance what you got.
 
 To pin a version instead of taking the latest:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.sh | sh -s -- v0.10.0
+curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.sh | sh -s -- v0.13.0
 ```
 
-The version can also be given as `OMAKAIJU_VERSION=v0.10.0`, and `OMAKAIJU_PREFIX` chooses where it is installed (`~/.local` by default).
+The version can also be given as `OMAKAIJU_VERSION=v0.13.0`, and `OMAKAIJU_PREFIX` chooses where it is installed (`~/.local` by default).
+
+### The releases are signed
+
+Every release since v0.13.0 carries a signature over its checksum file, and
+the installer checks that signature before it installs anything. The checksum
+file comes from the same place as the binary, so on its own it proves only
+that the download arrived intact; the signature is what says the release is
+ours. A release that was tampered with — even one that serves a checksum
+file matching its tampered binary — is refused.
+
+The public key is pinned in the installer script itself, so the trust does
+not depend on the server that served the files. It is also published as
+[`RELEASE_KEY.pub.pem`](RELEASE_KEY.pub.pem), so it can be compared against
+another copy of it. The private key lives in the repository's secrets and
+never leaves the release workflow.
+
+Verifying a release by hand:
+
+```bash
+TAG=v0.13.0
+curl -fsSL "https://github.com/bjornramberg/omakaiju/releases/download/$TAG/checksums.txt" -o checksums.txt
+curl -fsSL "https://github.com/bjornramberg/omakaiju/releases/download/$TAG/checksums.txt.sig" -o checksums.txt.sig
+openssl pkeyutl -verify -rawin -pubin -inkey RELEASE_KEY.pub.pem \
+  -in checksums.txt -sigfile checksums.txt.sig
+```
+
+The installer needs `openssl` 3.0 or newer for this check. The releases
+published before v0.13.0 carry no signature; they can still be installed,
+but only when asked for explicitly:
+
+```bash
+OMAKAIJU_ALLOW_UNSIGNED=1 curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.sh | sh -s -- v0.12.0
+```
 
 ### System Requirements
 
 * **OS:** Linux (prebuilt binaries) or Unix-like systems (built from source)
 * **Font:** A [Nerd Font](https://www.nerdfonts.com/) (optional, for pane and archive icons)
+* **openssl** 3.0 or newer, to verify the release signature
 
 ---
 
