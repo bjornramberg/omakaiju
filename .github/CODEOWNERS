@@ -1,0 +1,12 @@
+# The files that decide what a release is and who can sign one. A change to
+# any of them is a change to what every installer trusts, so it needs the
+# owner to look at it.
+*                       @bjornramberg
+/.github/               @bjornramberg
+/.github/workflows/     @bjornramberg
+/.goreleaser.yaml       @bjornramberg
+/RELEASE_KEY.pub.pem    @bjornramberg
+/install.sh             @bjornramberg
+/Makefile               @bjornramberg
+/go.mod                 @bjornramberg
+/go.sum                 @bjornramberg

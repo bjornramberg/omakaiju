@@ -22,7 +22,7 @@ VERSION := $(shell \
 	fi)
 LDFLAGS := -s -w -X github.com/bjornramberg/omakaiju/internal/version.Version=$(VERSION)
 
-.PHONY: all build run install clean lint test race
+.PHONY: all build run install clean lint test race check fmt tidy fuzz arm64 vuln static shell installer
 
 all: build
 
@@ -55,3 +55,57 @@ test:
 # its own state while looking perfectly correct in every other check.
 race:
 	go test -race ./...
+
+# The full gate: everything CI runs, in the same order. The release workflow
+# runs this too, so a release cannot ship something CI would have refused.
+check: fmt tidy lint test race fuzz arm64 vuln static shell installer
+
+# The tree has to be gofmt'd. A file that is not is a failure, not a note.
+fmt:
+	@unformatted="$$(gofmt -l .)"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "these files are not gofmt'd:"; echo "$$unformatted"; exit 1; \
+	fi
+
+# The module files are part of the build: if they need tidying, the tree is
+# out of date and the build would not be what go.mod says it is.
+tidy:
+	go mod tidy -diff
+
+# A short run of each fuzzer. They cover the paths that take text from the
+# user or from the filesystem.
+fuzz:
+	go test -run=XXX -fuzz=FuzzEmphasizeText -fuzztime=30s ./internal/ui/...
+	go test -run=XXX -fuzz=FuzzTruncate -fuzztime=30s ./internal/ui/...
+	go test -run=XXX -fuzz=FuzzTrimPathLeft -fuzztime=30s ./internal/ui/...
+	go test -run=XXX -fuzz=FuzzSanitizeName -fuzztime=30s ./internal/ui/...
+	go test -run=XXX -fuzz=FuzzMatch -fuzztime=30s ./internal/fuzzy/...
+	go test -run=XXX -fuzz=FuzzFilter -fuzztime=30s ./internal/fuzzy/...
+
+# The release publishes linux/arm64 as well as amd64, and the runner is
+# amd64: cross-compile so an arm64-only breakage is caught here.
+arm64:
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath ./...
+
+# Known vulnerabilities in the standard library and in the modules we depend
+# on. The tool version is pinned: a scan that changes with the day is a scan
+# nobody can reproduce.
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+# The linter that finds the mistakes the compiler does not. Pinned for the
+# same reason as the scanner above.
+static:
+	go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+
+# The installer and its test are shell; they are checked like any other code.
+shell:
+	@command -v shellcheck >/dev/null 2>&1 || { \
+		echo "shellcheck is not installed; the CI runner has it"; exit 1; \
+	}
+	shellcheck install.sh scripts/installer_test.sh
+
+# The installer is the front door: it puts a binary on the PATH, and it only
+# does so when the release's signature checks out.
+installer:
+	sh scripts/installer_test.sh
