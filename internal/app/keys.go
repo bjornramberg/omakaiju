@@ -121,7 +121,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !m.debugActive {
 			return m, nil
 		}
-		m.debugStats = m.sampleDebugStats()
+		// Sampling stops the world for a frame, so it only happens when the
+		// pane will actually be drawn. The tick is kept either way and takes
+		// the first sample once the layout has room for the pane.
+		if m.debugDrawn() {
+			m.debugStats = m.sampleDebugStats()
+		}
 		return m, debugTickCmd()
 	}
 
@@ -234,7 +239,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openTrash()
 	case nav.ActionTogglePreview:
 		m.previewHidden = !m.previewHidden
-		return m, nil
+		// Turning the preview off means cursor moves stop reading files for
+		// it; turning it back on has to gather what was skipped, or show the
+		// content that was already gathered.
+		return m, m.updatePreview()
 	case nav.ActionGoto:
 		m.mode = inputGoto
 		m.inputBuf = ""

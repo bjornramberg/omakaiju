@@ -40,6 +40,10 @@ type previewRequest struct {
 // be on screen moves the version on, so a load that was started for the old
 // preview is dropped when it arrives instead of replacing the new one.
 //
+// Nothing is gathered while the layout has no column for the preview. The
+// request is kept, so the preview is built when the terminal is wide enough
+// again without the cursor having to move.
+//
 // The returned command must be dispatched by the caller.
 func (m *Model) updatePreview() tea.Cmd {
 	files := m.visibleFiles(m.activePane)
@@ -64,8 +68,11 @@ func (m *Model) updatePreview() tea.Cmd {
 		m.previewPending = previewRequest{}
 		m.previewVersion++
 
-		if path == "" {
-			// No preview is being shown, so nothing is marked as loading.
+		// Nothing is drawn for an empty cursor, or for a preview the layout
+		// has no column for. Recording the path is enough: when the terminal
+		// grows again, the current preview is seen to have no content yet and
+		// is gathered then.
+		if path == "" || !m.previewDrawn() {
 			m.previewLoading = false
 			return nil
 		}
@@ -93,8 +100,17 @@ func (m *Model) updatePreview() tea.Cmd {
 		return nil
 	}
 
+	// The preview has no column at the moment, so there is nothing to gather
+	// for it. It keeps the request and returns, with its content, as soon as
+	// the layout gives it room again.
+	if !m.previewDrawn() {
+		m.previewLoading = false
+		return nil
+	}
+
 	// This preview is current but no load is running for it: the theme was
-	// reloaded, or a result was dropped. Start the load now.
+	// reloaded, or a result was dropped, or the preview has just come back
+	// into view. Start the load now.
 	m.previewLoading = true
 	m.previewPending = previewRequest{path: path, stamp: stamp, version: m.previewVersion}
 	return loadPreviewCmd(path, stamp, m.previewVersion, m.theme)

@@ -98,7 +98,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		return m, nil
+		// The layout may have just made room for a preview that was yielding
+		// its column, so ask for it again at the new size.
+		return m, m.updatePreview()
 
 	case dirLoadedMsg:
 		// A load for a path the pane has since left is stale. Committing it
@@ -296,6 +298,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// stops the work on the very next tick.
 		if !m.debugActive {
 			return m, nil
+		}
+		// The pane can be open and still have no room on screen — the
+		// terminal is too narrow for the right column. Sampling then stops
+		// the world for a panel nobody can see, so the tick stays alive but
+		// gathers nothing until the layout draws the pane again.
+		if !m.debugDrawn() {
+			return m, debugTickCmd()
 		}
 		m.debugStats = m.sampleDebugStats()
 		return m, debugTickCmd()

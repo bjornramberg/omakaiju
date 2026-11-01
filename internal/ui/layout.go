@@ -8,11 +8,27 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Minimum usable terminal size. Below this the dual-pane layout has no room to
-// render anything meaningful, so a placeholder is shown instead of letting
-// Lipgloss produce undefined output from zero or negative dimensions.
+// Geometry for a file pane that can still show a filename. A row spends a
+// marker cell, a space, an icon cell and another space before the name, and the
+// pane spends a border and horizontal padding around its content. minNameWidth
+// is the same floor fileitem.go applies before it drops the detail columns, so
+// a pane at this width shows a twelve-cell name even with no size or
+// permissions beside it. The icon is measured at one cell because that is what
+// DisplayWidth reports for the Nerd Font glyphs in internal/icons; turning the
+// icons off only relaxes the requirement.
 const (
-	MinWidth  = 40
+	paneChromeWidth      = 2 /*border*/ + 4 /*padding*/
+	iconCellWidth        = 1
+	minReadablePaneWidth = paneChromeWidth + 1 /*marker*/ + 1 /*space*/ + iconCellWidth + 1 /*space*/ + minNameWidth
+)
+
+// Minimum usable terminal size. MinWidth leaves room for two side-by-side
+// panes at minReadablePaneWidth; the preview yields its share rather than
+// squeezing them below that. Below MinWidth even two panes cannot show a name,
+// so a placeholder is shown instead of letting Lipgloss produce undefined
+// output from zero or negative dimensions.
+const (
+	MinWidth  = 2 * minReadablePaneWidth
 	MinHeight = 10
 )
 
@@ -69,10 +85,9 @@ func (l Layout) MainAreaHeight() int {
 	return h
 }
 
-func (l Layout) PreviewWidth() int {
-	if l.PreviewHidden {
-		return 0
-	}
+// previewShare is the preview's natural third of the terminal, never less than
+// one column so degenerate widths still produce a concrete number.
+func (l Layout) previewShare() int {
 	w := l.Width / 3
 	if w < 1 {
 		w = 1
@@ -80,18 +95,66 @@ func (l Layout) PreviewWidth() int {
 	return w
 }
 
+// panesMinWidth is the width the file panes need in the orientation actually
+// in effect. Side-by-side panes each need a readable row; stacked panes span
+// the whole panes area, so one readable pane is enough.
+func (l Layout) panesMinWidth() int {
+	if l.stacked() {
+		return minReadablePaneWidth
+	}
+	return 2 * minReadablePaneWidth
+}
+
+// PreviewVisible reports whether the preview is actually drawn. The user's
+// choice is honoured first: PreviewHidden keeps it off at every width.
+// Otherwise the preview yields when its share would leave the file panes
+// narrower than a readable row. Yielding does not change the request, so the
+// preview returns as soon as the terminal is wide enough again.
+func (l Layout) PreviewVisible() bool {
+	if l.PreviewHidden {
+		return false
+	}
+	// Below MinWidth the placeholder replaces the layout, so the clamped
+	// geometry is kept rather than claiming a zero-width preview.
+	if l.Width < MinWidth {
+		return true
+	}
+	return l.Width-l.previewShare() >= l.panesMinWidth()
+}
+
+// PreviewSuppressed reports that the preview was asked for but is not drawn
+// because the terminal is too narrow to give it a column without squeezing a
+// filename out of the panes. It is false when the user turned the preview off,
+// which is a different state and must stay distinguishable.
+func (l Layout) PreviewSuppressed() bool {
+	return !l.PreviewHidden && !l.PreviewVisible()
+}
+
+// PreviewWidth is the width the preview draws at when PreviewVisible is true.
+// It is the natural third of the terminal even while the preview is yielding
+// and the panes use the space instead; callers that draw the preview must check
+// PreviewVisible first.
+func (l Layout) PreviewWidth() int {
+	if l.PreviewHidden {
+		return 0
+	}
+	return l.previewShare()
+}
+
 // DebugHeight is the height of the debug pane. Sharing the right column, the
 // main area splits in half: the preview keeps the extra row on an odd height,
 // like the top pane of a stacked pair, and each half must still have
-// minDebugPaneHeight rows. When the preview is hidden the pane is alone in the
-// column and takes all of it. Zero means the pane is off or there is no room
-// for it.
+// minDebugPaneHeight rows. When the preview is not drawn the pane is alone in
+// the column and takes all of it. Zero means the pane is off or there is no
+// room for it.
 func (l Layout) DebugHeight() int {
 	if !l.DebugActive {
 		return 0
 	}
 	h := l.MainAreaHeight()
-	if l.PreviewHidden {
+	if !l.PreviewVisible() {
+		// Alone in the right column, whether the preview is hidden by the
+		// user or yielding to the panes.
 		if h < minDebugPaneHeight {
 			return 0
 		}
@@ -106,14 +169,27 @@ func (l Layout) DebugHeight() int {
 
 // DebugVisible reports whether the debug pane is actually drawn. The request
 // is kept when the terminal is too short, so the pane returns once it grows.
+// Alone in the right column it also needs width for the panes, for the same
+// reason the preview yields: a pane squeezed below a readable row is worse
+// than a missing developer pane. Beside the preview it costs no extra width.
 func (l Layout) DebugVisible() bool {
-	return l.DebugHeight() > 0
+	if !l.DebugActive || l.DebugHeight() <= 0 {
+		return false
+	}
+	if l.PreviewVisible() {
+		return true
+	}
+	if l.Width < MinWidth {
+		return true
+	}
+	return l.Width-l.previewShare() >= l.panesMinWidth()
 }
 
 // PreviewHeight is the preview's share of the right column: the whole main
 // area unless the debug pane is sharing it, in which case it is what is left.
+// Zero means the preview is not drawn.
 func (l Layout) PreviewHeight() int {
-	if l.PreviewHidden {
+	if !l.PreviewVisible() {
 		return 0
 	}
 	h := l.MainAreaHeight()
@@ -125,21 +201,19 @@ func (l Layout) PreviewHeight() int {
 
 // DebugWidth is the debug column's width. Beside the preview it shares the
 // preview's column; alone it keeps the same share of the terminal, so the file
-// panes do not suddenly span everything when the preview is toggled off.
+// panes do not suddenly span everything when the preview is hidden or yields.
 func (l Layout) DebugWidth() int {
-	if !l.DebugVisible() || !l.PreviewHidden {
+	if !l.DebugVisible() || l.PreviewVisible() {
 		return 0
 	}
-	w := l.Width / 3
-	if w < 1 {
-		w = 1
-	}
-	return w
+	return l.previewShare()
 }
 
-// RightColumnWidth is the width of whatever occupies the right column.
+// RightColumnWidth is the width of whatever occupies the right column: the
+// preview when it is drawn, the debug pane when it is alone there, and zero
+// when both yield to the file panes.
 func (l Layout) RightColumnWidth() int {
-	if !l.PreviewHidden {
+	if l.PreviewVisible() {
 		return l.PreviewWidth()
 	}
 	return l.DebugWidth()
@@ -155,6 +229,8 @@ func (l Layout) stacked() bool {
 
 // PaneWidth keeps at least one column for each pane even when the preview takes
 // a third of a very narrow terminal. Stacked panes span the whole panes area.
+// When the preview yields, RightColumnWidth is zero and the panes take the
+// width it would have used.
 func (l Layout) PaneWidth() int {
 	if l.stacked() {
 		w := l.Width - l.RightColumnWidth()
@@ -198,15 +274,18 @@ func (l Layout) CanStack() bool {
 
 // rightColumn composes whatever occupies the right column. The debug pane sits
 // underneath the preview when both are drawn, and alone when the preview is
-// hidden. An empty string means there is no right column at all.
+// hidden or yields. An empty string means there is no right column at all.
 func (l Layout) rightColumn(preview, debug string) string {
 	switch {
-	case l.PreviewHidden:
-		return debug
-	case l.DebugVisible():
-		return lipgloss.JoinVertical(lipgloss.Left, preview, debug)
-	default:
+	case l.PreviewVisible():
+		if l.DebugVisible() {
+			return lipgloss.JoinVertical(lipgloss.Left, preview, debug)
+		}
 		return preview
+	case l.DebugVisible():
+		return debug
+	default:
+		return ""
 	}
 }
 

@@ -11,6 +11,44 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// layout builds the geometry for the current model state. It is the single
+// place the app turns its state into a Layout, so what View draws and what
+// updatePreview decides to gather cannot disagree about whether a column is
+// on screen.
+func (m Model) layout() ui.Layout {
+	l := ui.NewLayout(m.width, m.height, m.theme)
+	l.PanesStacked = m.panesStacked
+	l.PreviewHidden = m.previewHidden
+	l.DebugActive = m.debugActive
+	return l
+}
+
+// previewDrawn reports whether the preview is actually drawn this frame. The
+// layout yields the preview's column when keeping it would squeeze a filename
+// out of the file panes, so building a preview then would be work whose result
+// is thrown away.
+//
+// Before the first size message the terminal is still unmeasured: no layout
+// has been chosen yet, so the old behaviour stands and the preview is gathered.
+func (m Model) previewDrawn() bool {
+	if m.width <= 0 || m.height <= 0 {
+		return !m.previewHidden
+	}
+	l := m.layout()
+	return !l.TooSmall() && l.PreviewVisible()
+}
+
+// debugDrawn reports whether the debug pane is actually drawn this frame. Like
+// the preview it can be open and still not fit, in which case sampling runtime
+// telemetry stops the world for a panel nobody can see.
+func (m Model) debugDrawn() bool {
+	if m.width <= 0 || m.height <= 0 {
+		return m.debugActive
+	}
+	l := m.layout()
+	return !l.TooSmall() && l.DebugVisible()
+}
+
 // View draws the screen and survives a panic in the renderer.
 //
 // The same reasoning as Update applies: a fault in one frame must not end
@@ -37,14 +75,17 @@ func (m Model) View() (v tea.View) {
 	return m.view()
 }
 
+// previewSuppressedNote is shown when the preview is on but has yielded its
+// column to keep the file panes readable. It is deliberately worded as a
+// width problem, so it cannot be mistaken for the user having turned the
+// preview off with Shift+I.
+const previewSuppressedNote = "preview hidden: terminal too narrow"
+
 func (m Model) view() tea.View {
 	if m.viewHook != nil {
 		m.viewHook()
 	}
-	layout := ui.NewLayout(m.width, m.height, m.theme)
-	layout.PanesStacked = m.panesStacked
-	layout.PreviewHidden = m.previewHidden
-	layout.DebugActive = m.debugActive
+	layout := m.layout()
 
 	// Before the first WindowSizeMsg the size is still zero, and a terminal
 	// dragged below the minimum has nowhere to draw. Both would otherwise hand
@@ -87,7 +128,7 @@ func (m Model) view() tea.View {
 	rightRendered := rightPane.Render()
 
 	var previewRendered string
-	if !m.previewHidden {
+	if layout.PreviewVisible() {
 		previewWidth := layout.PreviewWidth()
 		previewHeight := layout.PreviewHeight()
 
@@ -115,7 +156,7 @@ func (m Model) view() tea.View {
 	}
 
 	var debugRendered string
-	if m.debugActive && layout.DebugVisible() {
+	if layout.DebugVisible() {
 		debug := ui.NewDebug(layout.RightColumnWidth(), layout.DebugHeight(), m.theme)
 		debug.Info = ui.DebugInfo{
 			Stats:         m.debugStats,
@@ -177,6 +218,11 @@ func (m Model) view() tea.View {
 			bottomBar.Error = m.loadErr.Error()
 		} else if m.opResult != "" {
 			bottomBar.OpResult = m.opResult
+		} else if layout.PreviewSuppressed() {
+			// The preview is on, but the layout gave its column to the file
+			// panes because the terminal is too narrow for both. Say so, so
+			// the missing panel does not look like Shift+I's "off".
+			bottomBar.OpResult = previewSuppressedNote
 		}
 	}
 	bottomRendered := bottomBar.Render()
