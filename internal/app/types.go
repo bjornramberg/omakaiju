@@ -198,7 +198,12 @@ type previewLoadedMsg struct {
 	// stamp identifies the file's contents at the time it was read: its size
 	// and modification time. A preview keyed on the path alone would keep
 	// showing a file that has since been edited, overwritten or replaced.
-	stamp   string
+	stamp string
+	// version is the preview generation the load was started for. The
+	// highlighted text is produced with the palette that was current when
+	// the load started, so a result whose version is no longer current would
+	// put the old theme's colours back on screen.
+	version int
 	content ui.Content
 }
 

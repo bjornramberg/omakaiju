@@ -10,6 +10,19 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// previewRequest identifies the background load that is in flight.
+//
+// The model keeps the request so a second updatePreview for the same file and
+// version does not read the file again, and so a result can be recognised as
+// the answer to the request that is still wanted. There is at most one; a load
+// whose version is no longer the model's previewVersion belongs to a preview
+// the user has left.
+type previewRequest struct {
+	path    string
+	stamp   string
+	version int
+}
+
 // updatePreview points the preview at the file under the cursor and asks for
 // it to be loaded.
 //
@@ -23,45 +36,68 @@ import (
 // replaced on disk kept showing its old contents until the cursor left it and
 // came back.
 //
+// The preview is also identified by previewVersion. Each change to what should
+// be on screen moves the version on, so a load that was started for the old
+// preview is dropped when it arrives instead of replacing the new one.
+//
 // The returned command must be dispatched by the caller.
 func (m *Model) updatePreview() tea.Cmd {
 	files := m.visibleFiles(m.activePane)
 	cursor := m.rawCursor(m.activePane)
+	path := ""
+	stamp := ""
 	if cursor < len(files) {
-		m.previewPath = files[cursor].Path
-	} else {
-		m.previewPath = ""
+		path = files[cursor].Path
+		stamp = previewStamp(path)
 	}
 
-	if m.previewPath == "" {
-		// No preview is being shown, so any load still in flight no longer
-		// matters and must not leave the panel marked as loading.
-		m.previewLoading = false
-		if m.previewCachePath != "" {
-			m.previewContent = ui.Content{}
-			m.previewCachePath = ""
-			m.previewCacheStamp = ""
-			m.previewVersion++
+	// Another file, another version of it, or a palette that has changed is
+	// a new preview. Moving the version on makes any load still running for
+	// the previous preview stale: its colours and contents were gathered for
+	// a screen that no longer exists.
+	if path != m.previewPath || stamp != m.previewStamp {
+		m.previewPath = path
+		m.previewStamp = stamp
+		m.previewContent = ui.Content{}
+		m.previewCachePath = ""
+		m.previewCacheStamp = ""
+		m.previewPending = previewRequest{}
+		m.previewVersion++
+
+		if path == "" {
+			// No preview is being shown, so nothing is marked as loading.
+			m.previewLoading = false
+			return nil
 		}
+
+		m.previewLoading = true
+		m.previewPending = previewRequest{path: path, stamp: stamp, version: m.previewVersion}
+		return loadPreviewCmd(path, stamp, m.previewVersion, m.theme)
+	}
+
+	if path == "" {
+		m.previewLoading = false
 		return nil
 	}
 
-	stamp := previewStamp(m.previewPath)
-	if m.previewPath == m.previewCachePath && stamp == m.previewCacheStamp {
+	// The content on screen is this file at this version already.
+	if path == m.previewCachePath && stamp == m.previewCacheStamp {
+		m.previewLoading = false
 		return nil
 	}
 
-	// The cached preview belongs to another file, or to an older version of
-	// this one. Drop it so the panel shows something honest rather than the
-	// previous contents.
-	m.previewContent = ui.Content{}
-	m.previewCachePath = ""
-	m.previewCacheStamp = ""
-	m.previewStamp = stamp
-	m.previewVersion++
+	// A load for exactly this preview is still running. Reading the file
+	// again would duplicate a full read and a full highlight, and two
+	// results for one file could land in either order.
+	if m.previewPending == (previewRequest{path: path, stamp: stamp, version: m.previewVersion}) {
+		return nil
+	}
+
+	// This preview is current but no load is running for it: the theme was
+	// reloaded, or a result was dropped. Start the load now.
 	m.previewLoading = true
-
-	return loadPreviewCmd(m.previewPath, stamp, m.theme)
+	m.previewPending = previewRequest{path: path, stamp: stamp, version: m.previewVersion}
+	return loadPreviewCmd(path, stamp, m.previewVersion, m.theme)
 }
 
 // previewStamp identifies a file's contents. Size and modification time are
@@ -75,9 +111,11 @@ func previewStamp(path string) string {
 	return fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
 }
 
-// loadPreviewCmd gathers a preview in the background.
-func loadPreviewCmd(path, stamp string, theme config.Theme) tea.Cmd {
+// loadPreviewCmd gathers a preview in the background. The version is carried
+// with the result so Update can tell whether the preview it was gathered for
+// is still the one on screen.
+func loadPreviewCmd(path, stamp string, version int, theme config.Theme) tea.Cmd {
 	return safeCmd("preview", func() tea.Msg {
-		return previewLoadedMsg{path: path, stamp: stamp, content: ui.Load(path, theme)}
+		return previewLoadedMsg{path: path, stamp: stamp, version: version, content: ui.Load(path, theme)}
 	})
 }

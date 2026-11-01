@@ -107,13 +107,21 @@ type Model struct {
 	// previewCacheStamp identifies the version of that file previewContent
 	// was read from. Together with the path it is the preview's identity.
 	previewCacheStamp string
-	// previewStamp identifies the version the in-flight preview request was
-	// made for, so a second request for the same unchanged file is not
-	// dispatched while the first is still running.
+	// previewStamp identifies the version of the file the preview is asking
+	// for. Together with previewPath it names the preview that should be on
+	// screen, whether it has arrived yet or not.
 	previewStamp string
-	// previewVersion counts the changes to the preview. The render cache
-	// uses it to tell a changed preview from an unchanged one.
+	// previewVersion identifies the preview being asked for. It moves on
+	// whenever that preview changes — another file, another version of the
+	// file, another palette — and a load result carries the version it was
+	// started for. A result whose version is no longer current was produced
+	// for a screen that is gone and must not be drawn. The render cache uses
+	// it too, to tell a changed preview from an unchanged one.
 	previewVersion int
+	// previewPending is the load currently in flight, if any. There is at
+	// most one, and it only answers the current previewVersion; anything
+	// else is a load the user has already moved on from.
+	previewPending previewRequest
 	// previewLoading marks the window between asking for a preview and
 	// it arriving.
 	previewLoading bool

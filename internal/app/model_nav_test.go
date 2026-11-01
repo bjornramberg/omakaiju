@@ -210,8 +210,13 @@ func TestPreviewTracksCursor(t *testing.T) {
 
 // settlePreview runs the pending preview load and feeds the result back, so
 // a test can assert on a preview that is now gathered in the background.
+//
+// A test that calls Update and discards the returned command leaves the model
+// believing a load is in flight. Clearing the request lets this helper start
+// the load the missing command would have started.
 func settlePreview(t *testing.T, m Model) Model {
 	t.Helper()
+	m.previewPending = previewRequest{}
 	cmd := m.updatePreview()
 	if cmd == nil {
 		return m

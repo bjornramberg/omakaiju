@@ -65,6 +65,17 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case previewLoadedMsg:
+		// The preview moved on while this was being gathered: the cursor
+		// went elsewhere, the file changed, or the palette was reloaded.
+		// The highlighted content was produced for that earlier preview —
+		// with the theme current then — so drawing it would put stale
+		// contents, or the old palette's colours, back on screen.
+		if msg.version != m.previewVersion {
+			return m, nil
+		}
+		// The request this result answers is the current one, so it is no
+		// longer in flight.
+		m.previewPending = previewRequest{}
 		// The cursor may have moved on while the preview was being
 		// gathered. A preview for a file the user is no longer on is
 		// stale, and showing it would put the wrong file in the panel.
@@ -240,17 +251,19 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.waitThemeCmd()
 		}
 		m.theme = msg.theme
-		// Colours changed, so the highlighted preview must be rebuilt.
-		// Clearing the cached path makes updatePreview load it again, this
-		// time with the new palette.
+		// Colours changed, so the highlighted preview must be rebuilt even
+		// though the file has not. The version is what a load result is
+		// checked against, so moving it on is what drops a result that was
+		// gathered with the old palette. It also invalidates the drawn frame:
+		// the render cache is keyed on the version, and an empty preview is
+		// drawn too, so without a new version the cache would hand back the
+		// frame the old palette produced.
 		m.previewCachePath = ""
 		m.previewCacheStamp = ""
-		m.previewStamp = ""
-		m.previewLoading = false
-		// The rendered frame is cached under the preview's version, and an
-		// empty preview is drawn too: without a new version the cache would
-		// hand back the frame the old palette produced.
 		m.previewVersion++
+		// The load still in flight, if any, belongs to the old version and
+		// cannot be used; the request for the new one replaces it.
+		m.previewPending = previewRequest{}
 		// Re-arm: the previous wait command has returned, so listening must be
 		// resumed or only the first reload would ever take effect.
 		return m, tea.Batch(m.updatePreview(), m.waitThemeCmd())

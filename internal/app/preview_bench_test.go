@@ -75,6 +75,7 @@ func BenchmarkRenderWithPreview(b *testing.B) {
 // settlePreviewB is the benchmark twin of settlePreview.
 func settlePreviewB(b *testing.B, m Model) Model {
 	b.Helper()
+	m.previewPending = previewRequest{}
 	cmd := m.updatePreview()
 	if cmd == nil {
 		return m
