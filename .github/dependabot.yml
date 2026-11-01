@@ -1,0 +1,40 @@
+# Dependabot keeps the dependencies and the workflows moving.
+#
+# The actions are pinned to commit SHAs, which is the right way to trust
+# them: a tag can be moved to point somewhere else, a commit cannot.
+# Pinning is not the same as freezing — Dependabot updates the SHA and the
+# version comment together, so a pinned action still gets its fixes, and
+# the update arrives as a reviewable pull request rather than silently.
+#
+# The GoReleaser CLI version is pinned in the release workflow instead, and
+# is not covered here: it is a value the action takes, not an action
+# reference, so there is nothing for Dependabot to follow. Bumping it is
+# one line in that workflow, and the release output changing without a
+# change in the repository is worth a look before it happens.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - housekeeping
+    # One pull request for the workflows rather than one per action: they
+    # move together often enough that separate pull requests are noise.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - housekeeping
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
