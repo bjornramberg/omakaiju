@@ -70,9 +70,10 @@ Fix: replace the slices instead of clearing them.
 * **#32** `internal/app/model.go` is 2,600 lines and holds the model, the
   key handling, the overlays, the commands and the prompts. Splitting it
   would make the next change cheaper.
-* **#33** Coverage: `cmd/omakaiju` 0%, `internal/version` 0%,
-  `internal/icons` 0%. The version formatter and the icon map are trivial to
-  test; `main` is worth a smoke test.
+* **#33** ~~Coverage~~ — done: `internal/version` and `internal/icons` are
+  at 100%, and `cmd/omakaiju` has a smoke test that runs the real binary's
+  `--version` path. The rest of that package is the terminal entry point,
+  which needs a terminal to exercise.
 * **#34** The releases are not signed: the checksum file comes from the
   same release as the binary, so it proves the download arrived intact but
   not that the release is authentic.

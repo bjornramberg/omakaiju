@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -38,7 +39,7 @@ func main() {
 	for _, arg := range os.Args[1:] {
 		switch arg {
 		case "-v", "--version":
-			fmt.Println("omakaiju " + version.Display())
+			printVersion(os.Stdout)
 			return
 		}
 	}
@@ -101,5 +102,18 @@ func main() {
 // call more than once and safe to call when the terminal was never put into
 // raw mode.
 func restoreTerminal() {
-	fmt.Fprint(os.Stderr, "\x1b[?25h\x1b[?1049l\x1b[0m\r\n")
+	restoreTerminalTo(os.Stderr)
+}
+
+// restoreTerminalTo writes the reset to w. It is the same reset, with the
+// writer chosen by the caller, so the behaviour can be tested without
+// touching the real terminal.
+func restoreTerminalTo(w io.Writer) {
+	fmt.Fprint(w, "\x1b[?25h\x1b[?1049l\x1b[0m\r\n")
+}
+
+// printVersion writes the release the binary was built from. It is what a
+// bug report quotes, so it says the version and nothing else.
+func printVersion(w io.Writer) {
+	fmt.Fprintln(w, "omakaiju "+version.Display())
 }
