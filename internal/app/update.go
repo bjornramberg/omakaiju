@@ -121,22 +121,52 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loadErr = msg.err
 			return m, nil
 		}
+		// A refresh caused by an external change keeps the user's place. The
+		// old selected name is taken before the listing is replaced.
+		oldCursor := m.rawCursor(msg.pane)
+		oldName := ""
+		if files := m.visibleFiles(msg.pane); oldCursor < len(files) {
+			oldName = files[oldCursor].Name
+		}
 		m.loadErr = nil
 		m.setPending(msg.pane, "")
 		if msg.pane == 0 {
 			m.leftPath = msg.path
 			m.leftFiles = msg.files
-			m.leftCursor = 0
-			m.leftFilter = ""
+			if !msg.preserve {
+				m.leftCursor = 0
+				m.leftFilter = ""
+			}
 		} else {
 			m.rightPath = msg.path
 			m.rightFiles = msg.files
-			m.rightCursor = 0
-			m.rightFilter = ""
+			if !msg.preserve {
+				m.rightCursor = 0
+				m.rightFilter = ""
+			}
 		}
 		// Re-apply the pane's sort mode: ReadDir always arrives in name
 		// order, so a size mode would otherwise be lost on every reload.
 		m.applySort(msg.pane)
+		// Follow the directory whose rows are now on screen.
+		m.followPaneWatch(msg.pane, msg.path)
+		if msg.preserve {
+			placed := false
+			for i, f := range m.visibleFiles(msg.pane) {
+				if oldName != "" && f.Name == oldName {
+					m.setCursor(msg.pane, i)
+					placed = true
+					break
+				}
+			}
+			if !placed {
+				// The entry is gone. Keep the same row where possible so a
+				// deletion does not jump back to the top of the listing.
+				m.setCursor(msg.pane, oldCursor)
+			}
+			m.clampCursor(msg.pane)
+			return m, m.updatePreview()
+		}
 		// A load triggered by going up should land on the directory we came
 		// from, and one triggered by a copy, move, or paste on the entry that
 		// operation put there; every other load starts at the top as before.
@@ -150,6 +180,32 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clampCursor(msg.pane)
 		}
 		return m, m.updatePreview()
+
+	case dirChangedMsg:
+		// A watcher that was shut down has no successor. Returning no command
+		// is what ends the wait for the rest of the session.
+		if msg.closed {
+			return m, nil
+		}
+		if msg.err != nil {
+			// The watcher is still alive, so this is a transient failure.
+			// Report it and arm the wait again rather than losing every later
+			// change.
+			m.loadErr = fmt.Errorf("directory watcher: %w", msg.err)
+			return m, m.waitDirCmd()
+		}
+		panes := m.panesShowing(msg.path)
+		if len(panes) == 0 {
+			// The change is under a directory a pane has already left. The
+			// wait still has to be re-armed, but there is nothing to redraw.
+			return m, m.waitDirCmd()
+		}
+		cmds := make([]tea.Cmd, 0, len(panes)+2)
+		cmds = append(cmds, m.waitDirCmd(), m.updatePreview())
+		for _, pane := range panes {
+			cmds = append(cmds, m.refreshPaneCmd(pane))
+		}
+		return m, tea.Batch(cmds...)
 
 	case copyProgressMsg:
 		// A message from a copy the user already cancelled belongs to a
