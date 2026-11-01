@@ -57,10 +57,13 @@ func filterFuzzyCmd(query string, files []string, gen int) tea.Cmd {
 func (m *Model) clearFuzzy() {
 	m.fuzzyActive = false
 	m.fuzzyInput = ""
-	clear(m.fuzzyResults)
+	// Drop the slices instead of clearing them. Model is copied by value on
+	// every update, but a slice is a reference: clear would empty the backing
+	// array a pre-update model still holds, so a panicking update would hand
+	// back a finder whose results had been wiped. Replacing them releases the
+	// same memory to the GC without touching the caller's array.
 	m.fuzzyResults = nil
 	m.fuzzyCursor = 0
-	clear(m.fuzzyAllFiles)
 	m.fuzzyAllFiles = nil
 	m.fuzzyLoading = false
 	m.fuzzyRoot = ""

@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -89,6 +90,51 @@ func TestUpdatePanicDiscardsMarkedMutation(t *testing.T) {
 	}
 	if _, ok := m2.marked[keep]; !ok {
 		t.Errorf("marked = %v, want %s still marked", m2.marked, keep)
+	}
+}
+
+// Closing the finder replaces its result slice rather than clearing it. Model
+// is copied by value, but a slice is a reference: an in-place clear would wipe
+// the results the pre-update model still holds, so the state crash recovery
+// hands back would no longer be what the user had.
+func TestUpdatePanicKeepsFuzzyResults(t *testing.T) {
+	m := fuzzyKeysModel(t)
+	want := append([]string(nil), m.fuzzyResults...)
+	if len(want) == 0 {
+		t.Fatal("the fixture has no fuzzy results")
+	}
+	m.updateAfterHook = func() { panic("boom") }
+
+	// Esc closes the finder, which drops its results before the fault.
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	m2 := updated.(Model)
+
+	if !m2.Crashed() {
+		t.Fatal("the crash was not recorded")
+	}
+	if !slices.Equal(m2.fuzzyResults, want) {
+		t.Errorf("fuzzyResults = %q, want the pre-update results %q", m2.fuzzyResults, want)
+	}
+}
+
+// The walked file list has the same aliasing: closing the finder must not
+// empty the tree the pre-update model still references.
+func TestUpdatePanicKeepsFuzzyFiles(t *testing.T) {
+	m := fuzzyKeysModel(t)
+	want := append([]string(nil), m.fuzzyAllFiles...)
+	if len(want) == 0 {
+		t.Fatal("the fixture has no walked files")
+	}
+	m.updateAfterHook = func() { panic("boom") }
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	m2 := updated.(Model)
+
+	if !m2.Crashed() {
+		t.Fatal("the crash was not recorded")
+	}
+	if !slices.Equal(m2.fuzzyAllFiles, want) {
+		t.Errorf("fuzzyAllFiles = %q, want the pre-update walk %q", m2.fuzzyAllFiles, want)
 	}
 }
 

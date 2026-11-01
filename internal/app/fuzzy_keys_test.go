@@ -99,6 +99,58 @@ func TestFuzzyFinderCtrlJAndCtrlKNavigate(t *testing.T) {
 	}
 }
 
+// Closing the finder without touching the shared arrays must not change how
+// it works: a query still narrows the list, the cursor still moves, and esc
+// still drops the state and both slices so the tree can be collected.
+func TestFuzzyFinderStillFindsAndCloses(t *testing.T) {
+	m := fuzzyKeysModel(t)
+	m.fuzzyLoading = false
+	m.fuzzyInput = ""
+
+	// Typing runs the background filter. "j" matches only json.txt.
+	updated, cmd := m.Update(key('j'))
+	m = updated.(Model)
+	m = settleFuzzy(t, m, cmd)
+
+	if len(m.fuzzyResults) != 1 || filepath.Base(m.fuzzyResults[0]) != "json.txt" {
+		t.Fatalf("results = %v, want just json.txt", m.fuzzyResults)
+	}
+	if m.fuzzyCursor != 0 {
+		t.Errorf("a filter should put the cursor at the top, got %d", m.fuzzyCursor)
+	}
+
+	// With both entries back in the list, the cursor moves down and up.
+	m.fuzzyResults = append([]string(nil), m.fuzzyAllFiles...)
+	updated, _ = m.Update(arrow(tea.KeyDown))
+	m = updated.(Model)
+	if m.fuzzyCursor != 1 {
+		t.Errorf("down: fuzzyCursor = %d, want 1", m.fuzzyCursor)
+	}
+	updated, _ = m.Update(arrow(tea.KeyUp))
+	m = updated.(Model)
+	if m.fuzzyCursor != 0 {
+		t.Errorf("up: fuzzyCursor = %d, want 0", m.fuzzyCursor)
+	}
+
+	// Esc closes the finder and replaces the slices with nil.
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	m = updated.(Model)
+
+	if m.fuzzyActive {
+		t.Error("escape should close the finder")
+	}
+	if m.fuzzyInput != "" || m.fuzzyCursor != 0 || m.fuzzyLoading || m.fuzzyRoot != "" {
+		t.Errorf("close left state behind: input=%q cursor=%d loading=%v root=%q",
+			m.fuzzyInput, m.fuzzyCursor, m.fuzzyLoading, m.fuzzyRoot)
+	}
+	if m.fuzzyResults != nil {
+		t.Errorf("fuzzyResults = %v, want nil so the results can be collected", m.fuzzyResults)
+	}
+	if m.fuzzyAllFiles != nil {
+		t.Errorf("fuzzyAllFiles = %v, want nil so the walk can be collected", m.fuzzyAllFiles)
+	}
+}
+
 // Enter jumps to the selected result and leaves the cursor on it, rather than
 // on the top of the directory it lives in.
 func TestFuzzyEnterLandsCursorOnTheMatch(t *testing.T) {

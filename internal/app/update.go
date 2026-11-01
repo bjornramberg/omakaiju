@@ -17,12 +17,13 @@ import (
 // app redraws and carries on.
 //
 // Model is a value type, but some of its fields are references: the marked
-// set and the file slices. The handlers that change those copy them first
-// (handleMove and restoreMarks for the marks, applySort for the listing), and
-// visibleFiles never hands out the model's own array. That is what makes the
-// state this method holds genuinely untouched by a panic in update: returning
-// it is exactly the state the user was in before the keypress that triggered
-// the fault.
+// set, the file slices, and the fuzzy finder's result and walk slices. The
+// handlers that change those copy or replace them first (handleMove and
+// restoreMarks for the marks, applySort for the listing, clearFuzzy for the
+// finder), and visibleFiles never hands out the model's own array. That is
+// what makes the state this method holds genuinely untouched by a panic in
+// update: returning it is exactly the state the user was in before the
+// keypress that triggered the fault.
 func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	model = m
 	defer func() {
