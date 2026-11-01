@@ -15,6 +15,10 @@
 #
 #   OMAKAIJU_ALLOW_UNSIGNED=1   install a release that carries no signature
 #                               (for the releases published before signing)
+#   OMAKAIJU_NO_ICONS=1         the terminal has no Nerd Font; the installer
+#                               stops suggesting one (the same setting turns
+#                               the binary's own icons off)
+#   NO_COLOR=1                  no colour in the installer's own output
 set -eu
 
 REPO="bjornramberg/omakaiju"
@@ -62,23 +66,249 @@ else
   RELEASE="the latest release"
 fi
 
+# --- presentation ----------------------------------------------------------
+#
+# Everything the installer says goes to stdout, so `curl ... | sh`, a run
+# redirected to a log, and one attached to a terminal all see the same
+# account of what happened. Only the presentation changes: a terminal gets
+# the tick-boxes and the spinner, a pipe or a file gets plain lines. That
+# decision is made once, here, because the step helpers below consult it on
+# every line.
+TTY=0
+if [ -t 1 ]; then
+  # A terminal advertised as dumb cannot be trusted with carriage returns
+  # or colours; it gets the plain stream, which is readable everywhere.
+  case "${TERM:-}" in
+    ''|dumb) ;;
+    *) TTY=1 ;;
+  esac
+fi
+
+# Colour is opt-out through NO_COLOR and is skipped when the terminal says
+# it has none. tput is consulted when it exists; when it does not, TERM=dumb
+# above is the best signal available.
+supports_colour() {
+  [ -z "${NO_COLOR:-}" ] || return 1
+  case "${TERM:-}" in
+    ''|dumb) return 1 ;;
+  esac
+  if command -v tput >/dev/null 2>&1; then
+    colours="$(tput colors 2>/dev/null)" || return 1
+    case "$colours" in
+      ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$colours" -ge 8 ] || return 1
+  fi
+  return 0
+}
+
+GREEN=""
+RED=""
+YELLOW=""
+RESET=""
+if [ "$TTY" = 1 ] && supports_colour; then
+  GREEN="$(printf '\033[32m')"
+  RED="$(printf '\033[31m')"
+  YELLOW="$(printf '\033[33m')"
+  RESET="$(printf '\033[0m')"
+fi
+
+TICK='✓'
+CROSS='✗'
+PENDING='⠹'
+SPINNER_PID=""
+STEP_OPEN=""
+
+# The spinner redraws one line in place. It is started for the one step that
+# can take seconds (the download) and killed by stop_spinner before the
+# result of that step is printed, so it can never scribble over the outcome.
+spinner() {
+  label=$1
+  set -- '⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏'
+  while :; do
+    for frame in "$@"; do
+      printf '\r\033[2K  %s %s …' "$frame" "$label"
+      sleep 0.1
+    done
+  done
+}
+
+# stop_spinner is safe to call at any time: with no spinner running it does
+# nothing. Wait for the process to go away after killing it, so a frame
+# cannot be written between the kill and the line that replaces it.
+stop_spinner() {
+  if [ -n "$SPINNER_PID" ]; then
+    pid="$SPINNER_PID"
+    SPINNER_PID=""
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    printf '\r\033[2K'
+  fi
+}
+
+step_start() {
+  STEP_OPEN=1
+  if [ "$TTY" = 1 ]; then
+    printf '  %s %s …' "$PENDING" "$1"
+  else
+    printf '==> %s\n' "$1"
+  fi
+}
+
+# A step with a spinner first draws its pending line, then lets the spinner
+# take the line over. Drawing it first means the step is named even when the
+# work finishes before the spinner's first frame.
+step_start_spin() {
+  step_start "$1"
+  if [ "$TTY" = 1 ]; then
+    spinner "$1" &
+    SPINNER_PID=$!
+  fi
+}
+
+step_done() {
+  stop_spinner
+  if [ "$TTY" = 1 ]; then
+    printf '\r\033[2K  %s%s%s %s\n' "$GREEN" "$TICK" "$RESET" "$1"
+  else
+    printf '    ok: %s\n' "$1"
+  fi
+  STEP_OPEN=""
+}
+
+step_warn() {
+  stop_spinner
+  if [ "$TTY" = 1 ]; then
+    printf '\r\033[2K  %s!%s %s\n' "$YELLOW" "$RESET" "$1"
+  else
+    printf '    warn: %s\n' "$1"
+  fi
+  STEP_OPEN=""
+}
+
+step_fail() {
+  stop_spinner
+  if [ "$TTY" = 1 ]; then
+    printf '\r\033[2K  %s%s%s %s\n' "$RED" "$CROSS" "$RESET" "$1"
+  else
+    printf '    failed: %s\n' "$1"
+  fi
+  STEP_OPEN=""
+}
+
+warn() {
+  if [ "$TTY" = 1 ]; then
+    printf '  %sWARNING:%s %s\n' "$YELLOW" "$RESET" "$1"
+  else
+    printf 'WARNING: %s\n' "$1"
+  fi
+}
+
+# nerd_font_check -- warn when the terminal probably cannot draw the icons.
+#
+# This is a guess and is worded as one: the script cannot see which font the
+# terminal has loaded. It looks for terminals that are known to work with a
+# Nerd Font and stays quiet when it has nothing to go on, rather than warning
+# at every terminal it does not recognise. It only ever warns; the install
+# goes ahead either way.
+nerd_font_check() {
+  # The same values the binary's own reader treats as "icons on": an unset
+  # or empty variable, or a value that parses as false. Anything else means
+  # the user already turned the icons off, so there is nothing to warn about.
+  case "${OMAKAIJU_NO_ICONS:-}" in
+    ''|0|f|F|FALSE|false|False) ;;
+    *) return 0 ;;
+  esac
+
+  # The kernel console cannot draw them at all, and neither can a dumb
+  # terminal. Both are identified with certainty rather than guessed at.
+  case "${TERM:-}" in
+    linux*|dumb) ;;
+    *)
+      # Terminals that are known to work with a Nerd Font, by name or by a
+      # variable only they set.
+      case "${TERM_PROGRAM:-}${LC_TERMINAL:-}" in
+        *iTerm*|*WezTerm*|*wezterm*|*kitty*|*Kitty*|*ghostty*|*Ghostty*|*Warp*)
+          return 0
+          ;;
+      esac
+      if [ -n "${KITTY_WINDOW_ID:-}" ] || [ -n "${WEZTERM_EXECUTABLE:-}" ] ||
+         [ -n "${WEZTERM_PANE:-}" ] || [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] ||
+         [ -n "${WT_SESSION:-}" ]; then
+        return 0
+      fi
+
+      # A plain terminal name. The colour-depth suffix is dropped so
+      # xterm-256color and xterm are recognised as the same thing. screen
+      # and tmux are deliberately absent: they hide which terminal is really
+      # underneath, and guessing there would be worse than saying nothing.
+      base="${TERM:-}"
+      base="${base%%-*}"
+      case "$base" in
+        xterm|vt100|vt220|ansi|rxvt) ;;
+        *) return 0 ;;
+      esac
+      ;;
+  esac
+
+  if [ "$TTY" = 1 ]; then
+    printf '  %sWARNING:%s this terminal may not have a Nerd Font; some icons may show as boxes.\n' \
+      "$YELLOW" "$RESET"
+    printf '          Set OMAKAIJU_NO_ICONS=1 to turn the icons off.\n'
+  else
+    printf 'WARNING: this terminal may not have a Nerd Font; some icons may show as boxes.\n'
+    printf '         Set OMAKAIJU_NO_ICONS=1 to turn the icons off.\n'
+  fi
+}
+
+# file_size PATH -- a compact size for the download's outcome line.
+file_size() {
+  bytes="$(wc -c <"$1" | tr -d '[:space:]')"
+  if [ "$bytes" -ge 1048576 ]; then
+    printf '%s.%s MB' "$((bytes / 1048576))" "$(((bytes % 1048576) * 10 / 1048576))"
+  elif [ "$bytes" -ge 1024 ]; then
+    printf '%s KB' "$((bytes / 1024))"
+  else
+    printf '%s B' "$bytes"
+  fi
+}
+
+# --- steps -----------------------------------------------------------------
+
+step_start "checking the terminal"
+
 case "$(uname -s)" in
   Linux) ;;
-  *) echo "error: prebuilt binaries are only provided for Linux." >&2; exit 1 ;;
+  *)
+    step_fail "prebuilt binaries are only provided for Linux"
+    echo "error: prebuilt binaries are only provided for Linux." >&2
+    exit 1
+    ;;
 esac
 
 case "$(uname -m)" in
   x86_64)       ARCH="amd64" ;;
   aarch64|arm64) ARCH="arm64" ;;
-  *) echo "error: unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+  *)
+    step_fail "unsupported architecture: $(uname -m)"
+    echo "error: unsupported architecture: $(uname -m)" >&2
+    exit 1
+    ;;
 esac
+
+command -v curl >/dev/null 2>&1 || {
+  step_fail "curl is required"
+  echo "error: curl is required." >&2
+  exit 1
+}
+
+step_done "terminal looks fine"
+nerd_font_check
 
 TARBALL="${BIN_NAME}_linux_${ARCH}.tar.gz"
 TARBALL_URL="$URL_BASE/$TARBALL"
 CHECKSUMS_URL="$URL_BASE/checksums.txt"
 SIGNATURE_URL="$URL_BASE/checksums.txt.sig"
-
-command -v curl >/dev/null 2>&1 || { echo "error: curl is required." >&2; exit 1; }
 
 TMPDIR_DL="$(mktemp -d)"
 STAGED=""
@@ -90,9 +320,18 @@ INSTALL_OK=""
 # and there is only ever one trap -- installing a second trap over this one
 # (as an earlier version of this script did) is how whole download
 # directories leaked into /tmp on every install, interrupted or not.
+#
+# The trap is removed first, so a second Ctrl-C while the cleanup is still
+# running is not swallowed by it and stops the installer at once. The
+# spinner, if one is still alive, is killed here too: it is a child of this
+# shell and would otherwise outlive the interrupt.
 cleanup() {
   status=$?
   trap - EXIT INT TERM
+  stop_spinner
+  if [ "$TTY" = 1 ] && [ -n "$STEP_OPEN" ]; then
+    printf '\n'
+  fi
   if [ -n "$STAGED" ]; then
     rm -f "$STAGED" || true
   fi
@@ -108,7 +347,13 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "==> Fetching $BIN_NAME for linux/$ARCH (release: ${VERSION:-latest})"
+if [ -n "$VERSION" ]; then
+  FETCH_WHAT="$VERSION for linux/$ARCH"
+else
+  FETCH_WHAT="the latest release for linux/$ARCH"
+fi
+
+step_start_spin "fetching $BIN_NAME $FETCH_WHAT"
 
 # download URL DEST WHAT -- fetch URL into DEST, reporting the failures worth
 # naming in the installer's own words instead of curl's.
@@ -125,9 +370,11 @@ download() {
     404)
       # The release exists but does not carry this asset: naming that beats
       # echoing curl's "requested URL returned error: 404".
+      step_fail "the release does not carry $3"
       echo "error: $RELEASE has no $3." >&2
       ;;
     *)
+      step_fail "could not fetch $3"
       echo "error: could not download $1." >&2
       sed 's/^/       /' "$TMPDIR_DL/curl.err" >&2 || true
       ;;
@@ -145,6 +392,8 @@ if ! curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
   rm -f "$TMPDIR_DL/checksums.txt.sig"
 fi
 
+step_done "fetched $BIN_NAME $FETCH_WHAT ($(file_size "$TMPDIR_DL/$TARBALL"))"
+
 # The signature is what makes the release ours: the checksum file comes from
 # the same place as the binary, so without a signature a tampered release
 # would serve a binary and a checksum that agree with each other.
@@ -152,9 +401,10 @@ fi
 # The signature covers the checksum file, and the checksum covers the
 # binary, so checking the signature first and the checksum second covers the
 # whole chain from the key to the binary on disk.
-echo "==> Verifying signature"
+step_start "verifying the release signature"
 verify_signature() {
   if ! command -v openssl >/dev/null 2>&1; then
+    step_fail "openssl is required to verify the release"
     echo "error: openssl is required to verify the release signature." >&2
     echo "       Install it (openssl 3.0 or newer), or set" >&2
     echo "       OMAKAIJU_ALLOW_UNSIGNED=1 to install without checking." >&2
@@ -169,6 +419,7 @@ verify_signature() {
       -inkey "$TMPDIR_DL/release-key.pub.pem" \
       -in "$TMPDIR_DL/checksums.txt" \
       -sigfile "$TMPDIR_DL/checksums.txt.sig" >/dev/null 2>"$TMPDIR_DL/openssl.err"; then
+    step_fail "the release signature does not check out"
     echo "error: the release signature does not check out." >&2
     sed 's/^/       /' "$TMPDIR_DL/openssl.err" >&2 || true
     echo "       The download was not installed." >&2
@@ -181,38 +432,47 @@ verify_signature() {
 # is not authenticated, and pretending otherwise would make the check theatre.
 if [ -f "$TMPDIR_DL/checksums.txt.sig" ]; then
   verify_signature
+  step_done "the release is signed by the project's key"
 elif [ "${OMAKAIJU_ALLOW_UNSIGNED:-}" = "1" ]; then
-  echo "==> WARNING: this release is not signed; installing it unchecked."
+  step_warn "the release is unsigned; OMAKAIJU_ALLOW_UNSIGNED=1, so installing unchecked"
+  warn "this release is not signed; installing it unchecked."
 else
+  step_fail "the release carries no signature"
   echo "error: $RELEASE carries no signature, so it cannot be verified." >&2
   echo "       Newer releases are signed. To install this one anyway, set" >&2
   echo "       OMAKAIJU_ALLOW_UNSIGNED=1." >&2
   exit 1
 fi
 
-echo "==> Verifying checksum"
-(
-  cd "$TMPDIR_DL"
+step_start "verifying the checksum"
 
-  # -F, because the tarball name is data, not a regular expression: the dots
-  # must not match arbitrary characters. Exactly one line has to name the
-  # tarball -- a truncated or duplicated checksums.txt should fail rather
-  # than verify whichever line happened to match.
-  if matches="$(grep -F -c -- "$TARBALL" checksums.txt 2>/dev/null)"; then
-    count="$matches"
-  else
-    count=0
-  fi
-  if [ "$count" -ne 1 ]; then
-    echo "error: checksums.txt does not list $TARBALL exactly once (found $count)." >&2
-    exit 1
-  fi
+# -F, because the tarball name is data, not a regular expression: the dots
+# must not match arbitrary characters. Exactly one line has to name the
+# tarball -- a truncated or duplicated checksums.txt should fail rather than
+# verify whichever line happened to match.
+if matches="$(grep -F -c -- "$TARBALL" "$TMPDIR_DL/checksums.txt" 2>/dev/null)"; then
+  count="$matches"
+else
+  count=0
+fi
+if [ "$count" -ne 1 ]; then
+  step_fail "checksums.txt does not list $TARBALL exactly once"
+  echo "error: checksums.txt does not list $TARBALL exactly once (found $count)." >&2
+  exit 1
+fi
 
-  grep -F -- "$TARBALL" checksums.txt | sha256sum -c - || {
-    echo "error: checksum verification failed for $TARBALL." >&2
-    exit 1
-  }
-)
+# The subshell runs sha256sum where the checksum file's relative path makes
+# sense; its "OK"/"FAILED" chatter is kept out of the step line.
+if ! ( cd "$TMPDIR_DL" && grep -F -- "$TARBALL" checksums.txt | sha256sum -c - ) \
+    >"$TMPDIR_DL/sha256sum.out" 2>&1; then
+  step_fail "the download does not match the signed checksums"
+  echo "error: checksum verification failed for $TARBALL." >&2
+  sed 's/^/       /' "$TMPDIR_DL/sha256sum.out" >&2 || true
+  exit 1
+fi
+step_done "the download matches the signed checksums"
+
+step_start "installing $BIN_NAME"
 
 tar xzf "$TMPDIR_DL/$TARBALL" -C "$TMPDIR_DL" "$BIN_NAME"
 
@@ -225,6 +485,7 @@ mkdir -p "$PREFIX/bin"
 STAGED="$PREFIX/bin/.${BIN_NAME}.new.$$"
 
 if ! install -m 0755 "$TMPDIR_DL/$BIN_NAME" "$STAGED"; then
+  step_fail "could not write to $PREFIX/bin"
   echo "error: could not write to $PREFIX/bin. Check the permissions." >&2
   exit 1
 fi
@@ -245,17 +506,22 @@ INSTALLED_VERSION="${INSTALLED_TAG#v}"
 # two; comparing the normalised versions makes that loud.
 if [ -n "$VERSION" ] && [ -n "$INSTALLED_VERSION" ] &&
    [ "$INSTALLED_VERSION" != "${VERSION#v}" ]; then
+  step_fail "the downloaded binary is not $VERSION"
   echo "error: asked for $VERSION but the downloaded binary reports \"${version_line:-nothing}\"." >&2
   echo "       Refusing to install it; $PREFIX/bin/$BIN_NAME was left untouched." >&2
   exit 1
 fi
 
 mv -f "$STAGED" "$PREFIX/bin/$BIN_NAME"
+# The staged name is gone now; clearing it keeps cleanup from touching the
+# binary that was just put in place.
+STAGED=""
+INSTALL_OK=1
 
 if [ -n "$INSTALLED_TAG" ]; then
-  echo "==> Installed $BIN_NAME $INSTALLED_TAG (linux/$ARCH) at $PREFIX/bin/$BIN_NAME"
+  step_done "installed $BIN_NAME $INSTALLED_TAG (linux/$ARCH) at $PREFIX/bin/$BIN_NAME"
 else
-  echo "==> Installed $PREFIX/bin/$BIN_NAME"
+  step_done "installed $PREFIX/bin/$BIN_NAME"
 fi
 
 # The binary is in place but might not run: a wrong architecture, a missing
@@ -271,6 +537,3 @@ case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;
   *) echo "    NB: $PREFIX/bin is not on your PATH — add it to your shell profile." ;;
 esac
-
-INSTALL_OK=1
-echo "==> Done. Run '$BIN_NAME' to start."
