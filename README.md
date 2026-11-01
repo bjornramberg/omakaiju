@@ -71,7 +71,7 @@ OMAKAIJU_ALLOW_UNSIGNED=1 curl -fsSL https://raw.githubusercontent.com/bjornramb
 ### System Requirements
 
 * **OS:** Linux (prebuilt binaries) or Unix-like systems (built from source)
-* **Font:** A [Nerd Font](https://www.nerdfonts.com/) (optional, for pane and archive icons)
+* **Font:** A [Nerd Font](https://www.nerdfonts.com/) for the pane and archive icons. It is optional: set `OMAKAIJU_NO_ICONS=1` to turn the icons off on a terminal without the font.
 * **openssl** 3.0 or newer, to verify the release signature
 
 ---

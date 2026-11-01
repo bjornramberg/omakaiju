@@ -33,12 +33,17 @@ func ArchiveLines(entries []fs.ArchiveEntry, truncated bool, theme config.Theme,
 			icon = icons.ForDir()
 		}
 
-		// The icon column is the icon plus the space after it. On a panel too
-		// narrow to leave even one cell of name, the icon is dropped rather
-		// than letting it push the row past the panel.
-		prefix := icon + " "
-		if DisplayWidth(prefix) >= maxCells {
-			prefix = ""
+		// The icon column is the icon plus the space after it. With the icons
+		// turned off there is no column at all, so the name starts at the
+		// left edge instead of after a blank cell. On a panel too narrow to
+		// leave even one cell of name, the icon is dropped rather than
+		// letting it push the row past the panel.
+		prefix := ""
+		if icon != "" {
+			prefix = icon + " "
+			if DisplayWidth(prefix) >= maxCells {
+				prefix = ""
+			}
 		}
 
 		// Budget the size column before truncating the name, not after: the

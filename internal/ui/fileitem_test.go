@@ -6,6 +6,7 @@ import (
 
 	"github.com/bjornramberg/omakaiju/internal/config"
 	"github.com/bjornramberg/omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/icons"
 )
 
 func TestFileItemShowsMarkerColumn(t *testing.T) {
@@ -20,6 +21,39 @@ func TestFileItemShowsMarkerColumn(t *testing.T) {
 	}
 	if strings.Contains(stripANSI(unmarked), "*") {
 		t.Error("unmarked item should not render a marker")
+	}
+}
+
+// With the icons turned off, the icon cell is gone rather than blank, so a
+// name starts right after the one-cell marker column and no glyph is drawn.
+func TestFileItemWithoutIconsHasNoIconOrGap(t *testing.T) {
+	icons.SetEnabled(false)
+	t.Cleanup(func() { icons.SetEnabled(true) })
+
+	theme := config.DefaultTheme()
+	const width = 40
+	entries := []fs.Entry{
+		{Name: "notes.txt", Path: "/tmp/notes.txt"},
+		{Name: "subdir", Path: "/tmp/subdir", IsDir: true},
+	}
+
+	for _, entry := range entries {
+		out := stripANSI(NewFileItem(entry, false, false, theme, width).Render())
+		name := entry.Name
+		if entry.IsDir {
+			name += "/"
+		}
+		// The marker and the space after it stay; the name takes the cell
+		// where the icon used to be, so no blank icon column remains.
+		if got := strings.Index(out, name); got != 2 {
+			t.Errorf("%s: name starts at %d, want 2 (marker and its space, then the name): %q",
+				entry.Name, got, out)
+		}
+		for _, glyph := range []string{icons.FileIcon, icons.TextIcon, icons.UnknownIcon, icons.DirIcon} {
+			if strings.Contains(out, glyph) {
+				t.Errorf("%s: glyph %q reached the row with the icons off: %q", entry.Name, glyph, out)
+			}
+		}
 	}
 }
 

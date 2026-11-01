@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"os"
 	"strings"
 
@@ -61,7 +60,7 @@ func (f FileItem) Render() string {
 	// as a link without widening the icon column. The trailing slash still
 	// follows IsDir, keeping a link to a directory marked as navigable.
 	if f.Entry.IsLink {
-		icon = icons.LinkIcon
+		icon = icons.Glyph(icons.LinkIcon)
 	}
 
 	// Fixed-width marker column so marked and unmarked rows stay aligned.
@@ -80,11 +79,18 @@ func (f FileItem) Render() string {
 		}
 	}
 
-	// Budget the row before rendering: marker, two spaces, and the icon (which
-	// may be a double-width Nerd Font glyph). Width alone is a minimum, so an
-	// over-long name would otherwise spill past the border and wrap, producing
-	// phantom rows that break cursor alignment.
-	used := DisplayWidth(marker) + 2 + DisplayWidth(icon)
+	// Budget the row before rendering: the marker column and, when the icons
+	// are on, the icon cell (which may be a double-width Nerd Font glyph). The
+	// icon cell is omitted entirely when there is no glyph, so turning the
+	// icons off lets the names start at the left edge instead of leaving a
+	// gap. Width alone is a minimum, so an over-long name would otherwise
+	// spill past the border and wrap, producing phantom rows that break
+	// cursor alignment.
+	prefix := marker + " "
+	if icon != "" {
+		prefix += icon + " "
+	}
+	used := DisplayWidth(prefix)
 	budget := f.Width - used
 	if budget < 1 {
 		budget = 1
@@ -101,7 +107,7 @@ func (f FileItem) Render() string {
 	}
 	name = TruncateName(name, budget-detailWidth(size, perms))
 
-	left := fmt.Sprintf("%s %s %s", marker, icon, name)
+	left := prefix + name
 	content := left
 
 	// The details have to be pushed to a fixed column rather than trailing the

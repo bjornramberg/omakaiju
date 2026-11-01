@@ -7,6 +7,7 @@ import (
 
 	"github.com/bjornramberg/omakaiju/internal/config"
 	"github.com/bjornramberg/omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/icons"
 	"github.com/bjornramberg/omakaiju/internal/ui"
 
 	tea "charm.land/bubbletea/v2"
@@ -206,6 +207,11 @@ func WithStartup(tracker *StartupTracker) Option {
 }
 
 func NewModel(cfg config.Config, opts ...Option) Model {
+	// The icons package is a leaf, so the app tells it once at startup
+	// whether to draw the Nerd Font glyphs. The config default is to draw
+	// them; OMAKAIJU_NO_ICONS turns them off for a terminal without the font.
+	icons.SetEnabled(!cfg.NoIcons)
+
 	theme, err := config.LoadTheme(cfg.ThemePath)
 	if err != nil {
 		theme = config.DefaultTheme()

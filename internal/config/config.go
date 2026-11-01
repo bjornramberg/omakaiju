@@ -3,11 +3,19 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 type Config struct {
 	// ThemePath is the palette file the app renders its colours from.
 	ThemePath string
+	// NoIcons turns off the Nerd Font glyphs in the file rows, the top bar,
+	// and the archive listing. The font is optional, so a terminal without
+	// it can read clean rows instead of a tofu box in every one. It is read
+	// from OMAKAIJU_NO_ICONS and is off by default, which keeps the icons
+	// that the people who have the font expect.
+	NoIcons bool
 	// ThemeWatchDirs are the directories to watch for palette changes. A theme
 	// switch swaps a symlink rather than rewriting the file, so both the
 	// resolved theme directory and its parent are watched.
@@ -42,9 +50,32 @@ func Load() (Config, error) {
 	cfg := Config{
 		ThemePath:       colorsFile,
 		OmarchyStateDir: state,
+		NoIcons:         iconsDisabled(),
 	}
 	cfg.ThemeWatchDirs = watchDirs(home, colorsFile)
 	return cfg, nil
+}
+
+// noIconsEnv is the environment variable that turns the icons off. It follows
+// the same pattern as OMAKAIJU_COLORS and XDG_DATA_HOME rather than adding a
+// settings file: it is one setting, and the environment is the lightest way to
+// carry it.
+const noIconsEnv = "OMAKAIJU_NO_ICONS"
+
+// iconsDisabled reads OMAKAIJU_NO_ICONS. An unset or empty value keeps the
+// icons on. A value that parses as a boolean follows the bool; anything else
+// is treated as a request to turn them off, so `OMAKAIJU_NO_ICONS=yes` works
+// as a reader would expect.
+func iconsDisabled() bool {
+	v := strings.TrimSpace(os.Getenv(noIconsEnv))
+	if v == "" {
+		return false
+	}
+	off, err := strconv.ParseBool(v)
+	if err != nil {
+		return true
+	}
+	return off
 }
 
 // watchDirs returns the directories whose contents can signal a palette change.

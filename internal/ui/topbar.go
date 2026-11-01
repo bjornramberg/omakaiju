@@ -65,7 +65,12 @@ func joinCells(cells []string, sep string) string {
 // and drops the icon rather than clipping the name.
 func (t TopBar) appName(budget int) string {
 	name := "omakaiju"
-	prefixed := icons.AppIcon + " " + name
+	prefixed := name
+	// With the icons off there is no glyph and no space after it, so the name
+	// itself starts at the bar's left edge.
+	if icon := icons.Glyph(icons.AppIcon); icon != "" {
+		prefixed = icon + " " + name
+	}
 	if budget < DisplayWidth(prefixed) {
 		return t.Theme.AccentText().Bold(true).Render(name)
 	}
@@ -82,7 +87,12 @@ func (t TopBar) Render() string {
 		t.Path = "/"
 	}
 
-	sep := " " + icons.Separator + " "
+	// The separator is a decorative glyph; without it the cells keep a plain
+	// two-space gap so they stay visually distinct.
+	sep := "  "
+	if glyph := icons.Glyph(icons.Separator); glyph != "" {
+		sep = " " + glyph + " "
+	}
 	// Padding and separators are chrome, not content.
 	budget := t.Width - 4
 	if budget < 1 {
