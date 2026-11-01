@@ -125,7 +125,7 @@ func TestLayoutDebugRenderExactFit(t *testing.T) {
 
 		var preview string
 		if !l.PreviewHidden {
-			preview = NewPreview(l.PreviewWidth(), l.PreviewHeight(), theme).RenderFile("", 0)
+			preview = NewPreview(l.PreviewWidth(), l.PreviewHeight(), theme).RenderContent(Content{Kind: KindEmpty})
 		}
 		var debug string
 		if l.DebugVisible() {

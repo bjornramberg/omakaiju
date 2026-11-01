@@ -1,6 +1,10 @@
 package ui
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,5 +160,94 @@ func TestTextPreviewRefusesFIFO(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("text preview blocked on a FIFO instead of refusing it")
+	}
+}
+
+// A normal file previews its contents and says how many lines it has; a file
+// longer than the panel says how many it left out. That is the live path's
+// contract, and it must not change when the duplicate reader goes away.
+func TestTextPreviewShowsContentAndLineCount(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "small.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	c := Load(path, config.DefaultTheme())
+	if c.Kind != KindText {
+		t.Fatalf("Kind = %v, want KindText (Err = %v)", c.Kind, c.Err)
+	}
+	if c.TextTruncated {
+		t.Error("TextTruncated = true for a file under the cap")
+	}
+	if got := strings.Join(c.Text, "\n"); got != "alpha\nbeta\ngamma" {
+		t.Errorf("Text = %q, want the file's three lines", got)
+	}
+
+	p := NewPreview(80, 24, config.DefaultTheme()).SetPath(path)
+	out := stripANSI(p.RenderContent(c))
+	for _, want := range []string{"small.txt", "alpha", "beta", "gamma", "3 lines"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("preview is missing %q:\n%s", want, out)
+		}
+	}
+
+	// More lines than the panel can show: the body is capped and the footer
+	// counts what was left out.
+	var many []string
+	for i := 0; i < 60; i++ {
+		many = append(many, fmt.Sprintf("line %02d", i))
+	}
+	maxVisible := 24 - 8
+	out = stripANSI(p.RenderContent(Content{Kind: KindText, Text: many}))
+	if want := fmt.Sprintf("... (%d more lines)", len(many)-maxVisible); !strings.Contains(out, want) {
+		t.Errorf("preview footer is missing %q:\n%s", want, out)
+	}
+	if !strings.Contains(out, "line 00") {
+		t.Errorf("preview does not show the first lines:\n%s", out)
+	}
+	if strings.Contains(out, fmt.Sprintf("line %02d", maxVisible)) {
+		t.Errorf("preview drew line %d, past the panel's visible rows:\n%s", maxVisible, out)
+	}
+}
+
+// internal/ui must have one way to read a text preview, and it must be the
+// bounded reader. A second, unbounded reader is how the safe one rots: a byte
+// cap was added to one path while the other kept reading a thousand lines of
+// any size. This scans the package's non-test source for the unbounded
+// fs.ReadFileHead call, so reintroducing it fails here.
+func TestPreviewHasOnlyTheBoundedReader(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package directory: %v", err)
+	}
+
+	fset := token.NewFileSet()
+	parsed := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		parsed++
+		ast.Inspect(file, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := sel.X.(*ast.Ident)
+			if ok && ident.Name == "fs" && sel.Sel.Name == "ReadFileHead" {
+				t.Errorf("%s calls fs.ReadFileHead, an unbounded preview reader; use Load/readTextHead instead", name)
+			}
+			return true
+		})
+	}
+	// Guard the guard: if the scan saw no source files it proves nothing.
+	if parsed == 0 {
+		t.Fatal("scanned no package source files")
 	}
 }

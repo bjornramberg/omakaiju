@@ -189,10 +189,12 @@ func TestPreviewHeadersNeverExceedWidth(t *testing.T) {
 		if !noLineExceeds(p.RenderText([]string{"body"}, nil), w) {
 			t.Errorf("width %d: text preview overflowed", w)
 		}
-		if !noLineExceeds(p.RenderMetadata(long), w) {
+		if !noLineExceeds(p.RenderContent(Content{Kind: KindMetadata, Meta: Metadata{
+			Size: 1, Perms: "-rw-r--r--", ModTime: "2026-01-01 00:00:00",
+		}}), w) {
 			t.Errorf("width %d: metadata preview overflowed", w)
 		}
-		if !noLineExceeds(p.RenderDirectory(long), w) {
+		if !noLineExceeds(p.RenderContent(Content{Kind: KindDirectory, Count: 2}), w) {
 			t.Errorf("width %d: directory preview overflowed", w)
 		}
 		if !noLineExceeds(p.ArchiveNotice(long, "unsupported"), w) {
