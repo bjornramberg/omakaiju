@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -66,5 +67,49 @@ func TestVersionFlagRunsAndExitsCleanly(t *testing.T) {
 		if stderr.Len() != 0 {
 			t.Errorf("%s wrote to stderr: %q", flag, stderr.String())
 		}
+	}
+}
+
+// --default is a setup command: it must not load the theme or start the TUI,
+// and it has to write the binding and exit cleanly.
+func TestDefaultFlagRunsAndExitsCleanly(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "omakaiju")
+
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building the binary failed: %v\n%s", err, out)
+	}
+
+	env := append(os.Environ(), "XDG_CONFIG_HOME="+dir)
+	cmd := exec.Command(bin, "--default", "--yes")
+	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("--default --yes exited with %v (stderr: %q)", err, stderr.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "hypr", "bindings.lua"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"omarchy launch tui omakaiju"`) {
+		t.Errorf("--default did not write the binding:\n%s", data)
+	}
+
+	cmd = exec.Command(bin, "--default")
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader("n\n")
+	stdout.Reset()
+	stderr.Reset()
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("--default exited with %v (stderr: %q)", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "run omakaiju --default or edit the ~/.config/hypr/bindings.lua") {
+		t.Errorf("a no answer did not give the way to change it later: %q", stdout.String())
 	}
 }

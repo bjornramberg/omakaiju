@@ -11,9 +11,20 @@ import (
 )
 
 func loadDirCmd(pane int, path string) tea.Cmd {
+	return loadDirModeCmd(pane, path, false)
+}
+
+// loadDirPreservingCmd refreshes a pane without resetting its cursor or its
+// filter. It is the load a watcher event asks for; loadDirCmd remains the
+// navigation and explicit-refresh load, which starts at the top as before.
+func loadDirPreservingCmd(pane int, path string) tea.Cmd {
+	return loadDirModeCmd(pane, path, true)
+}
+
+func loadDirModeCmd(pane int, path string, preserve bool) tea.Cmd {
 	return safeCmd("load-dir", func() tea.Msg {
 		files, err := fs.ReadDir(path)
-		return dirLoadedMsg{pane: pane, path: path, files: files, err: err}
+		return dirLoadedMsg{pane: pane, path: path, files: files, err: err, preserve: preserve}
 	})
 }
 

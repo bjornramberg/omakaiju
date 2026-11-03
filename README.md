@@ -25,7 +25,7 @@ Install the latest prebuilt release with one command:
 curl -fsSL https://raw.githubusercontent.com/bjornramberg/omakaiju/main/install.sh | sh
 ```
 
-The installer detects your architecture (`amd64`/`arm64`), verifies that the release is signed by the project's key, verifies the download against the signed checksums, and atomically places the binary in `~/.local/bin`. It prints the version it installed, so you can see at a glance what you got.
+The installer detects your architecture (`amd64`/`arm64`), verifies that the release is signed by the project's key, verifies the download against the signed checksums, and atomically places the binary in `~/.local/bin`. It prints the version it installed, so you can see at a glance what you got. On Omarchy it also offers to make `omakaiju` the default file manager.
 
 To pin a version instead of taking the latest:
 
@@ -112,7 +112,9 @@ To use `omakaiju` as your default file manager in **Omarchy Quattro** (Hyprland,
 
 1. **Verify PATH:** Ensure `omakaiju` is on your `$PATH` (`command -v omakaiju`).
 
-2. **Rebind Shortcut:** Update `~/.config/hypr/bindings.lua`:
+2. **Make it the default:** Run `omakaiju --default` and confirm. It unbinds the stock `SUPER + SHIFT + F` file-manager shortcut and binds it to omakaiju in `~/.config/hypr/bindings.lua`. The installer offers the same choice after it installs.
+
+   To edit the file yourself instead, add:
 
    ```lua
    hl.unbind("SUPER + SHIFT + F")

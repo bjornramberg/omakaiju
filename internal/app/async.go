@@ -101,6 +101,42 @@ func (m Model) waitThemeCmd() tea.Cmd {
 	})
 }
 
+// waitDirCmd blocks until something changes under a watched pane directory
+// and reports it. It is one-shot like the theme wait: Update re-arms it after
+// every message, so there is exactly one wait reading the watcher at a time.
+//
+// The path is reported rather than a pane or a listing: a directory can change
+// while the pane showing it is still loading somewhere else, and the decision
+// of whether the pane still cares belongs to the model that receives it, not
+// to a command that captured the model when it started.
+func (m Model) waitDirCmd() tea.Cmd {
+	watcher := m.dirWatcher
+	if watcher == nil {
+		return nil
+	}
+	return safeCmd("dir-watch", func() tea.Msg {
+		for {
+			select {
+			case event, ok := <-watcher.Events():
+				if !ok {
+					return dirChangedMsg{closed: true}
+				}
+				if event.Name == "" {
+					continue
+				}
+				return dirChangedMsg{path: event.Name}
+			case err, ok := <-watcher.Errors():
+				if !ok {
+					return dirChangedMsg{closed: true}
+				}
+				if err != nil {
+					return dirChangedMsg{err: err}
+				}
+			}
+		}
+	})
+}
+
 // relevantThemeEvent reports whether an fsnotify event concerns the palette.
 // A theme switch re-points the omarchy symlink rather than rewriting the file,
 // so events under the state directory count too.

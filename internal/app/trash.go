@@ -85,10 +85,13 @@ func (m Model) handleConfirmEmptyTrash(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// quit ends the session, closing the theme watcher the model owns.
+// quit ends the session, closing the watchers the model owns.
 func (m Model) quit() (tea.Model, tea.Cmd) {
 	if m.themeWatcher != nil {
 		m.themeWatcher.Close()
+	}
+	if m.dirWatcher != nil {
+		m.dirWatcher.Close()
 	}
 	return m, tea.Quit
 }

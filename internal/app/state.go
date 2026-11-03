@@ -1,6 +1,8 @@
 package app
 
 import (
+	"path/filepath"
+
 	"github.com/bjornramberg/omakaiju/internal/fs"
 	"github.com/bjornramberg/omakaiju/internal/nav"
 
@@ -79,6 +81,83 @@ func (m *Model) reloadPaneCmd(pane int) tea.Cmd {
 // ends with.
 func (m *Model) reloadPanesCmd() tea.Cmd {
 	return tea.Batch(m.reloadPaneCmd(0), m.reloadPaneCmd(1))
+}
+
+// refreshPaneCmd reloads a pane after something outside the app changed its
+// directory. Unlike an explicit refresh, it keeps the cursor on the entry the
+// user was looking at and leaves an active filter in place: an unrelated file
+// appearing on disk must not move the selection or undo a search.
+func (m *Model) refreshPaneCmd(pane int) tea.Cmd {
+	return loadDirPreservingCmd(pane, m.targetPath(pane))
+}
+
+// watchedPath reports the directory a pane has registered with the watcher.
+func (m Model) watchedPath(pane int) string {
+	if pane == 0 {
+		return m.leftWatched
+	}
+	return m.rightWatched
+}
+
+func (m *Model) setWatchedPath(pane int, path string) {
+	if pane == 0 {
+		m.leftWatched = path
+	} else {
+		m.rightWatched = path
+	}
+}
+
+// otherWatchedPath reports the directory the other pane has registered. It is
+// how a directory both panes show stays watched when only one of them leaves
+// it.
+func (m Model) otherWatchedPath(pane int) string {
+	if pane == 0 {
+		return m.rightWatched
+	}
+	return m.leftWatched
+}
+
+// followPaneWatch points a pane's watcher at the directory it now shows. The
+// old directory is dropped once neither pane is using it.
+//
+// Registration is best effort: a directory can vanish between the listing
+// that selected it and the watch that follows it, and that is not a reason to
+// turn a successful navigation into an error. The next load will try again.
+func (m *Model) followPaneWatch(pane int, path string) {
+	if m.dirWatcher == nil || path == "" {
+		return
+	}
+	path = filepath.Clean(path)
+	old := m.watchedPath(pane)
+	other := m.otherWatchedPath(pane)
+	if old == path {
+		return
+	}
+
+	m.setWatchedPath(pane, path)
+	if old != "" && old != other {
+		_ = m.dirWatcher.Remove(old)
+	}
+	if path != other {
+		_ = m.dirWatcher.Watch(path)
+	}
+}
+
+// panesShowing reports which panes display a directory affected by a watcher
+// event. fsnotify names the entry that changed, so the directory is its
+// parent; an event whose own name is a pane's directory counts as well for
+// changes to the directory itself.
+func (m Model) panesShowing(eventPath string) []int {
+	dir := filepath.Clean(filepath.Dir(eventPath))
+	eventPath = filepath.Clean(eventPath)
+	panes := make([]int, 0, 2)
+	for _, pane := range []int{0, 1} {
+		target := filepath.Clean(m.targetPath(pane))
+		if dir == target || eventPath == target {
+			panes = append(panes, pane)
+		}
+	}
+	return panes
 }
 
 func (m Model) filterOf(pane int) string {

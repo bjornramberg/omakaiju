@@ -44,6 +44,16 @@ func main() {
 		}
 	}
 
+	// --default is a setup command, not a session: handle it before the
+	// theme and the terminal are touched, and leave without starting the TUI.
+	if handled, err := maybeMakeDefault(os.Args[1:], os.Stdin, os.Stdout); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "omakaiju: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "omakaiju: %v\n", err)

@@ -17,6 +17,22 @@ type dirLoadedMsg struct {
 	path  string
 	files []fs.Entry
 	err   error
+	// preserve keeps the pane's cursor and filter across the load. It is set
+	// for a refresh caused by a change on disk, where an unrelated entry
+	// appearing must not undo what the user was doing.
+	preserve bool
+}
+
+// dirChangedMsg reports a change under a watched pane directory. Only the
+// path fsnotify named is carried: whether a pane cares about it is decided
+// against the model's current paths, because the pane may have moved on while
+// the wait was blocked.
+type dirChangedMsg struct {
+	path string
+	err  error
+	// closed reports that the watcher was shut down for good and cannot be
+	// waited on again.
+	closed bool
 }
 
 // opFailure is one entry a file operation could not finish, with the reason
