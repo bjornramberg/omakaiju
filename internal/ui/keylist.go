@@ -80,13 +80,15 @@ func (k KeyList) BoxWidth() int {
 	return w
 }
 
-// contentWidth is the space inside the border and padding. Empirically the
-// style's Width() sizes the whole block including the border (a panel built
-// at 90 cells renders a 90-cell outer box with 84 content cells inside), so
-// both are subtracted here — omitting the border showed up as phantom wraps
-// on rows two cells "inside" what the math had promised.
+// contentWidth is the space inside the border and padding.
+//
+// It is also the width lipgloss wraps the content at: the style is given the
+// panel's full outer width, and lipgloss takes the border and the padding
+// out of that before wrapping. Rows built to this width therefore fill the
+// panel exactly, instead of overflowing it and growing the panel past its
+// own border.
 func (k KeyList) contentWidth() int {
-	w := k.BoxWidth() - 8 /*border + padding, see comment*/
+	w := k.BoxWidth() - 2 /*border*/ - 4 /*padding*/
 	if w < 1 {
 		w = 1
 	}
@@ -323,6 +325,15 @@ func (k KeyList) Render() string {
 	// The key column stays anchored on the unfiltered widths so the
 	// description column does not dance between keystrokes.
 	keyCol := keyColumnWidth(k.baseRows())
+	// A narrow panel gets a narrower key column rather than a row that
+	// overflows it. The column and the description have to share the row, so
+	// the key column gives up the cells the description needs.
+	if limit := k.contentWidth() - 4; keyCol > limit {
+		keyCol = limit
+	}
+	if keyCol < 1 {
+		keyCol = 1
+	}
 	// One spare cell keeps the composed row clear of the style's internal
 	// padding arithmetic — the widest line stays one cell inside the
 	// content edge rather than riding it, so nothing ever re-wraps.
@@ -370,13 +381,20 @@ func (k KeyList) Render() string {
 	}
 
 	// The footer keeps the same shape as the finder: position first, then
-	// hints, so a user fluent in one panel is fluent in the other.
-	var parts []string
+	// hints, so a user fluent in one panel is fluent in the other. The hints
+	// are given up, least important first, when the panel is too narrow to
+	// hold them all, because a footer that wrapped would push the rows
+	// around.
+	pieces := []statusPiece{}
 	if totalSelectable > 0 {
-		parts = append(parts, fmt.Sprintf("%d/%d", cursor+1, totalSelectable))
+		pieces = append(pieces, statusPiece{Text: fmt.Sprintf("%d/%d", cursor+1, totalSelectable)})
 	}
-	parts = append(parts, "type to search", "up/down:move", "esc:close")
-	footer := k.Theme.StatusText().Render(strings.Join(parts, " | "))
+	pieces = append(pieces,
+		statusPiece{Text: "type to search", Drop: 1},
+		statusPiece{Text: "up/down:move", Drop: 2},
+		statusPiece{Text: "esc:close"},
+	)
+	footer := k.Theme.StatusText().Render(statusLine(pieces, k.contentWidth()))
 
 	lines := []string{header, "", prompt + input, ""}
 	lines = append(lines, rowLines...)
@@ -402,11 +420,12 @@ func (k KeyList) Render() string {
 		}
 	}
 
-	// Border plus two columns wider, word for word the finder's outer
-	// sizing so the window never exceeds the terminal.
+	// The style's Width is the panel's outer width, border included, so the
+	// panel occupies exactly the space BoxWidth promises — word for word the
+	// finder's outer sizing, so the two windows never exceed the terminal.
 	return style.
-		Width(k.BoxWidth() - 2).
-		MaxWidth(k.BoxWidth() - 2).
+		Width(k.BoxWidth()).
+		MaxWidth(k.BoxWidth()).
 		Render(strings.Join(lines, "\n"))
 }
 
@@ -458,17 +477,25 @@ func (k KeyList) renderItem(it renderItem, active bool, keyCol, descW int, query
 	switch it.kind {
 	case itemHeader:
 		label := sectionHeaders[it.section] + ":"
-		return k.Theme.AccentText().Bold(true).Render(" " + label)
+		return k.Theme.AccentText().Bold(true).Render(k.fit(" " + label))
 	case itemSeparator:
-		// Fixed-width separator matching the longest header (same tone as footer)
-		sep := sectionSep
-		return k.Theme.StatusText().Render(" " + sep)
+		// Fixed-width separator matching the longest header (same tone as
+		// footer), but never wider than the panel: a line that overflowed
+		// the content would grow the panel past its own border and cut the
+		// right edge off.
+		return k.Theme.StatusText().Render(k.fit(" " + sectionSep))
 	case itemBlank:
 		return ""
 	case itemKeyRow:
 		return k.renderRow(it.row, active, keyCol, descW, query)
 	}
 	return ""
+}
+
+// fit clips a line to the content width, so no line can grow the panel past
+// its own border.
+func (k KeyList) fit(line string) string {
+	return TruncateEnd(line, k.contentWidth())
 }
 
 // renderRow shows the key prominent with the description right-aligned

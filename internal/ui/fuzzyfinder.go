@@ -63,6 +63,12 @@ func (f FuzzyFinder) BoxWidth() int {
 }
 
 // contentWidth is the space inside the border and padding.
+//
+// It is also the width lipgloss wraps the content at: the style is given the
+// panel's full outer width, and lipgloss takes the border and the padding
+// out of that before wrapping. Rows built to this width therefore fill the
+// panel exactly, instead of overflowing it by a couple of cells and spilling
+// onto a second line.
 func (f FuzzyFinder) contentWidth() int {
 	w := f.BoxWidth() - 2 /*border*/ - 4 /*padding*/
 	if w < 1 {
@@ -179,18 +185,7 @@ func (f FuzzyFinder) Render() string {
 		}
 	}
 
-	parts := []string{}
-	if pos := f.position(); pos != "" {
-		parts = append(parts, pos)
-	}
-	if f.Truncated {
-		// The walk stopped at its limit, so the results cover only part of
-		// the tree. Saying so is better than letting the user believe a
-		// missing file does not exist.
-		parts = append(parts, "partial results")
-	}
-	parts = append(parts, "j/k:nav", "enter:select", "esc:cancel")
-	footer := f.Theme.StatusText().Render(strings.Join(parts, " | "))
+	footer := f.Theme.StatusText().Render(f.footer(contentWidth))
 
 	lines := []string{header, "", prompt + input, ""}
 	lines = append(lines, rows...)
@@ -220,13 +215,43 @@ func (f FuzzyFinder) Render() string {
 
 	content := strings.Join(lines, "\n")
 
-	// Width here is the panel's content width; the border adds two more cells,
-	// so the outer bound is applied separately to keep the box inside the
-	// terminal rather than two columns past it.
+	// The style's Width is the panel's outer width, border included, so the
+	// panel occupies exactly the space BoxWidth promises. Passing a smaller
+	// number would both narrow the panel and leave lipgloss wrapping the
+	// content two cells early, which pushed the tail of a full row onto a
+	// second line.
 	return style.
-		Width(f.BoxWidth() - 2).
-		MaxWidth(f.BoxWidth() - 2).
+		Width(f.BoxWidth()).
+		MaxWidth(f.BoxWidth()).
 		Render(content)
+}
+
+// footer is the status line under the list: where the cursor is, whether the
+// results are complete, and the keys that drive the finder.
+//
+// The hints are given up, least important first, when the panel is too narrow
+// to hold them all. The position and the cancel hint are never given up: they
+// are what tells the user where they are and how to get out.
+//
+// The navigation hint names the arrows rather than j and k, because those two
+// letters are part of the query now: pressing them searches for them.
+func (f FuzzyFinder) footer(width int) string {
+	pieces := []statusPiece{}
+	if pos := f.position(); pos != "" {
+		pieces = append(pieces, statusPiece{Text: pos})
+	}
+	if f.Truncated {
+		// The walk stopped at its limit, so the results cover only part of
+		// the tree. Saying so is better than letting the user believe a
+		// missing file does not exist.
+		pieces = append(pieces, statusPiece{Text: "partial results", Drop: 2})
+	}
+	pieces = append(pieces,
+		statusPiece{Text: "up/down:nav", Drop: 1},
+		statusPiece{Text: "enter:select", Drop: 3},
+		statusPiece{Text: "esc:cancel"},
+	)
+	return statusLine(pieces, width)
 }
 
 // position describes where the cursor sits, without implying a selection exists
