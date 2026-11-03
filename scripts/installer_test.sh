@@ -10,7 +10,8 @@
 # part that must stay out of the way: a pipe gets plain lines with no escape
 # sequences, a terminal gets tick-boxes that leave no spinner frame behind,
 # NO_COLOR and the Nerd Font guess behave, and a failed run leaves nothing in
-# the temporary directory.
+# the temporary directory. The question about making omakaiju the default
+# file manager is tested in both directions.
 #
 # Run it from the repository root:
 #   sh scripts/installer_test.sh
@@ -53,6 +54,9 @@ openssl genpkey -algorithm ED25519 -out "$WORK/other-key.pem" 2>/dev/null
 cat >"$WORK/omakaiju" <<'EOF'
 #!/bin/sh
 echo "omakaiju v9.9.9"
+if [ "${1:-}" = "--default" ]; then
+  printf '%s\n' "$*" >>"${OMAKAIJU_TEST_LOG:-/dev/null}"
+fi
 EOF
 chmod 0755 "$WORK/omakaiju"
 tar czf "$REL/omakaiju_linux_amd64.tar.gz" -C "$WORK" omakaiju
@@ -104,8 +108,8 @@ install_run() {
   rm -rf "$prefix"
   out="$WORK/out.txt"
   set +e
-  env "$@" OMAKAIJU_PREFIX="$prefix" OMAKAIJU_BASE_URL="$BASE" \
-    sh "$WORK/install.sh" "$TAG" >"$out" 2>&1
+  env "$@" OMAKAIJU_NO_PROMPT=1 OMAKAIJU_PREFIX="$prefix" \
+    OMAKAIJU_BASE_URL="$BASE" sh "$WORK/install.sh" "$TAG" >"$out" 2>&1
   got=$?
   set -e
   if [ "$got" != "$want" ]; then
@@ -201,11 +205,19 @@ args = sys.argv[4:]
 master, slave = pty.openpty()
 proc = subprocess.Popen(
     ["sh", script] + args,
-    stdin=subprocess.DEVNULL,
+    stdin=slave,
     stdout=slave,
     stderr=slave,
 )
 os.close(slave)
+
+# The answer to the installer's question, when a test provides one. It is
+# written to the master before the question is asked; the pty holds it until
+# the installer reads.
+answer_file = os.environ.get("PTY_INPUT_FILE")
+if answer_file:
+    with open(answer_file, "rb") as f:
+        os.write(master, f.read())
 
 chunks = []
 deadline = time.time() + 120
@@ -250,8 +262,9 @@ pty_run() {
   shift 2
   prefix="$WORK/prefix"
   rm -rf "$prefix"
-  env "$@" OMAKAIJU_PREFIX="$prefix" OMAKAIJU_BASE_URL="$BASE" \
-    python3 "$WORK/pty_run.py" "$WORK/install.sh" "$outfile" "$want" "$TAG"
+  env "$@" OMAKAIJU_NO_PROMPT=1 OMAKAIJU_PREFIX="$prefix" \
+    OMAKAIJU_BASE_URL="$BASE" python3 "$WORK/pty_run.py" \
+    "$WORK/install.sh" "$outfile" "$want" "$TAG"
 }
 
 # 7. A terminal run draws tick-boxes and ends clean: the spinner's line is
@@ -350,5 +363,53 @@ if [ -e "$WORK/prefix/bin/omakaiju" ]; then
   fail "a refused release left a binary behind"
 fi
 pass "a failed signature leaves no temporary files behind"
+
+# A valid signed release again, for the question about the default file
+# manager below.
+( cd "$REL" && sha256sum omakaiju_linux_amd64.tar.gz >checksums.txt )
+sign "$WORK/test-key.pem"
+
+# 11. When Omarchy's bindings file is present, the installer asks whether to
+#     make omakaiju the default file manager. A terminal install that answers
+#     "n" leaves the binding alone and points at the two ways to do it later.
+PROMPT_HOME="$WORK/prompt-home"
+mkdir -p "$PROMPT_HOME/.config/hypr"
+printf '%s\n' '-- my bindings' >"$PROMPT_HOME/.config/hypr/bindings.lua"
+printf 'n\n' >"$WORK/answer-no"
+printf 'y\n' >"$WORK/answer-yes"
+
+install_prompt_run() {
+  # install_prompt_run OUTFILE ANSWER_FILE LOG
+  outfile="$1"
+  answer="$2"
+  log="$3"
+  prefix="$WORK/prefix"
+  rm -rf "$prefix"
+  rm -f "$log"
+  env HOME="$PROMPT_HOME" PTY_INPUT_FILE="$answer" \
+    OMAKAIJU_TEST_LOG="$log" OMAKAIJU_PREFIX="$prefix" \
+    OMAKAIJU_BASE_URL="$BASE" TERM=xterm-256color TERM_PROGRAM=WezTerm \
+    python3 "$WORK/pty_run.py" "$WORK/install.sh" "$outfile" 0 "$TAG"
+}
+
+install_prompt_run "$WORK/prompt-no.txt" "$WORK/answer-no" "$WORK/default-no.log"
+grep -q "Would you like omakaiju to be the default file manager" "$WORK/prompt-no.txt" ||
+  fail "the installer did not ask about the default file manager"
+grep -q "run omakaiju --default or edit the ~/.config/hypr/bindings.lua" "$WORK/prompt-no.txt" ||
+  fail "a no answer did not point at the ways to change it later"
+if [ -s "$WORK/default-no.log" ]; then
+  fail "a no answer still tried to change the binding"
+fi
+if grep -q "omakaiju launch tui omakaiju" "$PROMPT_HOME/.config/hypr/bindings.lua"; then
+  fail "a no answer changed the bindings file"
+fi
+pass "the installer asks about the default file manager and respects no"
+
+# 12. A yes answer hands the change to the installed binary, which is the one
+#     component that knows what the binding should be.
+install_prompt_run "$WORK/prompt-yes.txt" "$WORK/answer-yes" "$WORK/default-yes.log"
+grep -q -- "--default --yes" "$WORK/default-yes.log" ||
+  fail "a yes answer did not run omakaiju --default"
+pass "a yes answer runs omakaiju --default"
 
 echo "installer tests passed"
