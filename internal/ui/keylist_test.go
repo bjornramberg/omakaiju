@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -122,8 +123,80 @@ func TestKeyListClipsLongRows(t *testing.T) {
 	}
 	out := k.Render()
 	for _, line := range strings.Split(out, "\n") {
-		if w := DisplayWidth(line); w > k.BoxWidth()-2 {
-			t.Errorf("row overflows the panel: %d > %d", w, k.BoxWidth()-2)
+		if w := DisplayWidth(line); w > k.BoxWidth() {
+			t.Errorf("row overflows the panel: %d > %d", w, k.BoxWidth())
+		}
+	}
+}
+
+// The panel must keep its border at any width.
+//
+// A line that overflowed the content grew the panel past its own border, and
+// the border was then cut off: the overlay came out with an open right edge
+// on a narrow terminal, which read as a broken window.
+func TestKeyListKeepsItsBorderOnNarrowTerminals(t *testing.T) {
+	theme := config.DefaultTheme()
+
+	for _, w := range []int{24, 30, 40, 60, 100, 200} {
+		k := NewKeyList(w, 40, theme)
+
+		lines := strings.Split(stripANSI(k.Render()), "\n")
+		for i, line := range lines {
+			if got := DisplayWidth(line); got != k.BoxWidth() {
+				t.Errorf("width %d: row %d is %d cells, want %d", w, i, got, k.BoxWidth())
+			}
+		}
+		if !strings.HasSuffix(lines[0], "╮") {
+			t.Errorf("width %d: the top border is %q, want it closed on the right", w, lines[0])
+		}
+	}
+}
+
+// The panel's height must not depend on its width.
+//
+// A line that was too wide for the panel wrapped onto a second line, so the
+// panel grew taller the narrower the terminal got. The footer was the usual
+// culprit: it was never bounded, so it took three lines on a narrow terminal
+// and pushed the rows around.
+func TestKeyListHeightDoesNotDependOnItsWidth(t *testing.T) {
+	theme := config.DefaultTheme()
+
+	wide := NewKeyList(100, 40, theme)
+	want := strings.Count(stripANSI(wide.Render()), "\n") + 1
+
+	for _, w := range []int{24, 30, 40, 60} {
+		k := NewKeyList(w, 40, theme)
+		got := strings.Count(stripANSI(k.Render()), "\n") + 1
+		if got != want {
+			t.Errorf("width %d: panel has %d lines, want %d", w, got, want)
+		}
+	}
+}
+
+// The footer must be one line. A footer that wrapped pushed the rows around,
+// so a narrow panel gives up hints instead of taking another line.
+func TestKeyListFooterNeverWraps(t *testing.T) {
+	theme := config.DefaultTheme()
+	position := fmt.Sprintf("1/%d", len(TableKeyRows()))
+
+	for _, w := range []int{24, 30, 40, 60, 100} {
+		k := NewKeyList(w, 40, theme)
+
+		plain := stripANSI(k.Render())
+		found := false
+		for _, line := range strings.Split(plain, "\n") {
+			if !strings.Contains(line, "esc:close") {
+				continue
+			}
+			found = true
+			// The position and the cancel hint are never given up, so a
+			// footer that holds both is a footer that did not wrap.
+			if !strings.Contains(line, position) {
+				t.Errorf("width %d: the footer wrapped: %q", w, line)
+			}
+		}
+		if !found {
+			t.Errorf("width %d: the footer is missing:\n%s", w, plain)
 		}
 	}
 }
