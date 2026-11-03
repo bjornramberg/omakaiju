@@ -13,18 +13,22 @@ Nothing here is private: no keys, no secrets, no paths from anyone's machine.
 These are the findings of the release review, and they are issues rather than
 lines here, because each one is a hole someone could walk through:
 
-* a symlink in the destination path turns a paste into an arbitrary write
-* the rename and delete prompts put raw filename bytes into the terminal
-* the theme file is read without a limit and can hang or exhaust memory
-* restore trusts the trash's own records and can be pointed anywhere
-* the home trash is not checked the way the per-filesystem trash is
-* the installer can be made to run a binary it did not verify
-* a tarball member can be a symlink, and the installer follows it
-* pasting over an existing file replaces it without asking
-* the question on exit is unreadable at small widths, and Enter still means yes
-* "force" is the label for deleting something permanently
-* the release pipeline signs with a tool it fetches at run time
-* a release can be published without the CI gate having passed
+* **#44** a hostile filename must not reach the disk or the terminal — a
+  symlink in the destination path turns a paste into an arbitrary write, and
+  the rename and delete prompts put raw filename bytes into the terminal
+* **#46** the theme file is read without a limit and can hang or exhaust
+  memory at startup
+* **#47** the trash must be checked the same way everywhere — the home trash
+  is not checked the way the per-filesystem trash is, and restore trusts the
+  trash's own records
+* **#49** the installer must only install what it verified — the unsigned
+  opt-out is a full bypass, a tarball member can be a symlink, and the
+  release's own toolchain is fetched at run time
+* **#51** the interface must say what a destructive action will do — pasting
+  over an existing file replaces it without asking, the question on exit is
+  unreadable at small widths while Enter still means yes, and "force" is the
+  label for deleting something permanently
+* **#54** the release pipeline still fetches its tooling at run time
 
 ## Security and robustness — still to fix
 
