@@ -156,7 +156,6 @@ Ordered by how much they cost the user, with the rough size of each.
   clipboard (small).
 * **Emptying the trash from the interface, for every filesystem** (small
   once the trash view exists).
-* **The panes refresh when something changes on disk** (small to medium).
 * **Bookmarks and places** (small).
 * **A properties overlay** — owner, group, inode, link target (small to
   medium).

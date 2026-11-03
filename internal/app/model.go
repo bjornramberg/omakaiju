@@ -86,7 +86,15 @@ type Model struct {
 	leftRestore  string
 	rightRestore string
 
-	themeWatcher  *fs.Watcher
+	themeWatcher *fs.Watcher
+	// dirWatcher notices changes to the directories the panes are showing, so
+	// a file created, removed or renamed by another program appears in the
+	// listing without the user leaving and re-entering the directory.
+	// leftWatched/rightWatched remember what each pane has added to it, so a
+	// directory both panes show is only registered once.
+	dirWatcher    *fs.Watcher
+	leftWatched   string
+	rightWatched  string
 	previewPath   string
 	previewHidden bool
 
@@ -263,6 +271,15 @@ func NewModel(cfg config.Config, opts ...Option) Model {
 		}
 	}
 
+	// The pane watcher is separate from the theme watcher: the theme wait
+	// consumes every event it sees, and a directory event reaching it would
+	// make a palette reload out of something that never touched the palette.
+	if watcher, err := fs.NewWatcher(); err == nil {
+		m.dirWatcher = watcher
+		m.followPaneWatch(0, m.leftPath)
+		m.followPaneWatch(1, m.rightPath)
+	}
+
 	return m
 }
 
@@ -271,6 +288,7 @@ func (m Model) Init() tea.Cmd {
 		loadDirCmd(0, m.leftPath),
 		loadDirCmd(1, m.rightPath),
 		m.waitThemeCmd(),
+		m.waitDirCmd(),
 		splashTickCmd(),
 	)
 }
