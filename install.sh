@@ -204,6 +204,36 @@ warn() {
   fi
 }
 
+# ask_yes_no QUESTION -- ask a yes/no question, with Enter meaning no.
+#
+# A piped install (`curl ... | sh`) leaves standard input attached to the
+# script, not to the terminal, so the answer is read from the controlling
+# terminal when one is available. With no terminal to ask on the question is
+# skipped: an installer run from a service or a test must not block.
+#
+# Returns 0 for yes, 1 for no, and 2 when there is no terminal to ask on.
+ask_yes_no() {
+  if [ "${OMAKAIJU_NO_PROMPT:-}" = "1" ]; then
+    return 2
+  fi
+
+  if [ -t 0 ]; then
+    printf '  ? %s [y/n] (enter = no) ' "$1"
+    IFS= read -r answer || answer=""
+  elif [ "$TTY" = 1 ] && { exec 3</dev/tty; } 2>/dev/null; then
+    printf '  ? %s [y/n] (enter = no) ' "$1"
+    IFS= read -r answer <&3 || answer=""
+    exec 3<&-
+  else
+    return 2
+  fi
+
+  case "$answer" in
+    y|Y|yes|YES|Yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # nerd_font_check -- warn when the terminal probably cannot draw the icons.
 #
 # This is a guess and is worded as one: the script cannot see which font the
@@ -537,3 +567,20 @@ case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;
   *) echo "    NB: $PREFIX/bin is not on your PATH — add it to your shell profile." ;;
 esac
+
+# Omarchy Quattro keeps its keybindings in ~/.config/hypr/bindings.lua. Offer
+# to point the stock file-manager shortcut at omakaiju. The answer is applied
+# by the binary itself, so the installer and `omakaiju --default` cannot
+# disagree about what the binding should be.
+if ask_yes_no "Would you like omakaiju to be the default file manager for this user?"; then
+  if "$PREFIX/bin/$BIN_NAME" --default --yes; then
+    :
+  else
+    warn "could not make omakaiju the default file manager; run omakaiju --default to try again."
+  fi
+else
+  answer_status=$?
+  if [ "$answer_status" -eq 1 ]; then
+    echo "    If you change your mind, either run omakaiju --default or edit the ~/.config/hypr/bindings.lua file directly."
+  fi
+fi
