@@ -151,6 +151,18 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Follow the directory whose rows are now on screen.
 		m.followPaneWatch(msg.pane, msg.path)
 		if msg.preserve {
+			// An operation names the entry its result belongs on. That wins
+			// over the place the pane was showing before the reload, because
+			// the operation may have created, renamed or removed it.
+			if name := m.restoreOf(msg.pane); name != "" {
+				for i, f := range m.visibleFiles(msg.pane) {
+					if f.Name == name {
+						m.setCursor(msg.pane, i)
+						m.clampCursor(msg.pane)
+						return m, m.updatePreview()
+					}
+				}
+			}
 			placed := false
 			for i, f := range m.visibleFiles(msg.pane) {
 				if oldName != "" && f.Name == oldName {

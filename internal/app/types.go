@@ -18,8 +18,9 @@ type dirLoadedMsg struct {
 	files []fs.Entry
 	err   error
 	// preserve keeps the pane's cursor and filter across the load. It is set
-	// for a refresh caused by a change on disk, where an unrelated entry
-	// appearing must not undo what the user was doing.
+	// for a refresh caused by a change on disk and for the reload after an
+	// operation, where neither an unrelated entry appearing nor a file being
+	// moved or removed must undo what the user was doing.
 	preserve bool
 }
 

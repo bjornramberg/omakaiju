@@ -77,10 +77,15 @@ func (m *Model) reloadPaneCmd(pane int) tea.Cmd {
 	return m.beginLoad(pane, m.targetPath(pane))
 }
 
-// reloadPanesCmd refreshes both panes. It is the reload every file operation
-// ends with.
+// reloadPanesCmd refreshes both panes after a file operation. It keeps each
+// pane's cursor and filter, so an operation on one entry does not throw the
+// user back to the top of the listing. A restore set by the operation — the
+// entry it created, renamed, or landed next to — still wins.
 func (m *Model) reloadPanesCmd() tea.Cmd {
-	return tea.Batch(m.reloadPaneCmd(0), m.reloadPaneCmd(1))
+	return tea.Batch(
+		loadDirPreservingCmd(0, m.targetPath(0)),
+		loadDirPreservingCmd(1, m.targetPath(1)),
+	)
 }
 
 // refreshPaneCmd reloads a pane after something outside the app changed its
@@ -323,6 +328,9 @@ func (m *Model) clampCursor(pane int) {
 	m.setCursor(pane, cursor)
 }
 
+// loadActive refreshes the active pane after an operation. It preserves the
+// pane's place, and a restore set by the operation lands the cursor on the
+// entry it produced.
 func (m Model) loadActive() tea.Cmd {
-	return m.reloadPaneCmd(m.activePane)
+	return loadDirPreservingCmd(m.activePane, m.targetPath(m.activePane))
 }

@@ -45,8 +45,44 @@ func (m *Model) recordOpResult(msg fileOpMsg) {
 		m.opErr = errors.New(msg.result())
 		return
 	}
+	m.landAfterRemoval(msg)
 	m.opErr = nil
 	m.opResult = msg.result()
+}
+
+// landAfterRemoval keeps the cursor on the row a deleted or trashed entry
+// occupied, so the listing does not jump back to the top. The entry that takes
+// its place is selected; at the end of the listing the one before it is.
+func (m *Model) landAfterRemoval(msg fileOpMsg) {
+	if msg.succeeded != 1 || (msg.verb != "deleted" && msg.verb != "trashed") {
+		return
+	}
+	pane := m.activePane
+	files := m.visibleFiles(pane)
+	cursor := m.rawCursor(pane)
+	if cursor >= len(files) {
+		return
+	}
+	// The operation's entry is the one that was under the cursor when it
+	// started. If the user moved since, find it by name instead.
+	if msg.name != "" && files[cursor].Name != msg.name {
+		found := -1
+		for i, f := range files {
+			if f.Name == msg.name {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			return
+		}
+		cursor = found
+	}
+	if cursor+1 < len(files) {
+		m.setRestore(pane, files[cursor+1].Name)
+	} else if cursor > 0 {
+		m.setRestore(pane, files[cursor-1].Name)
+	}
 }
 
 // restoreSelection puts back what a failed operation consumed: the marked
