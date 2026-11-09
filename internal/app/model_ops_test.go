@@ -367,6 +367,28 @@ func TestRenameRenamesEntry(t *testing.T) {
 	}
 }
 
+// A rename leaves the cursor on the new name instead of reloading the pane at
+// the top of the listing, so the entry the user just renamed stays in view.
+func TestRenameLandsCursorOnRenamedEntry(t *testing.T) {
+	m, _ := fixture(t)
+	m = moveCursorTo(t, m, "alpha.txt")
+
+	updated, _ := m.Update(shiftKey('r'))
+	m = updated.(Model)
+	for i := 0; i < len("alpha.txt"); i++ {
+		updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+		m = updated.(Model)
+	}
+	m = typeString(t, m, "zzz.txt")
+	m, cmd := enter(t, m)
+	if cmd == nil {
+		t.Fatal("rename should reload the pane")
+	}
+
+	m = loadDir(t, m, 0)
+	wantCursorOn(t, m, 0, "zzz.txt")
+}
+
 func TestRenameEscapeCancels(t *testing.T) {
 	m, dir := fixture(t)
 
@@ -1519,6 +1541,24 @@ func TestDeleteForceRemovesPermanently(t *testing.T) {
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Error("force delete should remove the file")
+	}
+}
+
+// Deleting an entry keeps the cursor near where it was instead of jumping
+// back to the top. The row the removed entry occupied now holds its neighbour.
+func TestDeleteLandsCursorOnNextEntry(t *testing.T) {
+	m, _ := fixture(t)
+	m = stageDelete(t, m, "alpha.txt")
+
+	updated, cmd := m.Update(key('f'))
+	m = updated.(Model)
+	msgs := runBatch(t, cmd)
+	requireNoOpErrors(t, msgs)
+	m = applyOps(t, m, msgs)
+	m = loadDir(t, m, 0)
+
+	if got := m.visibleFiles(0)[m.rawCursor(0)].Name; got != "beta.txt" {
+		t.Errorf("cursor is on %q, want beta.txt", got)
 	}
 }
 

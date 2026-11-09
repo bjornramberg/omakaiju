@@ -15,8 +15,9 @@ func loadDirCmd(pane int, path string) tea.Cmd {
 }
 
 // loadDirPreservingCmd refreshes a pane without resetting its cursor or its
-// filter. It is the load a watcher event asks for; loadDirCmd remains the
-// navigation and explicit-refresh load, which starts at the top as before.
+// filter. It is the load a watcher event and a file operation ask for;
+// loadDirCmd remains the navigation and explicit-refresh load, which starts at
+// the top as before.
 func loadDirPreservingCmd(pane int, path string) tea.Cmd {
 	return loadDirModeCmd(pane, path, true)
 }

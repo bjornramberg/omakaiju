@@ -164,6 +164,9 @@ func (m Model) commitInput() (tea.Model, tea.Cmd) {
 		if err != nil {
 			return m, nil
 		}
+		// Keep the renamed entry highlighted under the cursor instead of
+		// letting the reload start again at the top of the listing.
+		m.setRestore(m.activePane, name)
 		return m, m.loadActive()
 	}
 
