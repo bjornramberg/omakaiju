@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"strings"
 
 	"github.com/bjornramberg/omakaiju/internal/config"
 	"github.com/bjornramberg/omakaiju/internal/icons"
@@ -11,7 +12,10 @@ type TopBar struct {
 	Width  int
 	Path   string
 	Filter string
-	Theme  config.Theme
+	// Host overrides the machine name, mainly so tests can pin the display.
+	// Empty means os.Hostname().
+	Host  string
+	Theme config.Theme
 }
 
 func NewTopBar(width int, theme config.Theme) TopBar {
@@ -59,6 +63,17 @@ func joinCells(cells []string, sep string) string {
 	return out
 }
 
+// pinRight pushes host against the right edge of the content area, padding the
+// gap to the left of it. The host is dropped when it cannot fit with at least
+// one separating space, so a long path keeps priority over it.
+func (t TopBar) pinRight(content, host string, budget int) string {
+	gap := budget - DisplayWidth(content) - DisplayWidth(host)
+	if host == "" || gap < 1 {
+		return content
+	}
+	return content + strings.Repeat(" ", gap) + host
+}
+
 // appName renders the app name, prefixed with a Nerd Font glyph and a space.
 // The glyph is decorative, so it is only shown when the bar has room for the
 // whole name plus the icon; a bar too narrow for that keeps the readable name
@@ -82,7 +97,10 @@ func (t TopBar) Render() string {
 		return ""
 	}
 
-	hostname, _ := os.Hostname()
+	hostname := t.Host
+	if hostname == "" {
+		hostname, _ = os.Hostname()
+	}
 	if t.Path == "" {
 		t.Path = "/"
 	}
@@ -93,8 +111,9 @@ func (t TopBar) Render() string {
 	if glyph := icons.Glyph(icons.Separator); glyph != "" {
 		sep = " " + glyph + " "
 	}
-	// Padding and separators are chrome, not content.
-	budget := t.Width - 4
+	// The left padding is gone so the title starts on the pane frame's column;
+	// only the right padding remains chrome.
+	budget := t.Width - 2
 	if budget < 1 {
 		budget = 1
 	}
@@ -103,16 +122,23 @@ func (t TopBar) Render() string {
 	path := t.Theme.PathText().Render(TrimPathLeft(SanitizeName(t.Path), budget))
 	host := t.Theme.StatusText().Render(hostname)
 
-	cells := []string{name, path, host}
-	content := t.fit(cells, sep, budget)
+	// Path stays ahead of the hostname: when the bar is too narrow, the host is
+	// the cell that gives way because it is the least specific of the three.
+	content := t.fit([]string{name, path}, sep, budget)
 
 	if t.Filter != "" {
 		filter := t.Theme.AccentText().Render("filter: " + t.Filter)
 		candidate := content + sep + filter
-		if DisplayWidth(candidate) <= budget {
+		// The filter may use spare space, but it must not push off a host that
+		// would otherwise fit on the right.
+		if DisplayWidth(candidate) <= budget &&
+			(DisplayWidth(content)+DisplayWidth(host)+1 > budget ||
+				DisplayWidth(candidate)+DisplayWidth(host)+1 <= budget) {
 			content = candidate
 		}
 	}
+
+	content = t.pinRight(content, host, budget)
 
 	// Both dimensions are pinned: the bar occupies exactly TopBarHeight rows and
 	// never exceeds the terminal, so neighbouring sections stay aligned.

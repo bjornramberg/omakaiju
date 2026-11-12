@@ -59,7 +59,7 @@ func TestTopBarPrefixesAppNameWithIcon(t *testing.T) {
 		t.Errorf("wide bar should prefix the name with the icon: %q", out)
 	}
 
-	narrow := NewTopBar(13, theme)
+	narrow := NewTopBar(11, theme)
 	narrow.Path = "/tmp"
 	narrowOut := stripANSI(narrow.Render())
 	if !strings.Contains(narrowOut, "omakaiju") {

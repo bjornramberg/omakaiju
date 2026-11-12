@@ -252,7 +252,7 @@ func (t Theme) TopBar() lipgloss.Style {
 		Border(lipgloss.RoundedBorder(), false, false, true, false).
 		BorderForeground(lipgloss.Color(t.Subtle)).
 		Background(lipgloss.Color(t.BGDark)).
-		Padding(0, 2)
+		Padding(0, 2, 0, 0)
 }
 
 func (t Theme) BottomBar() lipgloss.Style {
