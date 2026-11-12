@@ -68,11 +68,13 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
-      # v2.2.2 dropped the composite action this workflow uses, so the pin
-      # was pointing at nothing and the job could not start. v1.19.5 is the
-      # last release that still has github/action.yml.
+      # The action's source lives only in the v1 line. Upstream removed the
+      # github/ directory in v2 (anomalyco/opencode#59032), so a v2 pin
+      # resolves to a commit with no action.yml and the job cannot start.
+      # v1.19.5 is the newest release that still carries it, and the v1
+      # branch keeps it, so the pin may still move within v1.
       - name: Run opencode
-        uses: anomalyco/opencode/github@9bbb8ce18c80f099e0e448775f59d965ead40a21 # v2.2.5
+        uses: anomalyco/opencode/github@810c0eba1a7348036f8bdf61e6632d0c36c6876c # v1.19.5
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:

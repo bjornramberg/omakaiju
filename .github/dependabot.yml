@@ -20,6 +20,13 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - housekeeping
+    # The opencode action exists only in the v1 line: upstream removed its
+    # source in v2, so a v2 pin resolves to a commit with no action.yml and
+    # the job cannot start. Dependabot must not move the pin past v1, but it
+    # may still move it within v1 — the v1 branch keeps the action.
+    ignore:
+      - dependency-name: "anomalyco/opencode/github"
+        versions: [">= 2.0.0"]
     # One pull request for the workflows rather than one per action: they
     # move together often enough that separate pull requests are noise.
     groups:
