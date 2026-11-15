@@ -31,6 +31,13 @@ var (
 	// AppIcon is the Nerd Font droplet glyph that prefixes the app name in the
 	// top bar.
 	AppIcon = "\uf0c5"
+	// CopyIcon marks a duplicate: the copy tag in a pane's header when a
+	// drag would copy rather than move the entry it carries.
+	//
+	// It is a Font Awesome glyph, so it needs the Nerd Font like the rest of
+	// them. The plain "copy" word next to it carries the meaning on a
+	// terminal without one.
+	CopyIcon = "\uf0c5"
 	// UpIcon marks the row that leads to the directory above the one being
 	// shown.
 	UpIcon = "\uf062"

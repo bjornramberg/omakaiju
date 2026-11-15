@@ -116,6 +116,11 @@ The mouse works, and it is on by default:
   directory above.
 * **Wheel** over a pane scrolls it three rows a notch, and never moves the
   focus away from the pane you are working in.
+* **Drag** a row onto the other pane to move that entry into the directory the
+  other pane shows. Hold **Ctrl** (or **Alt**) while dropping to copy it
+  instead. The target pane tints its header while the pointer is over it, and
+  says whether the drop would move or copy. A press and release that never
+  leaves the pane is just a click, and the `..` row cannot be dragged.
 
 Each pane shows a `..` row above its listing — the way back to the directory
 above — except at the filesystem root, where there is none. It is a real

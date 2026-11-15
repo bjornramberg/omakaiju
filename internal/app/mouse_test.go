@@ -245,8 +245,9 @@ func TestMouseWheelOutsidePanesIgnored(t *testing.T) {
 	}
 }
 
-// Right and middle clicks, releases, and motion are tier-two or tier-three
-// material: they must be inert.
+// Right and middle clicks belong to no gesture, and a release or a motion with
+// no drag in progress is a pointer the app never pressed: all of them must be
+// inert.
 func TestMouseOtherEventsIgnored(t *testing.T) {
 	m, _ := mouseFixture(t, 8)
 	m.activePane = 1

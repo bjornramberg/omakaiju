@@ -11,6 +11,25 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// DropState says what would happen if the pointer were released over the
+// pane while a drag is in progress. A single value carries all three states
+// so the app can set the target pane in one assignment and the pane can say
+// "nothing here" without needing a second field.
+type DropState int
+
+const (
+	// DropNone means the pane is not a valid drop target right now: the
+	// pointer is over chrome, the other pane is the source, or no drag is
+	// happening. The pane draws its ordinary border and header.
+	DropNone DropState = iota
+	// DropMove means releasing the pointer over this pane would move the
+	// dragged entry into this pane's directory.
+	DropMove
+	// DropCopy means releasing the pointer over this pane would leave a copy
+	// of the dragged entry in this pane's directory.
+	DropCopy
+)
+
 type Pane struct {
 	Width      int
 	Height     int
@@ -35,6 +54,10 @@ type Pane struct {
 	// keyboard reaches with the up arrow and Enter and the mouse by clicking
 	// the row.
 	Parent string
+	// Drop says what a release over this pane would do during a drag. The
+	// visual side uses it to tint the target pane and to show whether the
+	// operation would move or copy; the app side sets it every frame.
+	Drop DropState
 }
 
 func NewPane(width, height int, active bool, theme config.Theme) Pane {
@@ -200,6 +223,13 @@ func (p Pane) Render() string {
 	} else {
 		borderStyle = p.Theme.PaneInactive()
 	}
+	// A pane that would receive the drop gets the accent colour on its border,
+	// not the focus colour. The drag started in the focused pane, so leaving
+	// the focused pane's primary border unchanged would make the source and
+	// target look identical; the accent border points at the destination.
+	if p.Drop != DropNone {
+		borderStyle = borderStyle.BorderForeground(lipgloss.Color(p.Theme.Accent))
+	}
 	// Both dimensions are bounded. Width alone left the frame free to grow
 	// taller than the terminal, which scrolls the view and makes the whole UI
 	// jump while a window is being resized.
@@ -228,7 +258,8 @@ func (p Pane) Render() string {
 	// says which pane has focus even where the colours are too close to tell
 	// apart. A pane too narrow for a marker keeps the whole width for the
 	// path.
-	marker, sep, pathWidth := "", "", inner
+	marker, sep := "", ""
+	pathWidth := inner
 	if inner >= 3 {
 		marker = " "
 		if p.Active {
@@ -238,13 +269,46 @@ func (p Pane) Render() string {
 		pathWidth = inner - 2
 	}
 
+	// A drop target explains what would happen if the pointer were released.
+	// The tag lives in the header so it cannot push the listing down, and it
+	// is right-aligned so the path still starts in the same column whether the
+	// tag is shown or not.
+	tag := p.dropTag()
+	tagWidth := DisplayWidth(tag)
+	if tagWidth > 0 && pathWidth > tagWidth+1 {
+		// A cell is kept for the gap between the path and the tag, so a long
+		// path does not run straight into the word.
+		pathWidth -= tagWidth + 1
+	} else {
+		// The pane is too narrow for both the path and the tag; keep the
+		// border colour as the cue and drop the word so the header does not
+		// wrap and steal a row from the body.
+		tag = ""
+		tagWidth = 0
+	}
+
+	path := TruncateName(SanitizeName(p.Path), pathWidth)
+	left := marker + sep + path
+	leftWidth := DisplayWidth(left)
+	pad := inner - leftWidth - tagWidth
+	if pad < 0 {
+		pad = 0
+	}
+
 	// The header is rendered as a single run, so the focused pane's band
 	// covers the marker cell along with the path.
 	headerStyle := p.Theme.PaneHeaderInactive()
 	if p.Active {
 		headerStyle = p.Theme.PaneHeaderActive()
 	}
-	header := headerStyle.Width(inner).MaxWidth(inner).Render(marker + sep + TruncateName(SanitizeName(p.Path), pathWidth))
+	// Tint the header text with the accent colour on a drop target. The
+	// border already changed, but a colour-blind user or a monochrome
+	// terminal still needs the word and the glyph; the tint makes the header
+	// read as one continuous cue with the border.
+	if p.Drop != DropNone {
+		headerStyle = headerStyle.Foreground(lipgloss.Color(p.Theme.Accent))
+	}
+	header := headerStyle.Width(inner).MaxWidth(inner).Render(left + strings.Repeat(" ", pad) + tag)
 
 	var listing []string
 	if len(p.Files) == 0 {
@@ -329,4 +393,23 @@ func (p Pane) parentRow(width int) string {
 	// so leaving padding on would add unaccounted columns.
 	row := style.UnsetPaddingLeft().UnsetPaddingRight()
 	return row.Width(width).MaxWidth(width).Render(content + strings.Repeat(" ", pad))
+}
+
+// dropTag is the header hint that shows what releasing the pointer would do.
+// It returns an empty string when the pane is not a drop target, so the header
+// keeps its ordinary layout.
+func (p Pane) dropTag() string {
+	switch p.Drop {
+	case DropMove:
+		// A rightward arrow says the entry is travelling into this pane.
+		return "→ move"
+	case DropCopy:
+		// The copy glyph suggests duplication without removing the original;
+		// the word removes any ambiguity the glyph might carry. It comes from
+		// the icon set, so a terminal without the Nerd Font shows the word
+		// alone rather than a box.
+		return icons.Glyph(icons.CopyIcon) + " copy"
+	default:
+		return ""
+	}
 }
