@@ -287,7 +287,11 @@ func (m Model) view() tea.View {
 	// against, so the panel appears exactly where a click is expected to land.
 	if m.menu != nil {
 		place := m.menuPlacement()
-		view = ui.OverlayAt(view, place.panel.Render(), place.x, place.y, m.width, m.height)
+		// The overlay is told the panel's own size, not the screen's: it
+		// splices the panel over the frame, and a panel sized by the screen
+		// would wipe out everything to the right of the menu and leave a
+		// hole the width of the terminal.
+		view = ui.OverlayAt(view, place.panel.Render(), place.x, place.y, place.width, place.height)
 	}
 
 	// The frame is composed. The next write to the terminal is the one the
