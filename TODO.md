@@ -181,6 +181,6 @@ Ordered by how much they cost the user, with the rough size of each.
   graphics, and a bare-letter or `h/j/k/l` keymap. The mouse is no longer on
   this list: the mouse is on by default — click to focus a pane and select a
   row, wheel to scroll, a double click to enter a directory, open a file, or
-  take the `..` row at the top of a listing up one level, and a drag from one
-  pane to the other to move a file there. It can be released with
-  `OMAKAIJU_NO_MOUSE=1`. A right-click context menu is still not scheduled.
+  take the `..` row at the top of a listing up one level, a drag from one pane
+  to the other to move a file there, and a right click for the menu of what
+  can be done with a row. It can be released with `OMAKAIJU_NO_MOUSE=1`.

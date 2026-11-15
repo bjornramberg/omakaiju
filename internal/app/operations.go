@@ -225,6 +225,76 @@ func (m Model) handleDelete() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// openCursorEntry opens what the active pane's cursor is on: the ".." row goes
+// up a level, a directory is entered, and a file is handed to the desktop.
+//
+// It is the body the enter key has always run, lifted out so the context
+// menu's Open item runs the same thing. Two implementations of "open the
+// entry under the cursor" is how a menu and a key come to disagree about
+// whether the parent row is an entry, or about what a file is opened with.
+func (m Model) openCursorEntry() (tea.Model, tea.Cmd) {
+	if m.onParentRow(m.activePane) {
+		return m.goToParent(m.activePane)
+	}
+	files := m.visibleFiles(m.activePane)
+	cursor := m.rawCursor(m.activePane)
+	if cursor >= 0 && cursor < len(files) && files[cursor].IsDir {
+		return m, m.beginLoad(m.activePane, files[cursor].Path)
+	}
+	if cursor >= 0 && cursor < len(files) {
+		return m, openCmd(files[cursor].Path, files[cursor].Name)
+	}
+	return m, nil
+}
+
+// startRename opens the rename prompt on the entry under the cursor.
+//
+// The ".." row is refused here rather than in the caller: it is the way up,
+// not a directory on disk, and renaming it would mean renaming the parent —
+// a different operation on a directory the pane is not showing. Keeping the
+// refusal beside the prompt is what makes both the rename key and the menu's
+// Rename item safe without either of them repeating the rule.
+func (m Model) startRename() (tea.Model, tea.Cmd) {
+	files := m.visibleFiles(m.activePane)
+	cursor := m.rawCursor(m.activePane)
+	if cursor < 0 || cursor >= len(files) {
+		if cursor == parentCursor {
+			m.opResult = "the parent directory cannot be renamed"
+		}
+		return m, nil
+	}
+	m.mode = inputRename
+	m.inputBuf = files[cursor].Name
+	m.renameTarget = files[cursor].Path
+	return m, nil
+}
+
+// startAddFile opens the empty-name prompt that creates a file in the active
+// pane's directory. It is the body the new-file key runs, shared with the
+// menu so the prompt is reached the same way from either.
+func (m Model) startAddFile() (tea.Model, tea.Cmd) {
+	m.mode = inputAdd
+	m.inputBuf = ""
+	return m, nil
+}
+
+// startAddDir opens the prompt that creates a directory in the active pane's
+// directory, shared with the menu's New directory item.
+func (m Model) startAddDir() (tea.Model, tea.Cmd) {
+	m.mode = inputAddDir
+	m.inputBuf = ""
+	return m, nil
+}
+
+// cycleSortAction advances the active pane to its next sort mode and reports
+// it. The reorder and the status message are one action, so the sort key and
+// the menu's Sort item cannot sort one way and report another.
+func (m Model) cycleSortAction() (tea.Model, tea.Cmd) {
+	mode := m.cycleSort(m.activePane)
+	m.opResult = "sort: " + mode.Label()
+	return m, m.updatePreview()
+}
+
 func (m Model) handleConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	// Trash is the safe choice, so it is the one that also answers to the
