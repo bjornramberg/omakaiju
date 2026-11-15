@@ -73,12 +73,14 @@ func TestFuzzyOverlayKeepsExactFit(t *testing.T) {
 }
 
 // The finder must sit over the panes rather than replacing them, so the rest of
-// the interface stays visible behind it.
+// the interface stays visible behind it. The panel covers the first rows of the
+// listing, so what shows around it is the pane's own chrome: the header marker
+// and the ".." row above the entries.
 func TestFuzzyOverlayKeepsPanesVisible(t *testing.T) {
 	m := fuzzyModel(t, 100, 30, "a")
 	view := escSeq.ReplaceAllString(m.View().Content, "")
 
-	for _, want := range []string{"fuzzy find", "subdir"} {
+	for _, want := range []string{"fuzzy find", "▸", ".."} {
 		if !strings.Contains(view, want) {
 			t.Errorf("expected %q on screen with the finder open, got:\n%s", want, view)
 		}

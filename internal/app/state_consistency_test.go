@@ -14,6 +14,75 @@ import (
 	"github.com/bjornramberg/omakaiju/internal/fs"
 )
 
+// parentPath is the way up the pane draws its ".." row for. It names the
+// directory on screen, not the one the pane is heading to, because the row has
+// to lead where the listing above it came from; an empty answer is how the
+// root gets no row at all.
+func TestParentPath(t *testing.T) {
+	m, dir := fixture(t)
+
+	if got, want := m.parentPath(0), filepath.Dir(dir); got != want {
+		t.Errorf("parentPath(0) = %q, want %q", got, want)
+	}
+
+	m.rightPath = filepath.Join(dir, "subdir")
+	if got, want := m.parentPath(1), dir; got != want {
+		t.Errorf("parentPath(1) = %q, want %q", got, want)
+	}
+
+	// A load in flight must not move the row: the pane is still showing the
+	// directory it is in until the listing arrives.
+	m.leftPath = dir
+	m.leftPending = filepath.Join(dir, "subdir")
+	if got, want := m.parentPath(0), filepath.Dir(dir); got != want {
+		t.Errorf("parentPath with a pending load = %q, want the path on screen's parent %q", got, want)
+	}
+
+	m.leftPath = "/"
+	if got := m.parentPath(0); got != "" {
+		t.Errorf("parentPath at the root = %q, want empty", got)
+	}
+}
+
+// clampCursor keeps a pane inside its listing. The ".." row is not in the
+// listing, so it must not be clamped away — unless the pane is at the root,
+// where no such row is drawn and the cursor belongs on the first entry.
+func TestClampCursorKeepsTheParentRow(t *testing.T) {
+	m, _ := fixture(t)
+
+	m.leftCursor = parentCursor
+	m.clampCursor(0)
+	if got := m.rawCursor(0); got != parentCursor {
+		t.Errorf("cursor = %d, want the parent row %d", got, parentCursor)
+	}
+
+	m.leftPath = "/"
+	m.clampCursor(0)
+	if got := m.rawCursor(0); got != 0 {
+		t.Errorf("cursor at the root = %d, want the first entry 0", got)
+	}
+}
+
+// A reload that keeps the user's place keeps it on the ".." row as well: the
+// position has no entry name to follow, so the old position is what is
+// restored.
+func TestPreservingLoadKeepsParentRowCursor(t *testing.T) {
+	m, _ := fixture(t)
+	m.leftCursor = parentCursor
+
+	files, err := fs.ReadDir(m.leftPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := updateModel(t, m, dirLoadedMsg{pane: 0, path: m.leftPath, files: files, preserve: true})
+	if got.Crashed() {
+		t.Fatalf("a reload with the cursor on the parent row panicked: %v", got.crashErr)
+	}
+	if got.leftCursor != parentCursor {
+		t.Errorf("cursor = %d, want the parent row %d", got.leftCursor, parentCursor)
+	}
+}
+
 // A load the pane has already left must not change it. Bubble Tea runs every
 // command in its own goroutine, so entering a large directory and then leaving
 // it can deliver the first listing last.
@@ -307,15 +376,17 @@ func TestPreviewRefreshesWhenFileChanges(t *testing.T) {
 // pulls the window just far enough to include the new row, and never further.
 func TestReconcileScrollKeepsCursorInWindow(t *testing.T) {
 	m, _ := mouseFixture(t, 60)
-	if got := m.listRows(0); got != 18 {
-		t.Fatalf("setup: listRows = %d, want 18", got)
+	// Pane height 24 less its chrome and the ".." row.
+	const rows = 17
+	if got := m.listRows(0); got != rows {
+		t.Fatalf("setup: listRows = %d, want %d", got, rows)
 	}
 
 	// A cursor below the window pulls the window down to just include it.
 	m.leftScroll, m.leftCursor = 0, 20
 	m.reconcileScroll(0)
-	if m.leftScroll != 20-18+1 {
-		t.Errorf("cursor below: leftScroll = %d, want %d", m.leftScroll, 20-18+1)
+	if m.leftScroll != 20-rows+1 {
+		t.Errorf("cursor below: leftScroll = %d, want %d", m.leftScroll, 20-rows+1)
 	}
 
 	// A cursor above the window pushes the window up to the cursor's row.

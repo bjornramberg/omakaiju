@@ -173,12 +173,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case nav.ActionUp, nav.ActionDown, nav.ActionLeft, nav.ActionRight:
 		return m.handleNavAction(action)
 	case nav.ActionEnter:
+		if m.rawCursor(m.activePane) == parentCursor {
+			return m.goToParent(m.activePane)
+		}
 		files := m.visibleFiles(m.activePane)
 		cursor := m.rawCursor(m.activePane)
-		if cursor < len(files) && files[cursor].IsDir {
+		if cursor >= 0 && cursor < len(files) && files[cursor].IsDir {
 			return m, m.beginLoad(m.activePane, files[cursor].Path)
 		}
-		if cursor < len(files) {
+		if cursor >= 0 && cursor < len(files) {
 			return m, openCmd(files[cursor].Path, files[cursor].Name)
 		}
 		return m, nil
@@ -226,7 +229,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case nav.ActionRename:
 		files := m.visibleFiles(m.activePane)
 		cursor := m.rawCursor(m.activePane)
-		if cursor >= len(files) {
+		if cursor < 0 || cursor >= len(files) {
+			// The ".." row is the way up, not a directory on disk; renaming
+			// it would mean renaming the parent, which is a different
+			// operation from a different directory.
+			if cursor == parentCursor {
+				m.opResult = "the parent directory cannot be renamed"
+			}
 			return m, nil
 		}
 		m.mode = inputRename
@@ -291,8 +300,14 @@ func (m Model) handleJump(c rune) (tea.Model, tea.Cmd) {
 func (m Model) handleNavAction(action nav.Action) (tea.Model, tea.Cmd) {
 	switch action {
 	case nav.ActionUp:
-		if cursor := m.rawCursor(m.activePane); cursor > 0 {
+		cursor := m.rawCursor(m.activePane)
+		switch {
+		case cursor > 0:
 			m.setCursor(m.activePane, cursor-1)
+		case cursor == 0 && m.parentPath(m.activePane) != "":
+			// The ".." row sits above the listing, so it is the row before
+			// the first entry rather than an entry of its own.
+			m.setCursor(m.activePane, parentCursor)
 		}
 		return m, m.updatePreview()
 	case nav.ActionDown:
@@ -302,6 +317,12 @@ func (m Model) handleNavAction(action nav.Action) (tea.Model, tea.Cmd) {
 		}
 		return m, m.updatePreview()
 	case nav.ActionLeft:
+		// The left arrow works from targetPath (where the pane is heading),
+		// not rawPath: pressing it twice before the first listing lands has to
+		// go up two levels, not the same one twice. goToParent — the ".."
+		// row's way out, shared with Enter and the double-click — works from
+		// the path on screen, because the row names the directory the user is
+		// looking at.
 		currentPath := m.targetPath(m.activePane)
 		parent := filepath.Dir(currentPath)
 		if parent != currentPath {
@@ -316,9 +337,12 @@ func (m Model) handleNavAction(action nav.Action) (tea.Model, tea.Cmd) {
 		// Entering a directory is a navigation step, but launching a file is
 		// not: that belongs to enter alone, so an arrow press can never
 		// unexpectedly hand a file to the desktop handler.
+		//
+		// The ".." row is not entered: it answers to enter and to a
+		// double-click, and to nothing else.
 		files := m.visibleFiles(m.activePane)
 		cursor := m.rawCursor(m.activePane)
-		if cursor < len(files) && files[cursor].IsDir {
+		if cursor >= 0 && cursor < len(files) && files[cursor].IsDir {
 			return m, m.beginLoad(m.activePane, files[cursor].Path)
 		}
 		return m, nil

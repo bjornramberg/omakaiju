@@ -116,6 +116,9 @@ func (m Model) paneViews(layout ui.Layout) [2]ui.Pane {
 		panes[pane].Scroll = m.rawScroll(pane)
 		panes[pane].TotalFiles = totals[pane]
 		panes[pane].Marked = markedSet
+		// The parent row is drawn for the directory the pane has committed to
+		// screen, so the row and the directory it leads to always agree.
+		panes[pane].Parent = m.parentPath(pane)
 		// The status line names the marked count, and only the focused pane
 		// carries it. It shortens that pane's listing, which is exactly why
 		// the hit-test reads the same built Pane.

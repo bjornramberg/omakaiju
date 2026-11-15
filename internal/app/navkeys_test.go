@@ -207,3 +207,87 @@ func TestLeftArrowLeavesDirectoryWhileFiltering(t *testing.T) {
 		t.Error("navigating should not close the filter prompt")
 	}
 }
+
+// The ".." row sits above the first entry, so the up arrow reaches it from the
+// first entry and then stops there: there is no row above the way up.
+func TestUpArrowReachesParentRow(t *testing.T) {
+	m, _ := fixture(t)
+	m.width, m.height = 100, 30
+	m.leftCursor = 0
+
+	m = updateModel(t, m, arrow(tea.KeyUp))
+	if got := m.rawCursor(m.activePane); got != parentCursor {
+		t.Fatalf("up from the first entry: cursor = %d, want the parent row %d", got, parentCursor)
+	}
+
+	m = updateModel(t, m, arrow(tea.KeyUp))
+	if got := m.rawCursor(m.activePane); got != parentCursor {
+		t.Errorf("up from the parent row: cursor = %d, want to stay on it", got)
+	}
+
+	m = updateModel(t, m, arrow(tea.KeyDown))
+	if got := m.rawCursor(m.activePane); got != 0 {
+		t.Errorf("down from the parent row: cursor = %d, want the first entry 0", got)
+	}
+	if m.Crashed() {
+		t.Errorf("moving onto the parent row panicked: %v", m.crashErr)
+	}
+}
+
+// A pane at the filesystem root has no way up to draw, so there is no row above
+// the first entry and the up arrow stays where it is.
+func TestUpArrowAtRootStaysOnFirstEntry(t *testing.T) {
+	m, _ := fixture(t)
+	m.leftPath = "/"
+	m.leftCursor = 0
+
+	m = updateModel(t, m, arrow(tea.KeyUp))
+	if got := m.rawCursor(m.activePane); got != 0 {
+		t.Errorf("up at the root: cursor = %d, want the first entry 0", got)
+	}
+}
+
+// Enter is one of the two keys the ".." row answers to: it goes up a level.
+func TestEnterOnParentRowGoesUp(t *testing.T) {
+	m, dir := fixture(t)
+	m.leftCursor = parentCursor
+
+	got, cmd := updateModelCmd(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if got.leftPending != filepath.Dir(dir) {
+		t.Fatalf("leftPending = %q, want the parent %q", got.leftPending, filepath.Dir(dir))
+	}
+	if got.leftPath != dir {
+		t.Errorf("leftPath = %q, want the path on screen %q", got.leftPath, dir)
+	}
+	if cmd == nil {
+		t.Fatal("going up should dispatch a load")
+	}
+	loaded, ok := cmd().(dirLoadedMsg)
+	if !ok {
+		t.Fatalf("going up dispatched %T, want a directory load", cmd())
+	}
+	if loaded.path != filepath.Dir(dir) {
+		t.Errorf("loaded %q, want %q", loaded.path, filepath.Dir(dir))
+	}
+}
+
+// The right arrow enters a directory, and the ".." row is not a directory
+// entry: it answers to enter and to a double-click, and to nothing else.
+func TestRightArrowOnParentRowDoesNothing(t *testing.T) {
+	m, dir := fixture(t)
+	m.leftCursor = parentCursor
+
+	got, cmd := updateModelCmd(t, m, arrow(tea.KeyRight))
+	if got.Crashed() {
+		t.Fatalf("the right arrow on the parent row panicked: %v", got.crashErr)
+	}
+	if cmd != nil {
+		t.Error("the right arrow on the parent row must not dispatch anything")
+	}
+	if got.leftPending != "" || got.leftPath != dir {
+		t.Errorf("the right arrow navigated to %q (path %q)", got.leftPending, got.leftPath)
+	}
+	if got.leftCursor != parentCursor {
+		t.Errorf("the right arrow moved the cursor to %d", got.leftCursor)
+	}
+}

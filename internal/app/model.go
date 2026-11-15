@@ -215,6 +215,20 @@ type Model struct {
 	// reaching the terminal. It is nil when nothing is measuring, which is
 	// every test and every build that is not the real program.
 	startup *StartupTracker
+
+	// lastClick remembers where the last click landed and when, so a second
+	// click on the same thing soon after can be recognized as a double-click.
+	lastClick   clickTarget
+	lastClickAt time.Time
+}
+
+// clickTarget is what a click landed on: a row of a pane's listing, the
+// pane's ".." row, or the pane's chrome. Two clicks on the same target, close
+// enough together, are one double-click.
+type clickTarget struct {
+	pane   int
+	row    int
+	parent bool
 }
 
 // Option configures a model at construction.

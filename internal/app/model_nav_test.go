@@ -8,6 +8,7 @@ import (
 
 	"github.com/bjornramberg/omakaiju/internal/config"
 	"github.com/bjornramberg/omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/ui"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -205,6 +206,23 @@ func TestPreviewTracksCursor(t *testing.T) {
 	}
 	if m.previewCachePath != want {
 		t.Fatalf("previewCachePath = %q, want %q", m.previewCachePath, want)
+	}
+}
+
+// The ".." row is a directory like any other as far as the preview is
+// concerned: the pane on it previews the directory above, which is the one the
+// user is about to step into.
+func TestPreviewOnParentRowShowsTheDirectoryAbove(t *testing.T) {
+	m, dir := fixture(t)
+	m.leftCursor = parentCursor
+	m = settlePreview(t, m)
+
+	want := filepath.Dir(dir)
+	if m.previewPath != want {
+		t.Errorf("previewPath = %q, want the parent %q", m.previewPath, want)
+	}
+	if m.previewContent.Kind != ui.KindDirectory {
+		t.Errorf("preview kind = %v, want a directory preview of %q", m.previewContent.Kind, want)
 	}
 }
 

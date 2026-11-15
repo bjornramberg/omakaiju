@@ -6,6 +6,7 @@ import (
 
 	"github.com/bjornramberg/omakaiju/internal/config"
 	"github.com/bjornramberg/omakaiju/internal/fs"
+	"github.com/bjornramberg/omakaiju/internal/icons"
 
 	"charm.land/lipgloss/v2"
 )
@@ -28,6 +29,12 @@ type Pane struct {
 	VisibleHeight int
 	Status        string
 	Marked        map[string]bool
+	// Parent is the path of the directory above the one the pane shows, and
+	// empty when the pane is at the root and there is none. A pane with a
+	// parent draws a ".." row above its listing: the way back up, which the
+	// keyboard reaches with the up arrow and Enter and the mouse by clicking
+	// the row.
+	Parent string
 }
 
 func NewPane(width, height int, active bool, theme config.Theme) Pane {
@@ -52,7 +59,20 @@ func (p Pane) ContentWidth() int {
 
 // paneRowsTop is the pane-local row the first file row occupies: the top
 // border, the top padding, the path header, and the blank line under it.
+//
+// A pane with a ".." row draws it here and starts its listing one row lower,
+// which is why the hit-test asks for this row before it asks for a file row.
 const paneRowsTop = 4
+
+// ParentCursor is the cursor position that means the pane is on its ".." row:
+// the way back to the directory above, which sits above the listing and is not
+// one of its entries, so it has no index among them.
+//
+// The files keep the indices they always had; this position lives outside that
+// index space, which is why every place that reads the cursor's entry has to
+// rule it out before indexing. A pane at the filesystem root has no ".." row,
+// so its cursor is never ParentCursor.
+const ParentCursor = -1
 
 // Rows is the window of Files a pane draws: the index of the first entry, how
 // many rows the body has, and where the first one sits inside the pane frame.
@@ -73,13 +93,21 @@ type Rows struct {
 // cursor made every cursor move scroll the listing, so a click on a row in the
 // middle of a long list dragged the window down and left the clicked entry on
 // the last row. Here the window stays put and the cursor moves inside it.
+//
+// The ".." row is not part of the window: it takes a row of the body above the
+// listing and never scrolls, so Top moves down by one when the pane has a
+// parent and the hit-test resolves that row as its own target.
 func (p Pane) Rows() Rows {
+	visible := p.fileRows()
+	top := paneRowsTop
+	if p.Parent != "" {
+		top++
+	}
 	// An empty listing draws one placeholder row, which is not an entry and
 	// cannot be selected.
 	if len(p.Files) == 0 {
-		return Rows{Top: paneRowsTop}
+		return Rows{Top: top}
 	}
-	visible := p.visibleRows()
 	start := p.Scroll
 	if start < 0 {
 		start = 0
@@ -90,34 +118,57 @@ func (p Pane) Rows() Rows {
 	}
 	// The cursor rides inside the window. The app keeps that true; this is
 	// the safety net for a pane whose state has not been reconciled yet.
-	if p.Cursor < start {
-		start = p.Cursor
+	//
+	// A cursor on the ".." row is above the listing and is not one of its
+	// entries, so it has no say in which window is drawn. Indexing the
+	// listing with it would reach a row that does not exist.
+	if p.Cursor >= 0 {
+		if p.Cursor < start {
+			start = p.Cursor
+		}
+		if p.Cursor >= start+visible {
+			start = p.Cursor - visible + 1
+		}
 	}
-	if p.Cursor >= start+visible {
-		start = p.Cursor - visible + 1
-	}
-	return Rows{Start: start, Count: visible, Top: paneRowsTop}
+	return Rows{Start: start, Count: visible, Top: top}
 }
 
 // ListRows is how many file rows a pane of the given height has, once its
-// frame, its header and its status row have been taken off it. It is at least
-// one row, so a degenerate height cannot produce an empty body.
+// frame, its header, its status row and its parent row have been taken off it.
+// It is at least one row, so a degenerate height cannot produce an empty body.
 //
 // The app uses it to decide how much of the listing a pane can show without
 // building a Pane and copying the file list just to ask. It must agree with
-// visibleRows exactly, or the model and the renderer would scroll by
-// different amounts.
-func ListRows(height int, filter string, hasStatus bool) int {
+// the pane's own row math exactly, or the model and the renderer would scroll
+// by different amounts.
+func ListRows(height int, filter string, hasStatus bool, hasParent bool) int {
 	p := Pane{Height: height, Filter: filter}
 	if hasStatus {
 		p.Status = "x"
 	}
-	return p.visibleRows()
+	if hasParent {
+		p.Parent = "parent"
+	}
+	return p.fileRows()
 }
 
-// visibleRows is the number of file rows the pane has room for after its frame,
-// its header, and any status row. At least one row is always reported so a
-// degenerate height cannot produce an empty body.
+// fileRows is how many rows the pane's body gives to the listing, once the
+// parent row has taken its share of it.
+func (p Pane) fileRows() int {
+	visible := p.visibleRows()
+	if p.Parent != "" {
+		visible--
+	}
+	if visible < 1 {
+		visible = 1
+	}
+	return visible
+}
+
+// visibleRows is how many rows the pane's body has room for after its frame,
+// its header, and any status row, before the parent row has taken its share.
+// At least one row is always reported so a degenerate height cannot produce an
+// empty body.
 func (p Pane) visibleRows() int {
 	listRows := p.Height - 4 - 2 - p.statusRows()
 	if listRows < 1 {
@@ -195,14 +246,14 @@ func (p Pane) Render() string {
 	}
 	header := headerStyle.Width(inner).MaxWidth(inner).Render(marker + sep + TruncateName(SanitizeName(p.Path), pathWidth))
 
-	var body string
+	var listing []string
 	if len(p.Files) == 0 {
 		// One placeholder row, padded out so the frame keeps its height.
 		msg := "empty directory"
 		if p.Filter != "" {
 			msg = "no matches for " + SanitizeName(p.Filter)
 		}
-		body = p.Theme.StatusText().Render(TruncateName(msg, inner))
+		listing = append(listing, p.Theme.StatusText().Render(TruncateName(msg, inner)))
 	} else {
 		// The row window comes from Rows, the same one the mouse hit-test
 		// resolves a click through.
@@ -213,18 +264,24 @@ func (p Pane) Render() string {
 			end = len(p.Files)
 		}
 
-		rows := make([]string, 0, window.Count)
+		listing = make([]string, 0, window.Count)
 		for i := start; i < end; i++ {
 			item := NewFileItem(p.Files[i], i == p.Cursor, p.Marked[p.Files[i].Path], p.Theme, inner)
 			item.Unfocused = !p.Active
-			rows = append(rows, item.Render())
+			listing = append(listing, item.Render())
 		}
 		// Pad short lists so the pane always occupies its full column height.
-		for len(rows) < window.Count {
-			rows = append(rows, "")
+		for len(listing) < window.Count {
+			listing = append(listing, "")
 		}
-		body = strings.Join(rows, "\n")
 	}
+	// The parent row goes above the listing rather than being one of its
+	// rows, so it cannot scroll away and the entries stay exactly as they
+	// were on the rows below it.
+	if p.Parent != "" {
+		listing = append([]string{p.parentRow(inner)}, listing...)
+	}
+	body := strings.Join(listing, "\n")
 
 	content := header + "\n\n" + body
 	if status != "" {
@@ -234,4 +291,42 @@ func (p Pane) Render() string {
 	// Height pads a short pane out to its allocation; MaxHeight clips one that
 	// somehow still runs long.
 	return borderStyle.Width(p.Width).Height(p.Height).Render(content)
+}
+
+// parentRow is the ".." row: the way back to the directory above the one the
+// pane shows.
+//
+// It is drawn apart from the entries because it is not one of them: the
+// listing's copy, mark, rename and delete never see it, and it answers only to
+// Enter and to a double-click, both of which go up a level. It still draws with
+// the selection bar when the cursor is parked on it, because a cursor the user
+// cannot see is worse than no cursor at all.
+func (p Pane) parentRow(width int) string {
+	style := p.Theme.FileItemDir()
+	if !p.Active {
+		style = p.Theme.FileItemDirDimmed()
+	}
+	// The cursor reaches this row with the up arrow, so it has to look
+	// selected there. The styles are the ones a file row uses, so the
+	// selection looks the same on either side of the listing.
+	if p.Cursor == ParentCursor {
+		if p.Active {
+			style = p.Theme.FileItemActive()
+		} else {
+			style = p.Theme.FileItemCursorUnfocused()
+		}
+	}
+	prefix := ""
+	if arrow := icons.Glyph(icons.UpIcon); arrow != "" {
+		prefix = arrow + " "
+	}
+	content := prefix + ".."
+	pad := width - DisplayWidth(content)
+	if pad < 0 {
+		pad = 0
+	}
+	// The row's style carries horizontal padding, but the row spaces itself,
+	// so leaving padding on would add unaccounted columns.
+	row := style.UnsetPaddingLeft().UnsetPaddingRight()
+	return row.Width(width).MaxWidth(width).Render(content + strings.Repeat(" ", pad))
 }

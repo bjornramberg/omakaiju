@@ -60,7 +60,10 @@ func (m *Model) landAfterRemoval(msg fileOpMsg) {
 	pane := m.activePane
 	files := m.visibleFiles(pane)
 	cursor := m.rawCursor(pane)
-	if cursor >= len(files) {
+	if cursor < 0 || cursor >= len(files) {
+		// The cursor is not on an entry — it is on the ".." row, say — so
+		// there is no row to keep. A panic here would discard the result of
+		// an operation that has already happened on disk.
 		return
 	}
 	// The operation's entry is the one that was under the cursor when it
@@ -142,10 +145,24 @@ func (m *Model) restoreClipboard(clipboard *Clipboard) {
 	}
 }
 
+// onParentRow reports whether the pane's cursor is on its ".." row.
+//
+// The operations that act on a file refuse it: the parent row is the way up,
+// not an entry, and it has no index in the listing. Copying it would copy the
+// directory the user is already in; deleting it would delete the very
+// directory the pane is showing.
+func (m Model) onParentRow(pane int) bool {
+	return m.rawCursor(pane) == parentCursor
+}
+
 func (m Model) handleYank() (tea.Model, tea.Cmd) {
+	if m.onParentRow(m.activePane) {
+		m.opResult = "the parent directory cannot be copied"
+		return m, nil
+	}
 	files := m.visibleFiles(m.activePane)
 	cursor := m.rawCursor(m.activePane)
-	if cursor >= len(files) {
+	if cursor < 0 || cursor >= len(files) {
 		return m, nil
 	}
 	m.clipboard = Clipboard{
@@ -162,9 +179,13 @@ func (m Model) handleYank() (tea.Model, tea.Cmd) {
 // an already-marked entry unmarks it, so several files or folders can be staged
 // before moving them into the pane under the cursor with Shift+V.
 func (m Model) handleMove() (tea.Model, tea.Cmd) {
+	if m.onParentRow(m.activePane) {
+		m.opResult = "the parent directory cannot be marked"
+		return m, nil
+	}
 	files := m.visibleFiles(m.activePane)
 	cursor := m.rawCursor(m.activePane)
-	if cursor >= len(files) {
+	if cursor < 0 || cursor >= len(files) {
 		return m, nil
 	}
 
@@ -190,9 +211,13 @@ func (m Model) handleMove() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleDelete() (tea.Model, tea.Cmd) {
+	if m.onParentRow(m.activePane) {
+		m.opResult = "the parent directory cannot be deleted"
+		return m, nil
+	}
 	files := m.visibleFiles(m.activePane)
 	cursor := m.rawCursor(m.activePane)
-	if cursor >= len(files) {
+	if cursor < 0 || cursor >= len(files) {
 		return m, nil
 	}
 	m.confirmDelete = true

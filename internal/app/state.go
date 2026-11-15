@@ -251,9 +251,10 @@ func sortEntriesCopy(entries []fs.Entry, mode fs.SortMode) []fs.Entry {
 // reports the new mode.
 func (m *Model) cycleSort(pane int) fs.SortMode {
 	// Remember the selected entry so the cursor can follow it across the
-	// reorder instead of jumping to an unrelated row.
+	// reorder instead of jumping to an unrelated row. The ".." row is not an
+	// entry, so there is no name to follow when the cursor is parked on it.
 	var selected string
-	if files := m.visibleFiles(pane); m.rawCursor(pane) < len(files) {
+	if files := m.visibleFiles(pane); m.rawCursor(pane) >= 0 && m.rawCursor(pane) < len(files) {
 		selected = files[m.rawCursor(pane)].Path
 	}
 	next := m.sortOf(pane).Next()
@@ -301,13 +302,38 @@ func (m Model) visibleCount(pane int) int {
 	return len(m.visibleFiles(pane))
 }
 
+// parentCursor is the cursor position that means the pane is on its ".." row:
+// the way back to the directory above, which is not one of the listing's
+// entries and has no index among them.
+//
+// It is ui.ParentCursor because the pane draws the selection bar from the same
+// value; two copies of the number could drift apart. A pane at the filesystem
+// root has no parent row, so its cursor is never parentCursor.
+const parentCursor = ui.ParentCursor
+
+// parentPath is the directory above the one the pane shows, and the empty
+// string when the pane is at the root and there is none.
+//
+// It is the path the pane is showing, not the one it is heading to: the pane
+// draws the parent row for the directory on screen, so the row and the
+// directory it leads to have to be the same one.
+func (m Model) parentPath(pane int) string {
+	path := filepath.Clean(m.rawPath(pane))
+	parent := filepath.Dir(path)
+	if parent == path {
+		return ""
+	}
+	return parent
+}
+
 // listRows is how many file rows the pane's listing has room for. It must agree
-// with paneViews exactly: the pane's height comes from the layout, and only the
+// with paneViews exactly: the pane's height comes from the layout, only the
 // active pane carries a status row, because the status names the marked set and
-// the marks belong to the focused pane.
+// the marks belong to the focused pane, and a pane with a parent gives a row to
+// the ".." row above its listing.
 func (m Model) listRows(pane int) int {
 	return ui.ListRows(m.layout().PaneHeight(pane == 0), m.filterOf(pane),
-		m.activePane == pane && len(m.marked) > 0)
+		m.activePane == pane && len(m.marked) > 0, m.parentPath(pane) != "")
 }
 
 // reconcileScroll keeps the cursor inside the window the pane draws.
@@ -336,7 +362,8 @@ func (m *Model) reconcileScroll(pane int) {
 		}
 	}
 	// The cursor rides inside the window. A cursor that is not a row of the
-	// listing yet — a load still in flight — is left alone.
+	// listing — a load still in flight, or the ".." row above the listing —
+	// is left alone: neither can scroll a window it does not sit in.
 	if cursor >= 0 && cursor < files {
 		if cursor < scroll {
 			scroll = cursor
@@ -415,6 +442,15 @@ func (m *Model) restoreLanded(pane int, names []string) {
 
 func (m *Model) clampCursor(pane int) {
 	cursor := m.rawCursor(pane)
+	if cursor == parentCursor {
+		// The parent row is above the listing, so it is not clamped to it.
+		// A pane without a parent row has no such position at all, and is
+		// moved to the first entry instead of keeping a cursor no row draws.
+		if m.parentPath(pane) != "" {
+			return
+		}
+		cursor = 0
+	}
 	if n := len(m.visibleFiles(pane)); cursor > n-1 {
 		cursor = n - 1
 	}

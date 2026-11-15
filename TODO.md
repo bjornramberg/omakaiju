@@ -179,7 +179,8 @@ Ordered by how much they cost the user, with the rough size of each.
 * **Decided against, and not to be scheduled:** tabs and workspaces,
   resizable panes, git status badges, image previews through Kitty or Sixel
   graphics, and a bare-letter or `h/j/k/l` keymap. The mouse is no longer on
-  this list: the first tier — click to focus a pane and select a row, wheel
-  to scroll — is on by default and can be released with
-  `OMAKAIJU_NO_MOUSE=1`. A right-click context menu and drag-and-drop
-  between panes are still not scheduled.
+  this list: the mouse is on by default — click to focus a pane and select a
+  row, wheel to scroll, and a double click to enter a directory, open a file,
+  or take the `..` row at the top of a listing up one level. It can be
+  released with `OMAKAIJU_NO_MOUSE=1`. A right-click context menu and
+  drag-and-drop between panes are still not scheduled.

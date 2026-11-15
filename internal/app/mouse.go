@@ -1,6 +1,11 @@
 package app
 
 import (
+	"path/filepath"
+	"time"
+
+	"github.com/bjornramberg/omakaiju/internal/ui"
+
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -8,6 +13,11 @@ import (
 // is the usual terminal scroll step and keeps a long listing quick to cross
 // without skipping over a name.
 const wheelRows = 3
+
+// doubleClickWindow is how long two clicks on the same target have to be
+// apart to count as one double-click. It is the same window the desktop
+// uses, so a double-click feels the way it does everywhere else.
+const doubleClickWindow = 500 * time.Millisecond
 
 // modalActive reports whether an overlay or prompt owns the screen. The mouse
 // is released in the same frames the keyboard is claimed: the panes under a
@@ -50,9 +60,16 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// clickPane focuses the pane under the pointer and, when it landed on a file
-// row, moves that pane's cursor there. A click on the chrome focuses without
-// selecting, and a click outside both panes changes nothing.
+// clickPane focuses the pane under the pointer and moves its cursor to the row
+// under it: an entry of the listing, or the pane's ".." row, which the cursor
+// can sit on. A click on the rest of the chrome focuses without selecting, and
+// a click outside both panes changes nothing.
+//
+// A second click on the same target soon after the first one is a
+// double-click, which opens what it landed on: the ".." row goes up a level, a
+// directory is entered, and a file is handed to the desktop. The first click
+// does its usual work first, so a double-click is a click plus an action and
+// not a separate gesture with no selection behind it.
 func (m Model) clickPane(x, y int) (tea.Model, tea.Cmd) {
 	layout := m.layout()
 	hit, ok := layout.HitPane(m.paneViews(layout), x, y)
@@ -60,9 +77,30 @@ func (m Model) clickPane(x, y int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// The clock is read here rather than carried in the message so the window
+	// measures what the user did, not when the terminal got round to
+	// reporting it.
+	//
+	// A click that has no predecessor is not a double-click, however long the
+	// clock says it has been. The zero value of the record is a click on the
+	// first row of the first pane, so without this check the first click of a
+	// session would open the first file on any machine whose clock read the
+	// zero time.
+	target := clickTarget{pane: hit.Pane, row: hit.Row, parent: hit.Parent}
+	now := time.Now()
+	double := !m.lastClickAt.IsZero() &&
+		now.Sub(m.lastClickAt) <= doubleClickWindow &&
+		target == m.lastClick
+	m.lastClick, m.lastClickAt = target, now
+
 	focused := m.activePane != hit.Pane
 	m.activePane = hit.Pane
-	if hit.Row >= 0 {
+	if hit.Parent {
+		// The ".." row is a row the cursor can land on, so a click selects
+		// it the way a click on an entry does. It is not an index of the
+		// listing, which is why it needs its own position.
+		m.setCursor(hit.Pane, parentCursor)
+	} else if hit.Row >= 0 {
 		m.setCursor(hit.Pane, hit.Row)
 	}
 	// The status row belongs to the focused pane, so focusing a pane takes a
@@ -70,12 +108,51 @@ func (m Model) clickPane(x, y int) (tea.Model, tea.Cmd) {
 	// against the geometry they now have.
 	m.reconcileScrolls()
 
+	if double {
+		return m.openTarget(hit)
+	}
+
 	// Nothing visible changed: the pane was already focused and the click
 	// missed every row, so there is no preview to rebuild.
-	if !focused && hit.Row < 0 {
+	if !focused && hit.Row < 0 && !hit.Parent {
 		return m, nil
 	}
 	return m, m.updatePreview()
+}
+
+// goToParent takes the pane to the directory above the one it shows.
+//
+// It is the same way out as the keyboard's left arrow: the pane comes back to
+// the directory it came from, so the cursor lands on it. It works from the path
+// on screen — unlike the left arrow, which works from where the pane is heading
+// — because the ".." row was drawn for the directory the user is looking at.
+func (m Model) goToParent(pane int) (tea.Model, tea.Cmd) {
+	parent := m.parentPath(pane)
+	if parent == "" {
+		return m, nil
+	}
+	m.setRestore(pane, filepath.Base(m.rawPath(pane)))
+	return m, m.beginLoad(pane, parent)
+}
+
+// openTarget acts on a double-click: the ".." row goes to the directory
+// above, a directory is entered, and a file is handed to the desktop.
+func (m Model) openTarget(hit ui.Hit) (tea.Model, tea.Cmd) {
+	if hit.Parent {
+		return m.goToParent(hit.Pane)
+	}
+	if hit.Row < 0 {
+		return m, nil
+	}
+	files := m.visibleFiles(hit.Pane)
+	if hit.Row >= len(files) {
+		return m, nil
+	}
+	entry := files[hit.Row]
+	if entry.IsDir {
+		return m, m.beginLoad(hit.Pane, entry.Path)
+	}
+	return m, openCmd(entry.Path, entry.Name)
 }
 
 // wheelPane scrolls the listing under the pointer by one notch. It never

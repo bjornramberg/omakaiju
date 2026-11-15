@@ -1827,3 +1827,141 @@ func TestOpenMsgDoesNotReloadPanes(t *testing.T) {
 		t.Error("openMsg should not dispatch a reload command")
 	}
 }
+
+// The ".." row is the way up, not an entry: copying it would stage the very
+// directory the pane is showing. It refuses and says why, the way the other
+// refusals do.
+func TestYankOnParentRowRefuses(t *testing.T) {
+	m, _ := fixture(t)
+	m.leftCursor = parentCursor
+
+	got, cmd := updateModelCmd(t, m, shiftKey('c'))
+	if cmd != nil {
+		t.Error("yanking the parent row must not dispatch anything")
+	}
+	if got.clipboardOn || len(got.clipboard.Files) != 0 {
+		t.Errorf("the parent directory was copied: %+v", got.clipboard)
+	}
+	if want := "the parent directory cannot be copied"; got.opResult != want {
+		t.Errorf("opResult = %q, want %q", got.opResult, want)
+	}
+}
+
+// Marking the ".." row would put the directory the pane is showing into the
+// set a later move consumes.
+func TestMarkOnParentRowRefuses(t *testing.T) {
+	m, _ := fixture(t)
+	m.leftCursor = parentCursor
+
+	got, cmd := updateModelCmd(t, m, shiftKey('m'))
+	if cmd != nil {
+		t.Error("marking the parent row must not dispatch anything")
+	}
+	if len(got.marked) != 0 {
+		t.Errorf("marked = %v, want nothing marked", got.marked)
+	}
+	if want := "the parent directory cannot be marked"; got.opResult != want {
+		t.Errorf("opResult = %q, want %q", got.opResult, want)
+	}
+}
+
+// Deleting the ".." row would delete the directory the user is standing in, so
+// the prompt never opens and the target is never staged.
+func TestDeleteOnParentRowRefuses(t *testing.T) {
+	m, dir := fixture(t)
+	m.leftCursor = parentCursor
+
+	got, cmd := updateModelCmd(t, m, shiftKey('d'))
+	if cmd != nil {
+		t.Error("deleting the parent row must not dispatch anything")
+	}
+	if got.confirmDelete || got.deleteTarget != "" {
+		t.Errorf("the delete prompt opened for %q", got.deleteTarget)
+	}
+	if want := "the parent directory cannot be deleted"; got.opResult != want {
+		t.Errorf("opResult = %q, want %q", got.opResult, want)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("the directory on screen must still be there: %v", err)
+	}
+}
+
+// Renaming the ".." row would rename the parent, from a pane that is not
+// showing it: the prompt stays closed and the bottom bar says why.
+func TestRenameOnParentRowRefuses(t *testing.T) {
+	m, _ := fixture(t)
+	m.leftCursor = parentCursor
+
+	got, cmd := updateModelCmd(t, m, shiftKey('r'))
+	if cmd != nil {
+		t.Error("renaming the parent row must not dispatch anything")
+	}
+	if got.mode != inputNone {
+		t.Errorf("mode = %v, want the rename prompt closed", got.mode)
+	}
+	if got.renameTarget != "" {
+		t.Errorf("renameTarget = %q, want none", got.renameTarget)
+	}
+	if want := "the parent directory cannot be renamed"; got.opResult != want {
+		t.Errorf("opResult = %q, want %q", got.opResult, want)
+	}
+}
+
+// Nothing may index the listing with the ".." row's position: it is -1, and
+// files[-1] panics. Each action is run on its own because the crash recovery
+// turns a panic into a reported error, and a shared fixture would let the first
+// broken action hide the rest. Rendering reads the cursor too, so the frame is
+// drawn as well.
+func TestParentRowNeverIndexesTheListing(t *testing.T) {
+	actions := []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{"yank", shiftKey('c')},
+		{"mark", shiftKey('m')},
+		{"delete", shiftKey('d')},
+		{"rename", shiftKey('r')},
+		{"enter", tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})},
+		{"right arrow", arrow(tea.KeyRight)},
+		{"left arrow", arrow(tea.KeyLeft)},
+		{"down arrow", arrow(tea.KeyDown)},
+		{"up arrow", arrow(tea.KeyUp)},
+		{"sort", shiftKey('o')},
+		{"jump", key('a')},
+		{"filter", shiftKey('f')},
+		{"refresh", shiftKey('e')},
+	}
+
+	for _, tc := range actions {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := fixture(t)
+			m.width, m.height = 100, 30
+			m.leftCursor = parentCursor
+			m.updatePreview()
+
+			got, _ := updateModelCmd(t, m, tc.msg)
+			if got.Crashed() {
+				t.Fatalf("%s panicked on the parent row: %v", tc.name, got.crashErr)
+			}
+			if view := got.View().Content; strings.Contains(view, "internal error") {
+				t.Fatalf("%s: drawing the parent row panicked", tc.name)
+			}
+		})
+	}
+}
+
+// An operation that started on an entry can land after the user has moved to
+// the ".." row. The result still has to be reported, and keeping the user's
+// place must not read the listing with the parent row's position.
+func TestOperationResultLandsWithParentRowCursor(t *testing.T) {
+	m, _ := fixture(t)
+	m.leftCursor = parentCursor
+
+	got := updateModel(t, m, fileOpMsg{verb: "deleted", name: "alpha.txt", succeeded: 1})
+	if got.Crashed() {
+		t.Fatalf("landing the result on the parent row panicked: %v", got.crashErr)
+	}
+	if got.opResult == "" {
+		t.Error("the operation result should still be reported")
+	}
+}

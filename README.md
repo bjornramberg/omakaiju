@@ -80,7 +80,8 @@ OMAKAIJU_ALLOW_UNSIGNED=1 curl -fsSL https://raw.githubusercontent.com/bjornramb
 
 omakaiju is built around three things you already know:
 
-* **Arrow keys** move the cursor, and `←` walks back up to the parent directory.
+* **Arrow keys** move the cursor — up from the first row reaches the `..`
+  row — and `←` walks back up to the parent directory.
 * **`Tab`** switches between the two panes.
 * **`Shift+K`** opens the full key list: a searchable, sectioned overlay where you can filter by key or action — type *"pane"* or *"copy"* to narrow it down.
 
@@ -110,8 +111,17 @@ The mouse works, and it is on by default:
   pane's header or empty space focuses the pane without moving the cursor.
   The listing stays where it is: clicking a row that is already on screen
   selects it where it is, without scrolling the list.
+* **Double click** opens what is under the pointer: a directory is entered, a
+  file is opened with the desktop handler, and the `..` row goes to the
+  directory above.
 * **Wheel** over a pane scrolls it three rows a notch, and never moves the
   focus away from the pane you are working in.
+
+Each pane shows a `..` row above its listing — the way back to the directory
+above — except at the filesystem root, where there is none. It is a real
+entry: the cursor can be on it and Enter goes up a level, and a double click
+does the same. It answers to nothing else: copying, marking, renaming or
+deleting it is refused.
 
 Clicks outside the two file panes — the top and bottom bars, the preview
 column — do nothing. While a prompt or overlay is open the mouse is released

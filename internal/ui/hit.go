@@ -41,6 +41,9 @@ type Hit struct {
 	// position is over the pane's chrome — its border, header, padding, status
 	// area, or the blank rows left under a short listing.
 	Row int
+	// Parent says the position is over the pane's ".." row: the way back to
+	// the directory above the one the pane shows.
+	Parent bool
 }
 
 // HitPane resolves a screen position against the file panes. panes must be the
@@ -58,6 +61,12 @@ func (l Layout) HitPane(panes [2]Pane, x, y int) (Hit, bool) {
 	for i, rect := range l.PaneRects() {
 		if x < rect.X || x >= rect.X+rect.Width || y < rect.Y || y >= rect.Y+rect.Height {
 			continue
+		}
+		// The parent row sits above the listing, on the pane's first body
+		// row. It is not an entry, so the listing's own window never covers
+		// it; resolving it first also keeps the rows below it unshifted.
+		if panes[i].Parent != "" && y == rect.Y+paneRowsTop {
+			return Hit{Pane: i, Row: -1, Parent: true}, true
 		}
 		row := -1
 		if window := panes[i].Rows(); window.Count > 0 {

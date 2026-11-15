@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bjornramberg/omakaiju/internal/config"
 	"github.com/bjornramberg/omakaiju/internal/fs"
@@ -15,10 +16,13 @@ import (
 
 // Screen geometry for the fixture below, asserted independently of the code
 // that computes it: two bars of three rows, and a pane whose first file row
-// comes after its border, padding, header, and the blank line under the header.
+// comes after its border, padding, header, the blank line under the header, and
+// the ".." row. The fixture's directory always has a parent, so the parent row
+// is always there and every file row is one lower than it would be at the root.
 const (
 	mouseTopBarRows   = 3
-	mouseFirstFileRow = 4
+	mouseParentRow    = 4
+	mouseFirstFileRow = 5
 )
 
 // mouseFixture builds a model with n files in both panes, the mouse enabled,
@@ -55,15 +59,34 @@ func wheelAt(x, y int, button tea.MouseButton) tea.MouseMsg {
 	return tea.MouseWheelMsg(tea.Mouse{X: x, Y: y, Button: button})
 }
 
-// updateModel feeds one message and returns the model it produced.
-func updateModel(t *testing.T, m Model, msg tea.Msg) Model {
+// mouseAddDir adds a directory to the fixture's directory and refreshes both
+// listings. It keeps the navigable entries out of mouseFixture, whose row
+// counts the other mouse tests are written against.
+func mouseAddDir(t *testing.T, m Model, dir, name string) Model {
 	t.Helper()
-	updated, _ := m.Update(msg)
-	got, ok := updated.(Model)
-	if !ok {
-		t.Fatalf("Update returned %T, want Model", updated)
+	if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	return got
+	files, err := fs.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.leftFiles, m.rightFiles = files, files
+	return m
+}
+
+// mouseRow is the listing index of an entry the test knows by name. Rows move
+// when the directory gains entries, so a test that hard-codes an index is
+// testing the fixture's sort order as much as the mouse.
+func mouseRow(t *testing.T, m Model, name string) int {
+	t.Helper()
+	for i, f := range m.visibleFiles(0) {
+		if f.Name == name {
+			return i
+		}
+	}
+	t.Fatalf("%s is missing from the listing", name)
+	return -1
 }
 
 // A left click on a file row focuses that pane and moves its cursor to the row
@@ -361,8 +384,9 @@ func TestMouseClickFilteredPane(t *testing.T) {
 	m, _ := mouseFixture(t, 20)
 	m.leftFilter = "f"
 
-	// Pane height 24: 24 - 6 chrome - 2 filter rows leaves 16 rows.
-	lastRow := 15
+	// Pane height 24: 24 - 6 chrome - 2 filter rows - 1 parent row leaves 15
+	// rows.
+	lastRow := 14
 	got := updateModel(t, m, clickAt(3, mouseTopBarRows+mouseFirstFileRow+lastRow))
 	if got.leftCursor != lastRow {
 		t.Errorf("leftCursor = %d, want %d", got.leftCursor, lastRow)
@@ -382,8 +406,8 @@ func TestMouseClickMarkedPane(t *testing.T) {
 	m, _ := mouseFixture(t, 20)
 	m.marked = map[string]fs.Entry{m.leftFiles[0].Path: m.leftFiles[0]}
 
-	// 24 - 6 chrome - 1 status = 17 rows.
-	lastRow := 16
+	// 24 - 6 chrome - 1 status - 1 parent row = 16 rows.
+	lastRow := 15
 	got := updateModel(t, m, clickAt(3, mouseTopBarRows+mouseFirstFileRow+lastRow))
 	if got.leftCursor != lastRow {
 		t.Errorf("leftCursor = %d, want %d", got.leftCursor, lastRow)
@@ -461,6 +485,200 @@ func TestMouseWheelScrollsListingAndCursor(t *testing.T) {
 	got = updateModel(t, got, wheelAt(50, mouseTopBarRows+mouseFirstFileRow, tea.MouseWheelUp))
 	if got.rightScroll != 0 || got.rightCursor != 0 {
 		t.Errorf("wheel up: scroll/cursor = %d/%d, want 0/0", got.rightScroll, got.rightCursor)
+	}
+}
+
+// A single click on ".." selects it and focuses the pane, the way a click on
+// any other row selects it. The listing does not change until the user asks
+// twice, so the row is safe to click on the way to somewhere else.
+func TestMouseSingleClickParentRowSelectsIt(t *testing.T) {
+	m, dir := mouseFixture(t, 8)
+	m.activePane = 1
+	m.leftCursor = 3
+	m.leftScroll = 0
+
+	got, cmd := updateModelCmd(t, m, clickAt(3, mouseTopBarRows+mouseParentRow))
+	if got.activePane != 0 {
+		t.Errorf("activePane = %d, want 0", got.activePane)
+	}
+	if got.leftPending != "" || got.leftPath != dir {
+		t.Errorf("a single click on the parent row navigated to %q (path %q)", got.leftPending, got.leftPath)
+	}
+	if got.leftCursor != parentCursor {
+		t.Errorf("leftCursor = %d, want the parent row %d", got.leftCursor, parentCursor)
+	}
+	// The focused pane's preview follows the focus and the new row, so the
+	// click still has to rebuild it.
+	if cmd == nil {
+		t.Error("focusing the pane should dispatch a preview update")
+	}
+}
+
+// Two clicks on ".." go up a level, and they come back the way the keyboard's
+// left arrow does: the cursor lands on the directory that was left.
+func TestMouseDoubleClickParentRowGoesUp(t *testing.T) {
+	m, dir := mouseFixture(t, 8)
+	y := mouseTopBarRows + mouseParentRow
+
+	first, _ := updateModelCmd(t, m, clickAt(3, y))
+	if first.leftPending != "" {
+		t.Fatalf("the first click of a double-click navigated to %q", first.leftPending)
+	}
+
+	got, cmd := updateModelCmd(t, first, clickAt(3, y))
+	parent := filepath.Dir(dir)
+	if got.leftPending != parent {
+		t.Fatalf("leftPending = %q, want the parent %q", got.leftPending, parent)
+	}
+	// The header keeps naming the directory whose rows are on screen until the
+	// parent listing arrives.
+	if got.leftPath != dir {
+		t.Errorf("leftPath = %q, want the old path %q", got.leftPath, dir)
+	}
+	if got := got.restoreOf(0); got != filepath.Base(dir) {
+		t.Errorf("restore = %q, want the directory we came from %q", got, filepath.Base(dir))
+	}
+	if cmd == nil {
+		t.Fatal("going up should dispatch a load")
+	}
+	loaded, ok := cmd().(dirLoadedMsg)
+	if !ok {
+		t.Fatalf("going up dispatched %T, want a directory load", cmd())
+	}
+	if loaded.pane != 0 || loaded.path != parent {
+		t.Errorf("loaded pane %d path %q, want pane 0 path %q", loaded.pane, loaded.path, parent)
+	}
+}
+
+// Two clicks on a directory enter it. The first click still selects it, the
+// way a single click always has.
+func TestMouseDoubleClickDirectoryEntersIt(t *testing.T) {
+	m, dir := mouseFixture(t, 8)
+	m.activePane = 0
+	m = mouseAddDir(t, m, dir, "zsub")
+	row := mouseRow(t, m, "zsub")
+	y := mouseTopBarRows + mouseFirstFileRow + row
+
+	first, _ := updateModelCmd(t, m, clickAt(3, y))
+	if first.leftCursor != row {
+		t.Fatalf("the first click selected row %d, want %d", first.leftCursor, row)
+	}
+	if first.leftPending != "" {
+		t.Fatalf("the first click of a double-click entered %q", first.leftPending)
+	}
+
+	got, cmd := updateModelCmd(t, first, clickAt(3, y))
+	target := filepath.Join(dir, "zsub")
+	if got.leftPending != target {
+		t.Fatalf("leftPending = %q, want %q", got.leftPending, target)
+	}
+	if cmd == nil {
+		t.Fatal("entering a directory should dispatch a load")
+	}
+	loaded, ok := cmd().(dirLoadedMsg)
+	if !ok {
+		t.Fatalf("entering dispatched %T, want a directory load", cmd())
+	}
+	if loaded.pane != 0 || loaded.path != target {
+		t.Errorf("loaded pane %d path %q, want pane 0 path %q", loaded.pane, loaded.path, target)
+	}
+}
+
+// Two clicks on a file hand it to the desktop handler instead of the listing.
+//
+// The entry is removed from disk after the listing was read but before the
+// clicks, so running the command fails on its first check and never reaches a
+// desktop launcher. The test still learns which command the click produced,
+// which is the part that can regress.
+func TestMouseDoubleClickFileOpensIt(t *testing.T) {
+	m, dir := mouseFixture(t, 8)
+	name := m.leftFiles[0].Name
+	if err := os.Remove(filepath.Join(dir, name)); err != nil {
+		t.Fatal(err)
+	}
+
+	y := mouseTopBarRows + mouseFirstFileRow
+	first, _ := updateModelCmd(t, m, clickAt(3, y))
+	got, cmd := updateModelCmd(t, first, clickAt(3, y))
+
+	if got.leftPending != "" || got.leftPath != dir {
+		t.Errorf("opening a file navigated to %q (path %q)", got.leftPending, got.leftPath)
+	}
+	if cmd == nil {
+		t.Fatal("opening a file should dispatch a command")
+	}
+	opened, ok := cmd().(openMsg)
+	if !ok {
+		t.Fatalf("double-clicking a file dispatched %T, want an open message", cmd())
+	}
+	if opened.name != name {
+		t.Errorf("opened %q, want the clicked file %q", opened.name, name)
+	}
+}
+
+// Two clicks on different entries are two clicks: the second one selects its
+// own row and opens nothing, which is what a user correcting a mis-click
+// expects.
+func TestMouseClicksOnDifferentRowsAreNotADoubleClick(t *testing.T) {
+	m, dir := mouseFixture(t, 8)
+	m.activePane = 0
+	m = mouseAddDir(t, m, dir, "ysub")
+	m = mouseAddDir(t, m, dir, "zsub")
+	firstRow := mouseRow(t, m, "ysub")
+	secondRow := mouseRow(t, m, "zsub")
+
+	clicked, _ := updateModelCmd(t, m, clickAt(3, mouseTopBarRows+mouseFirstFileRow+firstRow))
+	got, _ := updateModelCmd(t, clicked, clickAt(3, mouseTopBarRows+mouseFirstFileRow+secondRow))
+
+	if got.leftPending != "" {
+		t.Errorf("two clicks on different rows navigated to %q", got.leftPending)
+	}
+	if got.leftCursor != secondRow {
+		t.Errorf("leftCursor = %d, want the second row %d", got.leftCursor, secondRow)
+	}
+}
+
+// A second click that comes after the double-click window is a new click, not
+// a double-click. Backdating the recorded time is the same state a genuinely
+// slow second click finds, and it keeps the test from sleeping for half a
+// second.
+func TestMouseSlowSecondClickIsNotADoubleClick(t *testing.T) {
+	m, dir := mouseFixture(t, 8)
+	y := mouseTopBarRows + mouseParentRow
+
+	clicked, _ := updateModelCmd(t, m, clickAt(3, y))
+	clicked.lastClickAt = clicked.lastClickAt.Add(-time.Second)
+
+	got, _ := updateModelCmd(t, clicked, clickAt(3, y))
+	if got.leftPending != "" {
+		t.Errorf("a slow second click navigated to %q", got.leftPending)
+	}
+	if got.leftPath != dir {
+		t.Errorf("leftPath = %q, want %q", got.leftPath, dir)
+	}
+}
+
+// The first click of a session is a single click, even when it lands on the
+// first row of the first pane: that target is also what the empty record of the
+// last click looks like, so only the record's zero time tells the two apart.
+func TestMouseFirstClickIsNotADoubleClick(t *testing.T) {
+	m, dir := mouseFixture(t, 8)
+	m.activePane = 0
+
+	got, cmd := updateModelCmd(t, m, clickAt(3, mouseTopBarRows+mouseFirstFileRow))
+	if got.leftCursor != 0 {
+		t.Errorf("leftCursor = %d, want the clicked row 0", got.leftCursor)
+	}
+	if got.leftPending != "" || got.leftPath != dir {
+		t.Errorf("the first click navigated to %q (path %q)", got.leftPending, got.leftPath)
+	}
+	// A click that opened the file would return the open command; a plain
+	// selection only refreshes the preview, which may already be current and
+	// need no command at all.
+	if cmd != nil {
+		if _, opened := cmd().(openMsg); opened {
+			t.Error("the first click opened a file")
+		}
 	}
 }
 
