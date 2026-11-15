@@ -42,9 +42,13 @@ func OverlayCentered(background, box string, width int) string {
 }
 
 // OverlayAt draws box on top of the background with its top-left corner at
-// (x, y). The box is spliced into the background one row at a time, keeping
-// the background's line count and exact width unchanged so the layout
-// underneath never shifts.
+// (x, y). The box covers only its own cells: the frame beside it is left
+// exactly as it was, because a box that took the whole screen's width would
+// wipe out everything to its right.
+//
+// width and height are the screen's dimensions, and they only bound the
+// placement. The box's own size comes from the box, so a caller cannot make
+// it cover more of the frame than it actually occupies.
 func OverlayAt(background, box string, x, y, width, height int) string {
 	bgLines := strings.Split(background, "\n")
 	boxLines := strings.Split(box, "\n")
@@ -54,10 +58,22 @@ func OverlayAt(background, box string, x, y, width, height int) string {
 	}
 
 	bgWidth := DisplayWidth(bgLines[0])
-	if width > bgWidth {
-		width = bgWidth
-		x = 0
+
+	// How much of each row the box covers. It is measured from the box
+	// itself and never exceeds the width it was told: a caller that passed
+	// the screen's width here would take the whole row with it, and the
+	// frame beside the box would be erased and leave a hole the width of
+	// the terminal.
+	boxWidth := 0
+	for _, line := range boxLines {
+		if w := DisplayWidth(line); w > boxWidth {
+			boxWidth = w
+		}
 	}
+	if width > 0 && width < boxWidth {
+		boxWidth = width
+	}
+
 	if x < 0 {
 		x = 0
 	}
@@ -65,11 +81,11 @@ func OverlayAt(background, box string, x, y, width, height int) string {
 		y = 0
 	}
 
-	for i := 0; i < height && y+i < len(bgLines); i++ {
-		if i >= len(boxLines) {
-			break
-		}
-		bgLines[y+i] = spliceAt(bgLines[y+i], boxLines[i], x, width, bgWidth)
+	// The box's own rows, and no more of them than the caller asked for. A
+	// caller that passed the screen's height would splice the whole frame,
+	// and the box's rows are the only ones that belong to it.
+	for i := 0; i < len(boxLines) && i < height && y+i < len(bgLines); i++ {
+		bgLines[y+i] = spliceAt(bgLines[y+i], boxLines[i], x, boxWidth, bgWidth)
 	}
 
 	return strings.Join(bgLines, "\n")

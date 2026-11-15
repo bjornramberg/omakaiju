@@ -123,3 +123,33 @@ func TestOverlayAtPreservesBackgroundGeometry(t *testing.T) {
 		}
 	}
 }
+
+// A box covers its own cells and no more, whatever width the caller says.
+// The caller knows the screen's dimensions, and a box that took the width
+// from the caller would wipe out the frame beside it and leave a hole the
+// width of the terminal — the menu is a dozen cells wide, and the hole
+// beside it looked like a black slab.
+func TestOverlayAtLeavesTheBackgroundBesideTheBox(t *testing.T) {
+	bg := makeGrid(80, 24)
+	box := boxOf(10, 4)
+
+	for _, tc := range []struct {
+		name          string
+		width, height int
+	}{
+		{"the box's own size", 10, 4},
+		{"the screen's size", 80, 24},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := OverlayAt(bg, box, 5, 3, tc.width, tc.height)
+			lines := strings.Split(got, "\n")
+
+			want := strings.Repeat(".", 5) + strings.Repeat("#", 10) + strings.Repeat(".", 65)
+			for row := 3; row < 7; row++ {
+				if stripANSI(lines[row]) != want {
+					t.Errorf("row %d = %q, want %q", row, stripANSI(lines[row]), want)
+				}
+			}
+		})
+	}
+}

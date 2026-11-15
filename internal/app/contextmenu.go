@@ -427,6 +427,10 @@ func (m Model) runMenuAction(action menuAction) (tea.Model, tea.Cmd) {
 type placedMenu struct {
 	panel ui.Menu
 	x, y  int
+	// width and height are the panel's own size, which is what the overlay
+	// has to be told: it splices the panel over the frame, and a panel sized
+	// by the screen would paint over everything to its right.
+	width, height int
 }
 
 // menuPlacement builds the menu and clamps its position to the screen.
@@ -454,5 +458,5 @@ func (m Model) menuPlacement() placedMenu {
 	}
 	width, height := panel.Size()
 	x, y := ui.OverlayPosition(m.menu.x, m.menu.y, width, height, m.width, m.height)
-	return placedMenu{panel: panel, x: x, y: y}
+	return placedMenu{panel: panel, x: x, y: y, width: width, height: height}
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/bjornramberg/omakaiju/internal/ui"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -430,6 +431,66 @@ func TestContextMenuIsDrawnAtTheClampedPosition(t *testing.T) {
 	if !strings.Contains(drawn[row], "Paste") {
 		t.Errorf("row %d = %q, want the menu's first item at the drawn origin", row, drawn[row])
 	}
+}
+
+// The menu covers its own cells and no more. An overlay that took the whole
+// screen's width would wipe out the frame beside the menu and leave a hole
+// the width of the terminal — the menu is a dozen cells wide, and the hole
+// beside it looked like a black slab.
+func TestContextMenuLeavesTheFrameBesideIt(t *testing.T) {
+	m, _ := mouseFixture(t, 8)
+
+	got := updateModel(t, m, rightClickAt(50, 12))
+	if got.menu == nil {
+		t.Fatal("right-click did not open a menu")
+	}
+	place := got.menuPlacement()
+	withMenu := strings.Split(stripTestANSI(got.View().Content), "\n")
+
+	// The same frame with the menu closed. A right-click also focuses the
+	// pane, so the frame from before the click is not the frame to compare
+	// with; the difference between the two is the menu and nothing else.
+	closed := got
+	closed.menu = nil
+	plain := strings.Split(stripTestANSI(closed.View().Content), "\n")
+
+	row := place.y + 4
+	if row >= len(withMenu) || row >= len(plain) {
+		t.Fatalf("item row %d is outside the %d-line frame", row, len(withMenu))
+	}
+
+	// The menu's own cells are the panel's; every cell beside it has to be
+	// exactly what the frame had without the menu.
+	drawn := rowCells(withMenu[row])
+	orig := rowCells(plain[row])
+	right := place.x + place.width
+	if right >= len(drawn) || right >= len(orig) {
+		t.Fatalf("row %d is %d cells, want more than the menu's %d", row, len(drawn), right)
+	}
+	for i := right; i < len(orig); i++ {
+		if drawn[i] != orig[i] {
+			t.Errorf("cell %d beside the menu = %q, want %q", i, drawn[i], orig[i])
+			break
+		}
+	}
+}
+
+// rowCells splits a row into its visible cells, so two frames can be
+// compared cell by cell rather than byte by byte: a box-drawing glyph is
+// three bytes and one cell.
+func rowCells(s string) []string {
+	cells := []string{}
+	for _, r := range s {
+		w := ui.DisplayWidth(string(r))
+		if w == 0 {
+			continue
+		}
+		cells = append(cells, string(r))
+		for i := 1; i < w; i++ {
+			cells = append(cells, "")
+		}
+	}
+	return cells
 }
 
 // The menu's actions are the app's actions. These are the ones whose effect is
