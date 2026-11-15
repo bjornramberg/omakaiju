@@ -127,10 +127,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// A refresh caused by an external change keeps the user's place. The
-		// old selected name is taken before the listing is replaced.
+		// old selected name is taken before the listing is replaced. A cursor
+		// on the ".." row has no name: there is nothing in the listing for it
+		// to follow, and reading the listing with it would index past the
+		// start.
 		oldCursor := m.rawCursor(msg.pane)
 		oldName := ""
-		if files := m.visibleFiles(msg.pane); oldCursor < len(files) {
+		if files := m.visibleFiles(msg.pane); oldCursor >= 0 && oldCursor < len(files) {
 			oldName = files[oldCursor].Name
 		}
 		m.loadErr = nil

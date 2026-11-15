@@ -50,7 +50,12 @@ func (m *Model) updatePreview() tea.Cmd {
 	cursor := m.rawCursor(m.activePane)
 	path := ""
 	stamp := ""
-	if cursor < len(files) {
+	if cursor == parentCursor {
+		// The ".." row is a directory like any other: the preview shows the
+		// one above, which is what the user is about to step into.
+		path = m.parentPath(m.activePane)
+		stamp = previewStamp(path)
+	} else if cursor >= 0 && cursor < len(files) {
 		path = files[cursor].Path
 		stamp = previewStamp(path)
 	}

@@ -245,6 +245,75 @@ func TestHitPaneUsesMarkedStatusRow(t *testing.T) {
 	}
 }
 
+// The parent row is the pane's first body row, and a click there names the
+// parent rather than any entry of the listing. Both layouts have to resolve it
+// against the rectangle the pane was actually drawn at.
+func TestHitPaneParentRow(t *testing.T) {
+	theme := config.DefaultTheme()
+	for _, tc := range []struct {
+		name    string
+		stacked bool
+	}{
+		{"side by side", false},
+		{"stacked", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := NewLayout(100, 30, theme)
+			l.PanesStacked = tc.stacked
+			if tc.stacked && !l.CanStack() {
+				t.Fatal("30 rows should allow stacking")
+			}
+			panes := hitPanes(l, theme)
+			for pane := range panes {
+				panes[pane].Files = hitFiles(10)
+				panes[pane].Parent = "/tmp"
+			}
+
+			rects := l.PaneRects()
+			for pane := range panes {
+				hit, ok := l.HitPane(panes, rects[pane].X+3, rects[pane].Y+paneRowsTop)
+				if !ok {
+					t.Fatalf("pane %d: the parent row is inside the pane", pane)
+				}
+				if hit.Pane != pane || !hit.Parent || hit.Row != -1 {
+					t.Errorf("pane %d parent row = %+v, want that pane's parent and no row", pane, hit)
+				}
+
+				// The blank line above the parent row is still chrome. The
+				// parent row must not creep up into it.
+				hit, ok = l.HitPane(panes, rects[pane].X+3, rects[pane].Y+paneRowsTop-1)
+				if !ok || hit.Parent || hit.Row != -1 {
+					t.Errorf("pane %d chrome above the parent row = %+v, %v; want chrome", pane, hit, ok)
+				}
+			}
+		})
+	}
+}
+
+// The parent row takes a row of its own, so the first entry moves down with
+// it. A listing that still started one row higher would open the second file
+// whenever the first one was clicked.
+func TestHitPaneParentRowKeepsListingInPlace(t *testing.T) {
+	theme := config.DefaultTheme()
+	l := NewLayout(100, 30, theme)
+	panes := hitPanes(l, theme)
+	panes[0].Files = hitFiles(10)
+	panes[0].Parent = "/tmp"
+
+	window := panes[0].Rows()
+	if window.Top != paneRowsTop+1 {
+		t.Fatalf("setup: listing starts at %d, want %d", window.Top, paneRowsTop+1)
+	}
+	hit, ok := l.HitPane(panes, 3, 3+window.Top)
+	if !ok || hit.Parent || hit.Row != 0 {
+		t.Errorf("first entry row = %+v, %v; want row 0", hit, ok)
+	}
+	hit, ok = l.HitPane(panes, 3, 3+window.Top+1)
+	if !ok || hit.Parent || hit.Row != 1 {
+		t.Errorf("second entry row = %+v, %v; want row 1", hit, ok)
+	}
+}
+
 // A pane scrolled down resolves clicks through the window it was given: the
 // top screen row is Start, not zero. The cursor rides inside that window, so a
 // click on one of its rows selects the entry drawn there with no re-scroll.
@@ -302,6 +371,9 @@ func TestHitPaneMatchesRenderedRows(t *testing.T) {
 			panes := hitPanes(l, theme)
 			panes[0].Files = hitFiles(15)
 			panes[0].Cursor = 7
+			// The left pane has a way up, so its listing is drawn one row
+			// lower than the right pane's. The frame is the oracle for both.
+			panes[0].Parent = "/tmp"
 			panes[1].Files = hitFiles(15)
 			panes[1].Filter = "f"
 			panes[1].Status = "2 marked"

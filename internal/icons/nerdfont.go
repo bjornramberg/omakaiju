@@ -31,6 +31,9 @@ var (
 	// AppIcon is the Nerd Font droplet glyph that prefixes the app name in the
 	// top bar.
 	AppIcon = "\uf0c5"
+	// UpIcon marks the row that leads to the directory above the one being
+	// shown.
+	UpIcon = "\uf062"
 )
 
 // enabled says whether the glyphs are drawn. The Nerd Font they need is
