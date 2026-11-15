@@ -18,10 +18,10 @@ type Config struct {
 	NoIcons bool
 	// Mouse turns on the terminal's mouse reporting: a left click focuses the
 	// pane under the pointer and selects the row it landed on, and the wheel
-	// scrolls the pane beneath it. It is read from OMAKAIJU_MOUSE and is off
-	// by default, because a terminal in mouse mode stops handing out its
-	// native text selection — and this app's preview is exactly the text
-	// people want to copy. Turning it on is a trade the user has to ask for.
+	// scrolls the pane beneath it. It is on by default, because a file
+	// manager whose mouse does nothing is broken for anyone who reaches for
+	// it. OMAKAIJU_NO_MOUSE=1 turns it off for the sake of the terminal's
+	// own drag-to-select, which a terminal in mouse-reporting mode swallows.
 	Mouse bool
 	// ThemeWatchDirs are the directories to watch for palette changes. A theme
 	// switch swaps a symlink rather than rewriting the file, so both the
@@ -58,7 +58,7 @@ func Load() (Config, error) {
 		ThemePath:       colorsFile,
 		OmarchyStateDir: state,
 		NoIcons:         iconsDisabled(),
-		Mouse:           mouseEnabled(),
+		Mouse:           !mouseDisabled(),
 	}
 	cfg.ThemeWatchDirs = watchDirs(home, colorsFile)
 	return cfg, nil
@@ -86,26 +86,41 @@ func iconsDisabled() bool {
 	return off
 }
 
-// mouseEnv is the environment variable that turns mouse reporting on. Like
+// mouseEnv is the environment variable that turns mouse reporting off. Like
 // OMAKAIJU_NO_ICONS it is a single setting with no config file behind it.
-const mouseEnv = "OMAKAIJU_MOUSE"
+const mouseEnv = "OMAKAIJU_NO_MOUSE"
 
-// mouseEnabled reads OMAKAIJU_MOUSE. The default is off: a terminal in mouse
-// mode swallows drag-to-select, and the preview pane exists to show text the
-// user may well want to copy. An unset or empty value therefore keeps the
-// mouse released. A value that parses as a boolean follows the bool; anything
-// else is a user who typed the variable and meant it, so `OMAKAIJU_MOUSE=yes`
-// turns the mouse on.
-func mouseEnabled() bool {
-	v := strings.TrimSpace(os.Getenv(mouseEnv))
-	if v == "" {
-		return false
+// mouseDisabledEnv is the older spelling, kept because it is the one the
+// first release of the mouse documented. It turns the mouse off as well, so
+// a shell that already carries it keeps working.
+const mouseDisabledEnv = "OMAKAIJU_MOUSE"
+
+// mouseDisabled reads the settings that turn the mouse off.
+//
+// The mouse is on by default: a file manager whose mouse does nothing is
+// broken for anyone who reaches for it, and the terminal keeps its own
+// drag-to-select only while the application leaves the pointer alone. A
+// terminal in mouse-reporting mode swallows that selection, so the way out
+// has to be easy: OMAKAIJU_NO_MOUSE=1 releases the pointer, and
+// OMAKAIJU_MOUSE=0 does the same for the shells that carry the older name.
+// A value that parses as a boolean follows the bool; anything else is a
+// request to turn the mouse off, so OMAKAIJU_NO_MOUSE=yes works as a reader
+// would expect.
+func mouseDisabled() bool {
+	for _, env := range []string{mouseEnv, mouseDisabledEnv} {
+		v := strings.TrimSpace(os.Getenv(env))
+		if v == "" {
+			continue
+		}
+		off, err := strconv.ParseBool(v)
+		if err != nil {
+			return true
+		}
+		if off {
+			return true
+		}
 	}
-	on, err := strconv.ParseBool(v)
-	if err != nil {
-		return true
-	}
-	return on
+	return false
 }
 
 // watchDirs returns the directories whose contents can signal a palette change.
