@@ -33,6 +33,12 @@ type Model struct {
 	rightPath   string
 	rightFiles  []fs.Entry
 	rightCursor int
+	// leftScroll/rightScroll hold the index of the first row each pane draws.
+	// The listing window is model state, not a function of the cursor, so a
+	// pane scrolled to the middle of a long list stays there when a click moves
+	// the cursor to a row inside it.
+	leftScroll  int
+	rightScroll int
 	// leftPending/rightPending hold the path of a listing the pane is still
 	// waiting for. The pane's path and listing are committed together when
 	// that listing arrives, so a failed load leaves both as they were.

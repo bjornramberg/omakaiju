@@ -108,6 +108,8 @@ The mouse works, and it is on by default:
 
 * **Left click** a file row to focus its pane and select that row. Clicking a
   pane's header or empty space focuses the pane without moving the cursor.
+  The listing stays where it is: clicking a row that is already on screen
+  selects it where it is, without scrolling the list.
 * **Wheel** over a pane scrolls it three rows a notch, and never moves the
   focus away from the pane you are working in.
 

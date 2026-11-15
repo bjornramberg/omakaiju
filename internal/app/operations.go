@@ -177,11 +177,15 @@ func (m Model) handleMove() (tea.Model, tea.Cmd) {
 	if _, exists := m.marked[entry.Path]; exists {
 		delete(m.marked, entry.Path)
 		m.opResult = fmt.Sprintf("unmarked %s (%d)", entry.Name, len(m.marked))
+		// The status row names the marked set, so marking and unmarking
+		// change how many rows the pane has for its listing.
+		m.reconcileScroll(m.activePane)
 		return m, nil
 	}
 
 	m.marked[entry.Path] = entry
 	m.opResult = fmt.Sprintf("marked %s (%d)", entry.Name, len(m.marked))
+	m.reconcileScroll(m.activePane)
 	return m, nil
 }
 

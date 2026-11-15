@@ -99,6 +99,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		// A pane's row count changed with the height, so the stored window may
+		// no longer be the window the pane draws. Reconciling both panes keeps
+		// the cursor inside a window that still exists at the new size.
+		m.reconcileScroll(0)
+		m.reconcileScroll(1)
 		// The layout may have just made room for a preview that was yielding
 		// its column, so ask for it again at the new size.
 		return m, m.updatePreview()
@@ -136,6 +141,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !msg.preserve {
 				m.leftCursor = 0
 				m.leftFilter = ""
+				m.setScroll(0, 0)
 			}
 		} else {
 			m.rightPath = msg.path
@@ -143,6 +149,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !msg.preserve {
 				m.rightCursor = 0
 				m.rightFilter = ""
+				m.setScroll(1, 0)
 			}
 		}
 		// Re-apply the pane's sort mode: ReadDir always arrives in name

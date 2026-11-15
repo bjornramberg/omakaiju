@@ -152,6 +152,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.requestQuit()
 	case nav.ActionTab:
 		m.activePane = 1 - m.activePane
+		// The status row belongs to the focused pane, so the focus change
+		// takes a row from one pane and gives it to the other.
+		m.reconcileScrolls()
 		return m, m.updatePreview()
 	case nav.ActionStack:
 		// The layout falls back to side by side when the terminal is
@@ -159,6 +162,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// made: refusing the key here would leave a user who stacked
 		// the panes in a small window unable to unstack them.
 		m.panesStacked = !m.panesStacked
+		// Stacking halves each pane, so both panes have a different number
+		// of rows than they had a moment ago.
+		m.reconcileScrolls()
 		return m, nil
 	case nav.ActionSort:
 		mode := m.cycleSort(m.activePane)

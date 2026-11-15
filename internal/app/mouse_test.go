@@ -397,6 +397,73 @@ func TestMouseClickMarkedPane(t *testing.T) {
 	}
 }
 
+// Clicking a row in the middle of a scrolled listing selects that row without
+// moving the listing. This is the regression: the window used to be derived as
+// "cursor - rows + 1", so the click dragged the window down and left the
+// clicked file on the last row of the pane. A click is a selection, not a
+// scroll, and the row the user pointed at has to stay under the pointer.
+func TestMouseClickInScrolledPaneDoesNotScroll(t *testing.T) {
+	m, _ := mouseFixture(t, 60)
+	m.activePane = 0
+
+	// Scroll down first, so the click lands on a row the window did not start
+	// on. Three notches put the window at row 9.
+	for i := 0; i < 3; i++ {
+		m = updateModel(t, m, wheelAt(3, mouseTopBarRows+mouseFirstFileRow, tea.MouseWheelDown))
+	}
+	if m.leftScroll != 9 {
+		t.Fatalf("setup: leftScroll = %d, want 9", m.leftScroll)
+	}
+
+	// A row in the middle of the list area, five rows below the top one.
+	const offset = 5
+	y := mouseTopBarRows + mouseFirstFileRow + offset
+	clicked := m.leftScroll + offset
+	before := strings.Split(stripTestANSI(m.View().Content), "\n")
+	if !strings.Contains(before[y], m.leftFiles[clicked].Name) {
+		t.Fatalf("setup: screen row %d = %q does not hold %q", y, before[y], m.leftFiles[clicked].Name)
+	}
+
+	got := updateModel(t, m, clickAt(3, y))
+	if got.leftCursor != clicked {
+		t.Errorf("leftCursor = %d, want the clicked row %d", got.leftCursor, clicked)
+	}
+	if got.leftScroll != m.leftScroll {
+		t.Errorf("the click scrolled the listing: leftScroll = %d, want %d", got.leftScroll, m.leftScroll)
+	}
+
+	after := strings.Split(stripTestANSI(got.View().Content), "\n")
+	if !strings.Contains(after[y], m.leftFiles[clicked].Name) {
+		t.Errorf("the clicked file left screen row %d: %q", y, after[y])
+	}
+}
+
+// The wheel scrolls the listing and carries the selection with it, so the row
+// under the pointer stays under the pointer and the preview follows the wheel
+// the way it always has. The cursor has to stay inside the window the pane now
+// draws, or the next frame would scroll to reach it.
+func TestMouseWheelScrollsListingAndCursor(t *testing.T) {
+	m, _ := mouseFixture(t, 60)
+	m.activePane = 0
+
+	got := updateModel(t, m, wheelAt(50, mouseTopBarRows+mouseFirstFileRow, tea.MouseWheelDown))
+	if got.rightScroll != 3 || got.rightCursor != 3 {
+		t.Errorf("wheel down: scroll/cursor = %d/%d, want 3/3", got.rightScroll, got.rightCursor)
+	}
+	window := got.paneViews(got.layout())[1].Rows()
+	if window.Start != got.rightScroll {
+		t.Errorf("window starts at %d, want the wheel scroll %d", window.Start, got.rightScroll)
+	}
+	if got.rightCursor < window.Start || got.rightCursor >= window.Start+window.Count {
+		t.Errorf("cursor %d is outside window %+v", got.rightCursor, window)
+	}
+
+	got = updateModel(t, got, wheelAt(50, mouseTopBarRows+mouseFirstFileRow, tea.MouseWheelUp))
+	if got.rightScroll != 0 || got.rightCursor != 0 {
+		t.Errorf("wheel up: scroll/cursor = %d/%d, want 0/0", got.rightScroll, got.rightCursor)
+	}
+}
+
 // The strongest check: every row the hit-test names must be the row the
 // renderer drew there. The frame is rendered once, then each clickable row is
 // resolved and looked up in the frame.

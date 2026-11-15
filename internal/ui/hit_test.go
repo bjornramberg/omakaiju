@@ -245,22 +245,24 @@ func TestHitPaneUsesMarkedStatusRow(t *testing.T) {
 	}
 }
 
-// A cursor that has scrolled the listing resolves clicks through the same
-// window the renderer drew: the top screen row is Start, not zero.
+// A pane scrolled down resolves clicks through the window it was given: the
+// top screen row is Start, not zero. The cursor rides inside that window, so a
+// click on one of its rows selects the entry drawn there with no re-scroll.
 func TestHitPaneScrolledWindow(t *testing.T) {
 	theme := config.DefaultTheme()
 	l := NewLayout(100, 30, theme)
 	panes := hitPanes(l, theme)
 	panes[0].Files = hitFiles(20)
-	panes[0].Cursor = 10
-	// Shorter than the body so the cursor must scroll into view.
+	// Shorter than the body so the listing can be scrolled at all.
 	panes[0].Height = 12
+	panes[0].Scroll = 10
+	panes[0].Cursor = 10
 
 	window := panes[0].Rows()
-	if window.Start == 0 {
-		t.Fatal("cursor 10 in a short pane should scroll the window")
+	if window.Start != panes[0].Scroll {
+		t.Fatalf("window starts at %d, want the pane's scroll %d", window.Start, panes[0].Scroll)
 	}
-	if window.Start+window.Count <= 10 {
+	if window.Start+window.Count <= panes[0].Cursor {
 		t.Fatalf("window %+v does not contain the cursor", window)
 	}
 

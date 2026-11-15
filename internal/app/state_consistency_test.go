@@ -302,6 +302,147 @@ func TestPreviewRefreshesWhenFileChanges(t *testing.T) {
 	}
 }
 
+// The window follows the cursor only when the cursor would leave it. A cursor
+// moving inside the window must not scroll the listing; crossing either edge
+// pulls the window just far enough to include the new row, and never further.
+func TestReconcileScrollKeepsCursorInWindow(t *testing.T) {
+	m, _ := mouseFixture(t, 60)
+	if got := m.listRows(0); got != 18 {
+		t.Fatalf("setup: listRows = %d, want 18", got)
+	}
+
+	// A cursor below the window pulls the window down to just include it.
+	m.leftScroll, m.leftCursor = 0, 20
+	m.reconcileScroll(0)
+	if m.leftScroll != 20-18+1 {
+		t.Errorf("cursor below: leftScroll = %d, want %d", m.leftScroll, 20-18+1)
+	}
+
+	// A cursor above the window pushes the window up to the cursor's row.
+	m.leftScroll, m.leftCursor = 10, 4
+	m.reconcileScroll(0)
+	if m.leftScroll != 4 {
+		t.Errorf("cursor above: leftScroll = %d, want 4", m.leftScroll)
+	}
+
+	// A cursor inside the window leaves the window alone. This is the case the
+	// old derived window got wrong: moving to a row that is already on screen
+	// must not scroll the listing.
+	m.leftScroll, m.leftCursor = 10, 12
+	m.reconcileScroll(0)
+	if m.leftScroll != 10 {
+		t.Errorf("cursor inside: leftScroll = %d, want the window left at 10", m.leftScroll)
+	}
+}
+
+// A directory load replaces the listing, so it starts at the top even if the
+// previous directory was scrolled far down. A stale window would otherwise
+// leave the new listing scrolled past its own end.
+func TestDirectoryLoadResetsScroll(t *testing.T) {
+	m, _ := mouseFixture(t, 60)
+	m.leftScroll, m.leftCursor = 20, 20
+
+	updated, _ := m.Update(dirLoadedMsg{pane: 0, path: m.leftPath, files: m.leftFiles})
+	got := updated.(Model)
+	if got.leftScroll != 0 {
+		t.Errorf("leftScroll = %d after a fresh load, want 0", got.leftScroll)
+	}
+	if got.leftCursor != 0 {
+		t.Errorf("leftCursor = %d after a fresh load, want 0", got.leftCursor)
+	}
+}
+
+// Resizing the terminal changes how many rows a pane has, so the stored window
+// may no longer fit the listing. The reconcile after a resize keeps the cursor
+// inside a window that exists at the new size.
+func TestWindowResizeReconcilesScroll(t *testing.T) {
+	m, _ := mouseFixture(t, 60)
+	m.leftScroll, m.leftCursor = 20, 20
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	got := updated.(Model)
+	rows := got.listRows(0)
+	if window := got.paneViews(got.layout())[0].Rows(); got.leftCursor < window.Start ||
+		got.leftCursor >= window.Start+window.Count {
+		t.Errorf("cursor %d is outside window %+v after resize", got.leftCursor, window)
+	}
+	if got.leftScroll+rows > len(got.leftFiles) {
+		t.Errorf("leftScroll = %d with %d rows reaches past %d entries",
+			got.leftScroll, rows, len(got.leftFiles))
+	}
+}
+
+// The model has to know the window the pane draws. A window reconciled against
+// the old geometry is not the window on screen, and the next key press would
+// scroll the listing to reach a cursor the user can see in a different place.
+//
+// What changes the geometry: the focus (the status row belongs to the focused
+// pane), the marked set (the status row names it), and the layout (stacking
+// halves each pane).
+func TestGeometryChangesKeepTheDrawnWindow(t *testing.T) {
+	mark := tea.KeyPressMsg(tea.Key{Code: 'm', Text: "M", ShiftedCode: 'M', Mod: tea.ModShift})
+
+	cases := []struct {
+		name  string
+		setup func(m Model) Model
+		act   func(m Model) Model
+	}{
+		{
+			"switch panes",
+			// A marked file gives the focused pane a status row, so the focus
+			// change takes a row from one pane and gives it to the other.
+			func(m Model) Model {
+				updated, _ := m.Update(mark)
+				return updated.(Model)
+			},
+			func(m Model) Model {
+				updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+				return updated.(Model)
+			},
+		},
+		{
+			"stack the panes",
+			func(m Model) Model { return m },
+			func(m Model) Model {
+				updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 's', Text: "S", ShiftedCode: 'S', Mod: tea.ModShift}))
+				return updated.(Model)
+			},
+		},
+		{
+			"mark a file",
+			func(m Model) Model { return m },
+			func(m Model) Model {
+				updated, _ := m.Update(mark)
+				return updated.(Model)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := mouseFixture(t, 60)
+			// The cursor sits on the last row of the window, which is where a
+			// change in the row count would push it out of view.
+			m = tc.setup(m)
+			m.leftScroll, m.leftCursor = 20, 20+m.listRows(0)-1
+			m.rightScroll, m.rightCursor = 20, 20+m.listRows(1)-1
+
+			got := tc.act(m)
+			for pane := 0; pane < 2; pane++ {
+				window := got.paneViews(got.layout())[pane].Rows()
+				if stored := got.rawScroll(pane); window.Start != stored {
+					t.Errorf("pane %d: the drawn window starts at %d, but the model holds %d",
+						pane, window.Start, stored)
+				}
+				cursor := got.rawCursor(pane)
+				if cursor < window.Start || cursor >= window.Start+window.Count {
+					t.Errorf("pane %d: cursor %d is outside window %+v", pane, cursor, window)
+				}
+			}
+		})
+	}
+}
+
 func previewText(m Model) string {
 	return strings.Join(m.previewContent.Text, "\n")
 }

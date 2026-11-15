@@ -65,6 +65,10 @@ func (m Model) clickPane(x, y int) (tea.Model, tea.Cmd) {
 	if hit.Row >= 0 {
 		m.setCursor(hit.Pane, hit.Row)
 	}
+	// The status row belongs to the focused pane, so focusing a pane takes a
+	// row from it and gives one to the other. Both windows are reconciled
+	// against the geometry they now have.
+	m.reconcileScrolls()
 
 	// Nothing visible changed: the pane was already focused and the click
 	// missed every row, so there is no preview to rebuild.
@@ -98,6 +102,11 @@ func (m Model) wheelPane(x, y int, button tea.MouseButton) (tea.Model, tea.Cmd) 
 		return m, nil
 	}
 
+	// The wheel moves the listing and the selection together, so the row
+	// under the pointer stays under the pointer and the preview follows the
+	// wheel the way it always has. Without carrying the cursor along the
+	// selection would be left behind whenever the wheel scrolled past it.
+	m.setScroll(hit.Pane, m.rawScroll(hit.Pane)+delta)
 	m.setCursor(hit.Pane, m.rawCursor(hit.Pane)+delta)
 	m.clampCursor(hit.Pane)
 
