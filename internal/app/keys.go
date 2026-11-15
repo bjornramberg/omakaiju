@@ -63,9 +63,18 @@ func printableKeyRune(msg tea.KeyMsg) (rune, bool) {
 	return 0, false
 }
 
-// handleKey dispatches a key press that does not belong to an overlay,
-// input prompt, or confirmation. It is the normal-mode key path.
+// handleKey dispatches a key press that does not belong to an overlay, input
+// prompt, or confirmation. It is the normal-mode key path, except that an open
+// context menu claims the keyboard before any of it.
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// An open menu owns the keyboard, so it is checked before anything else:
+	// the arrow keys belong to its highlight rather than to the file cursor,
+	// and every key the menu does not use is swallowed. q in particular must
+	// not quit the app out from under a menu the user is aiming at.
+	if m.menu != nil {
+		return m.handleMenuKeys(msg)
+	}
+
 	// A status message reports what just happened, so it stops being
 	// current once the user acts. Clearing ahead of dispatching the key
 	// means a message produced by this very keypress stays visible until
@@ -167,24 +176,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.reconcileScrolls()
 		return m, nil
 	case nav.ActionSort:
-		mode := m.cycleSort(m.activePane)
-		m.opResult = "sort: " + mode.Label()
-		return m, m.updatePreview()
+		return m.cycleSortAction()
 	case nav.ActionUp, nav.ActionDown, nav.ActionLeft, nav.ActionRight:
 		return m.handleNavAction(action)
 	case nav.ActionEnter:
-		if m.rawCursor(m.activePane) == parentCursor {
-			return m.goToParent(m.activePane)
-		}
-		files := m.visibleFiles(m.activePane)
-		cursor := m.rawCursor(m.activePane)
-		if cursor >= 0 && cursor < len(files) && files[cursor].IsDir {
-			return m, m.beginLoad(m.activePane, files[cursor].Path)
-		}
-		if cursor >= 0 && cursor < len(files) {
-			return m, openCmd(files[cursor].Path, files[cursor].Name)
-		}
-		return m, nil
+		return m.openCursorEntry()
 	case nav.ActionRefresh:
 		// Refresh the listing and the preview: Shift+E is the way to
 		// pick up a file another program has changed without moving
@@ -219,29 +215,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setCursor(m.activePane, 0)
 		return m, m.updatePreview()
 	case nav.ActionAdd:
-		m.mode = inputAdd
-		m.inputBuf = ""
-		return m, nil
+		return m.startAddFile()
 	case nav.ActionAddDir:
-		m.mode = inputAddDir
-		m.inputBuf = ""
-		return m, nil
+		return m.startAddDir()
 	case nav.ActionRename:
-		files := m.visibleFiles(m.activePane)
-		cursor := m.rawCursor(m.activePane)
-		if cursor < 0 || cursor >= len(files) {
-			// The ".." row is the way up, not a directory on disk; renaming
-			// it would mean renaming the parent, which is a different
-			// operation from a different directory.
-			if cursor == parentCursor {
-				m.opResult = "the parent directory cannot be renamed"
-			}
-			return m, nil
-		}
-		m.mode = inputRename
-		m.inputBuf = files[cursor].Name
-		m.renameTarget = files[cursor].Path
-		return m, nil
+		return m.startRename()
 	case nav.ActionCopy:
 		return m.handleYank()
 	case nav.ActionMark:

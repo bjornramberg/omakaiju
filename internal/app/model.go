@@ -230,6 +230,12 @@ type Model struct {
 	// the app cannot tell a drag from a click that happened to end over the
 	// other pane.
 	drag *dragState
+
+	// menu is the context menu open on the screen, if any. It is a pointer
+	// for the same reason the drag is: the zero value of the menu is a real
+	// menu about row zero, so a struct value could not say "no menu" without
+	// a second flag.
+	menu *contextMenu
 }
 
 // clickTarget is what a click landed on: a row of a pane's listing, the

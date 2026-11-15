@@ -23,6 +23,10 @@ const doubleClickWindow = 500 * time.Millisecond
 // is released in the same frames the keyboard is claimed: the panes under a
 // modal are scenery, and a click must not move a cursor the user cannot see
 // change behind the panel.
+//
+// The context menu is deliberately not a modal here. It exists to be aimed at
+// with the pointer, so it keeps the mouse, and handleMouse reaches it before
+// this gate.
 func (m Model) modalActive() bool {
 	return m.confirmEmptyTrash || m.confirmDelete || m.fuzzyActive ||
 		m.keyListActive || m.mode != inputNone
@@ -32,8 +36,17 @@ func (m Model) modalActive() bool {
 // unless the user asked for the mouse and nothing is covering the panes.
 // CellMotion is deliberate: AllMotion would also report hover, and nothing here
 // reacts to a pointer that is only passing over a row.
+//
+// A menu is the one covering that keeps the mouse. A menu the pointer cannot
+// reach is not a menu: the user is aiming at it, and teleporting the pointer
+// back into the terminal's own selection at the moment the panel appears would
+// make every click land somewhere else. The prompts still release it, because
+// there the terminal's text selection is the whole point.
 func (m Model) mouseMode() tea.MouseMode {
-	if !m.cfg.Mouse || m.modalActive() {
+	if !m.cfg.Mouse {
+		return tea.MouseModeNone
+	}
+	if m.menu == nil && m.modalActive() {
 		return tea.MouseModeNone
 	}
 	return tea.MouseModeCellMotion
@@ -41,11 +54,19 @@ func (m Model) mouseMode() tea.MouseMode {
 
 // handleMouse applies the mouse bindings: a left press focuses a pane and
 // selects the row under the pointer, dragging that row onto the other pane
-// moves or copies it, and the wheel scrolls the pane beneath it. Right and
-// middle clicks are ignored; there is no context menu and nothing to paste, so
-// they have nowhere to go.
+// moves or copies it, and the wheel scrolls the pane beneath it. A right press
+// opens the context menu for what it landed on.
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if !m.cfg.Mouse || m.modalActive() {
+	if !m.cfg.Mouse {
+		return m, nil
+	}
+	// The menu is checked before the modal gate: mouseMode keeps reporting
+	// while one is open, so a menu that fell through to the gate would be a
+	// panel the pointer can move over but never click.
+	if m.menu != nil {
+		return m.menuMouse(msg)
+	}
+	if m.modalActive() {
 		// A drag cannot survive the mouse being taken away: with reporting off
 		// the terminal sends no release, and a drag left behind would keep the
 		// drop indicator lit on a pane nobody is dragging onto — and would
@@ -56,10 +77,13 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
-		if msg.Button != tea.MouseLeft {
-			return m, nil
+		switch msg.Button {
+		case tea.MouseRight:
+			return m.openContextMenu(msg.X, msg.Y)
+		case tea.MouseLeft:
+			return m.clickPane(msg.X, msg.Y)
 		}
-		return m.clickPane(msg.X, msg.Y)
+		return m, nil
 	case tea.MouseMotionMsg:
 		// Motion is only reported while a button is down, so this is either
 		// the middle of a drag or a pointer the app never pressed.

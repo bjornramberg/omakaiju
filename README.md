@@ -121,6 +121,10 @@ The mouse works, and it is on by default:
   instead. The target pane tints its header while the pointer is over it, and
   says whether the drop would move or copy. A press and release that never
   leaves the pane is just a click, and the `..` row cannot be dragged.
+* **Right click** a row for the menu of what can be done with it: open,
+  rename, copy, mark and delete. The menu opens under the pointer, follows it
+  as it moves, and answers to the arrow keys as well — `Enter` runs the
+  highlighted action and `Esc` closes it.
 
 Each pane shows a `..` row above its listing — the way back to the directory
 above — except at the filesystem root, where there is none. It is a real

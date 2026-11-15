@@ -281,6 +281,15 @@ func (m Model) view() tea.View {
 		view = ui.OverlayCentered(view, keyList.Render(), m.width)
 	}
 
+	// The context menu is drawn last, over every other panel: it is the thing
+	// the user is aiming at, and anything over it would hide the item about to
+	// be clicked. The placement is the clamped one the mouse is hit-tested
+	// against, so the panel appears exactly where a click is expected to land.
+	if m.menu != nil {
+		place := m.menuPlacement()
+		view = ui.OverlayAt(view, place.panel.Render(), place.x, place.y, m.width, m.height)
+	}
+
 	// The frame is composed. The next write to the terminal is the one the
 	// user sees, so this is the moment the startup is measured from.
 	m.startup.FrameReady()

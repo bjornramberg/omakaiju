@@ -245,9 +245,10 @@ func TestMouseWheelOutsidePanesIgnored(t *testing.T) {
 	}
 }
 
-// Right and middle clicks belong to no gesture, and a release or a motion with
-// no drag in progress is a pointer the app never pressed: all of them must be
-// inert.
+// Middle clicks belong to no gesture, and a release or a motion with no drag in
+// progress is a pointer the app never pressed: all of them must be inert. A
+// right click is no longer one of them — it opens the context menu, which
+// contextmenu_test.go covers.
 func TestMouseOtherEventsIgnored(t *testing.T) {
 	m, _ := mouseFixture(t, 8)
 	m.activePane = 1
@@ -257,7 +258,6 @@ func TestMouseOtherEventsIgnored(t *testing.T) {
 		name string
 		msg  tea.Msg
 	}{
-		{"right click", tea.MouseClickMsg(tea.Mouse{X: 3, Y: 8, Button: tea.MouseRight})},
 		{"middle click", tea.MouseClickMsg(tea.Mouse{X: 3, Y: 8, Button: tea.MouseMiddle})},
 		{"release", tea.MouseReleaseMsg(tea.Mouse{X: 3, Y: 8, Button: tea.MouseLeft})},
 		{"motion", tea.MouseMotionMsg(tea.Mouse{X: 3, Y: 8, Button: tea.MouseNone})},
@@ -342,6 +342,9 @@ func TestViewMouseMode(t *testing.T) {
 		{"text prompt", func(m *Model) { m.mode = inputGoto }, tea.MouseModeNone},
 		{"delete confirmation", func(m *Model) { m.confirmDelete = true }, tea.MouseModeNone},
 		{"empty trash confirmation", func(m *Model) { m.confirmEmptyTrash = true }, tea.MouseModeNone},
+		// The menu is the exception: it is aimed at with the pointer, so it
+		// keeps the mouse even though it covers the panes.
+		{"context menu", func(m *Model) { m.menu = &contextMenu{} }, tea.MouseModeCellMotion},
 		{"too small", func(m *Model) { m.width, m.height = 40, 9 }, tea.MouseModeCellMotion},
 	}
 
