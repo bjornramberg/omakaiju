@@ -290,5 +290,19 @@ func (m Model) Init() tea.Cmd {
 		m.waitThemeCmd(),
 		m.waitDirCmd(),
 		splashTickCmd(),
+		resetAnyMotionCmd(),
 	)
+}
+
+// resetAnyMotionCmd turns off the terminal's "report all motion" mode.
+//
+// The mouse modes are separate switches in the terminal, and one that reports
+// every movement is not turned off by asking for the mode that reports
+// movement only while a button is down. A program that asked for it earlier
+// and did not put the terminal back leaves it on, and then every movement of
+// the pointer across the terminal arrives here as an event: the app redraws on
+// each one, and the mouse feels stuck. Asking for the mode we want is not
+// enough; the other one has to be put back explicitly.
+func resetAnyMotionCmd() tea.Cmd {
+	return tea.Raw("\x1b[?1003l")
 }

@@ -180,6 +180,6 @@ Ordered by how much they cost the user, with the rough size of each.
   resizable panes, git status badges, image previews through Kitty or Sixel
   graphics, and a bare-letter or `h/j/k/l` keymap. The mouse is no longer on
   this list: the first tier — click to focus a pane and select a row, wheel
-  to scroll — exists behind `OMAKAIJU_MOUSE`, off by default because mouse
-  reporting costs the terminal's native text selection. A right-click context
-  menu and drag-and-drop between panes are still not scheduled.
+  to scroll — is on by default and can be released with
+  `OMAKAIJU_NO_MOUSE=1`. A right-click context menu and drag-and-drop
+  between panes are still not scheduled.
