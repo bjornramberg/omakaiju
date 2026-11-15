@@ -110,6 +110,10 @@ func (m Model) paneViews(layout ui.Layout) [2]ui.Pane {
 		panes[pane].Filter = filters[pane]
 		panes[pane].Files = m.visibleFiles(pane)
 		panes[pane].Cursor = m.rawCursor(pane)
+		// The pane draws the window the model has scrolled to. Handing it
+		// over here keeps the renderer and the hit-test on the same rows, so
+		// a click can never resolve against a window the user is not seeing.
+		panes[pane].Scroll = m.rawScroll(pane)
 		panes[pane].TotalFiles = totals[pane]
 		panes[pane].Marked = markedSet
 		// The status line names the marked count, and only the focused pane

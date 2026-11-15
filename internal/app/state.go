@@ -5,6 +5,7 @@ import (
 
 	"github.com/bjornramberg/omakaiju/internal/fs"
 	"github.com/bjornramberg/omakaiju/internal/nav"
+	"github.com/bjornramberg/omakaiju/internal/ui"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -21,6 +22,24 @@ func (m Model) rawCursor(pane int) int {
 		return m.leftCursor
 	}
 	return m.rightCursor
+}
+
+// rawScroll is the index of the first row the pane draws, without keeping the
+// cursor inside it. It is the same shape as rawCursor so the reconciled
+// accessors have a place to read the unadjusted state from.
+func (m Model) rawScroll(pane int) int {
+	if pane == 0 {
+		return m.leftScroll
+	}
+	return m.rightScroll
+}
+
+func (m *Model) setScroll(pane, scroll int) {
+	if pane == 0 {
+		m.leftScroll = scroll
+	} else {
+		m.rightScroll = scroll
+	}
 }
 
 func (m Model) rawPath(pane int) string {
@@ -186,6 +205,7 @@ func (m *Model) setCursor(pane, cursor int) {
 	} else {
 		m.rightCursor = cursor
 	}
+	m.reconcileScroll(pane)
 }
 
 func (m Model) sortOf(pane int) fs.SortMode {
@@ -265,6 +285,82 @@ func (m Model) visibleFiles(pane int) []fs.Entry {
 	out := make([]fs.Entry, len(files))
 	copy(out, files)
 	return out
+}
+
+// visibleCount is how many rows the pane's listing has after filtering,
+// without copying the listing to find out.
+//
+// visibleFiles copies the file list so a caller cannot reorder the model's
+// backing array, and the scroll reconciliation runs on every cursor move. This
+// asks the cheap question — how many rows are there? — so that path does not
+// allocate a copy per keypress.
+func (m Model) visibleCount(pane int) int {
+	if m.filterOf(pane) == "" {
+		return len(m.rawFiles(pane))
+	}
+	return len(m.visibleFiles(pane))
+}
+
+// listRows is how many file rows the pane's listing has room for. It must agree
+// with paneViews exactly: the pane's height comes from the layout, and only the
+// active pane carries a status row, because the status names the marked set and
+// the marks belong to the focused pane.
+func (m Model) listRows(pane int) int {
+	return ui.ListRows(m.layout().PaneHeight(pane == 0), m.filterOf(pane),
+		m.activePane == pane && len(m.marked) > 0)
+}
+
+// reconcileScroll keeps the cursor inside the window the pane draws.
+//
+// The window is the model's state, not a function of the cursor: a pane
+// scrolled to the middle of a long list must stay there when the cursor moves
+// to a row inside it. The cursor rides inside the window, and the window moves
+// only when the cursor would leave it.
+func (m *Model) reconcileScroll(pane int) {
+	visible := m.listRows(pane)
+	if visible < 1 {
+		visible = 1
+	}
+	files := m.visibleCount(pane)
+	cursor := m.rawCursor(pane)
+	scroll := m.rawScroll(pane)
+
+	if scroll < 0 {
+		scroll = 0
+	}
+	// The window cannot reach past the end of the listing.
+	if maxStart := files - visible; scroll > maxStart {
+		scroll = maxStart
+		if scroll < 0 {
+			scroll = 0
+		}
+	}
+	// The cursor rides inside the window. A cursor that is not a row of the
+	// listing yet — a load still in flight — is left alone.
+	if cursor >= 0 && cursor < files {
+		if cursor < scroll {
+			scroll = cursor
+		}
+		if cursor >= scroll+visible {
+			scroll = cursor - visible + 1
+		}
+		if scroll < 0 {
+			scroll = 0
+		}
+	}
+	m.setScroll(pane, scroll)
+}
+
+// reconcileScrolls reconciles both panes' windows.
+//
+// A pane's row count depends on whether it carries the status row, and the
+// status row belongs to the focused pane. So a change to the focus, to the
+// marked set, or to the pane heights moves rows between the panes, and a
+// window that was reconciled against the old geometry is no longer the window
+// the pane draws.
+func (m *Model) reconcileScrolls() {
+	m.reconcileScroll(0)
+	m.reconcileScroll(1)
 }
 
 func (m *Model) setRestore(pane int, name string) {

@@ -11,15 +11,20 @@ import (
 )
 
 type Pane struct {
-	Width         int
-	Height        int
-	Active        bool
-	Theme         config.Theme
-	Path          string
-	Filter        string
-	Files         []fs.Entry
-	TotalFiles    int
-	Cursor        int
+	Width      int
+	Height     int
+	Active     bool
+	Theme      config.Theme
+	Path       string
+	Filter     string
+	Files      []fs.Entry
+	TotalFiles int
+	Cursor     int
+	// Scroll is the index of the first row the pane draws. The window is the
+	// model's state, not a function of the cursor: a pane scrolled to the
+	// middle of a long list must stay there when the cursor moves to a row
+	// inside it.
+	Scroll        int
 	VisibleHeight int
 	Status        string
 	Marked        map[string]bool
@@ -61,9 +66,13 @@ type Rows struct {
 	Top   int
 }
 
-// Rows computes the listing window for the current cursor and height, scrolled
-// so the cursor is always inside it. It is the single source of truth for the
-// pane's row math; Render must not compute its own.
+// Rows computes the listing window the pane draws. It is the single source of
+// truth for the pane's row math; Render must not compute its own.
+//
+// The window comes from Scroll, not from the cursor. Deriving it from the
+// cursor made every cursor move scroll the listing, so a click on a row in the
+// middle of a long list dragged the window down and left the clicked entry on
+// the last row. Here the window stays put and the cursor moves inside it.
 func (p Pane) Rows() Rows {
 	// An empty listing draws one placeholder row, which is not an entry and
 	// cannot be selected.
@@ -71,11 +80,39 @@ func (p Pane) Rows() Rows {
 		return Rows{Top: paneRowsTop}
 	}
 	visible := p.visibleRows()
-	start := 0
-	if p.Cursor >= visible {
+	start := p.Scroll
+	if start < 0 {
+		start = 0
+	}
+	// The window cannot reach past the end of the listing.
+	if maxStart := len(p.Files) - visible; maxStart > 0 && start > maxStart {
+		start = maxStart
+	}
+	// The cursor rides inside the window. The app keeps that true; this is
+	// the safety net for a pane whose state has not been reconciled yet.
+	if p.Cursor < start {
+		start = p.Cursor
+	}
+	if p.Cursor >= start+visible {
 		start = p.Cursor - visible + 1
 	}
 	return Rows{Start: start, Count: visible, Top: paneRowsTop}
+}
+
+// ListRows is how many file rows a pane of the given height has, once its
+// frame, its header and its status row have been taken off it. It is at least
+// one row, so a degenerate height cannot produce an empty body.
+//
+// The app uses it to decide how much of the listing a pane can show without
+// building a Pane and copying the file list just to ask. It must agree with
+// visibleRows exactly, or the model and the renderer would scroll by
+// different amounts.
+func ListRows(height int, filter string, hasStatus bool) int {
+	p := Pane{Height: height, Filter: filter}
+	if hasStatus {
+		p.Status = "x"
+	}
+	return p.visibleRows()
 }
 
 // visibleRows is the number of file rows the pane has room for after its frame,
