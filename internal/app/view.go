@@ -119,6 +119,11 @@ func (m Model) paneViews(layout ui.Layout) [2]ui.Pane {
 		// The parent row is drawn for the directory the pane has committed to
 		// screen, so the row and the directory it leads to always agree.
 		panes[pane].Parent = m.parentPath(pane)
+		// The pane under the pointer says what a release would do, so the
+		// user can see which side will change — and whether it will move or
+		// copy — before letting go. It is set here rather than in the drag
+		// handlers so every frame agrees with the state it was drawn from.
+		panes[pane].Drop = m.dropStateFor(pane)
 		// The status line names the marked count, and only the focused pane
 		// carries it. It shortens that pane's listing, which is exactly why
 		// the hit-test reads the same built Pane.

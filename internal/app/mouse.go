@@ -39,12 +39,18 @@ func (m Model) mouseMode() tea.MouseMode {
 	return tea.MouseModeCellMotion
 }
 
-// handleMouse applies the tier-one mouse bindings: a left click focuses a pane
-// and selects the row under the pointer, and the wheel scrolls the pane
-// beneath it. Everything else is ignored — right and middle clicks, releases,
-// and motion belong to tiers this build does not have.
+// handleMouse applies the mouse bindings: a left press focuses a pane and
+// selects the row under the pointer, dragging that row onto the other pane
+// moves or copies it, and the wheel scrolls the pane beneath it. Right and
+// middle clicks are ignored; there is no context menu and nothing to paste, so
+// they have nowhere to go.
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if !m.cfg.Mouse || m.modalActive() {
+		// A drag cannot survive the mouse being taken away: with reporting off
+		// the terminal sends no release, and a drag left behind would keep the
+		// drop indicator lit on a pane nobody is dragging onto — and would
+		// then act on a release that arrives after the modal closes.
+		m.drag = nil
 		return m, nil
 	}
 
@@ -54,6 +60,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.clickPane(msg.X, msg.Y)
+	case tea.MouseMotionMsg:
+		// Motion is only reported while a button is down, so this is either
+		// the middle of a drag or a pointer the app never pressed.
+		return m.dragMotion(msg)
+	case tea.MouseReleaseMsg:
+		return m.dragRelease(msg)
 	case tea.MouseWheelMsg:
 		return m.wheelPane(msg.X, msg.Y, msg.Button)
 	}
@@ -107,6 +119,22 @@ func (m Model) clickPane(x, y int) (tea.Model, tea.Cmd) {
 	// row from it and gives one to the other. Both windows are reconciled
 	// against the geometry they now have.
 	m.reconcileScrolls()
+
+	// A press on an entry starts a drag. The press has already done its usual
+	// work — the pane is focused and the row is selected — so a drag is what
+	// happens on top of a click rather than instead of one: a press and
+	// release that never leaves the pane is still an ordinary click.
+	//
+	// It is cleared first so a drag nobody released cannot be revived by a
+	// later press. The ".." row has no index in the listing and is not an
+	// entry, so a press on it starts nothing.
+	m.drag = nil
+	if hit.Row >= 0 {
+		files := m.visibleFiles(hit.Pane)
+		if hit.Row < len(files) {
+			m.drag = &dragState{pane: hit.Pane, row: hit.Row, entry: files[hit.Row], target: -1}
+		}
+	}
 
 	if double {
 		return m.openTarget(hit)

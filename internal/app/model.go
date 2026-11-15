@@ -220,6 +220,16 @@ type Model struct {
 	// click on the same thing soon after can be recognized as a double-click.
 	lastClick   clickTarget
 	lastClickAt time.Time
+
+	// drag is the entry being dragged between the panes, if any. It is a
+	// pointer because "nothing is being dragged" has to be a state of its
+	// own: the zero value of a drag is an ordinary drag of the zero entry, so
+	// a struct value could not say "no drag" without a second flag.
+	//
+	// The gesture it describes is a press that is still moving: without it
+	// the app cannot tell a drag from a click that happened to end over the
+	// other pane.
+	drag *dragState
 }
 
 // clickTarget is what a click landed on: a row of a pane's listing, the
