@@ -45,6 +45,66 @@ func (p Pane) ContentWidth() int {
 	return w
 }
 
+// paneRowsTop is the pane-local row the first file row occupies: the top
+// border, the top padding, the path header, and the blank line under it.
+const paneRowsTop = 4
+
+// Rows is the window of Files a pane draws: the index of the first entry, how
+// many rows the body has, and where the first one sits inside the pane frame.
+//
+// Render walks this window, and the mouse hit-test maps a screen row back
+// through it. Both read the same numbers, so the entry under the pointer is
+// always the entry the renderer drew there.
+type Rows struct {
+	Start int
+	Count int
+	Top   int
+}
+
+// Rows computes the listing window for the current cursor and height, scrolled
+// so the cursor is always inside it. It is the single source of truth for the
+// pane's row math; Render must not compute its own.
+func (p Pane) Rows() Rows {
+	// An empty listing draws one placeholder row, which is not an entry and
+	// cannot be selected.
+	if len(p.Files) == 0 {
+		return Rows{Top: paneRowsTop}
+	}
+	visible := p.visibleRows()
+	start := 0
+	if p.Cursor >= visible {
+		start = p.Cursor - visible + 1
+	}
+	return Rows{Start: start, Count: visible, Top: paneRowsTop}
+}
+
+// visibleRows is the number of file rows the pane has room for after its frame,
+// its header, and any status row. At least one row is always reported so a
+// degenerate height cannot produce an empty body.
+func (p Pane) visibleRows() int {
+	listRows := p.Height - 4 - 2 - p.statusRows()
+	if listRows < 1 {
+		listRows = 1
+	}
+	visible := p.VisibleHeight
+	if visible <= 0 || visible > listRows {
+		visible = listRows
+	}
+	return visible
+}
+
+// statusRows is how many rows the status area takes at the bottom of the pane:
+// a filter gets a blank line plus its count, a status alone gets one row.
+func (p Pane) statusRows() int {
+	if p.Filter != "" {
+		return 2
+	}
+	if p.Status != "" {
+		return 1
+	}
+	return 0
+}
+
 func (p Pane) Render() string {
 	var borderStyle lipgloss.Style
 	if p.Active {
@@ -60,11 +120,11 @@ func (p Pane) Render() string {
 	inner := p.ContentWidth()
 
 	// Rows available for file entries: the frame (border 2 + padding 2), the
-	// path header plus its blank line, and an optional status line.
-	statusRows := 0
+	// path header plus its blank line, and an optional status line. Rows
+	// shares the status-row count with the hit-test.
+	statusRows := p.statusRows()
 	status := ""
 	if p.Filter != "" {
-		statusRows = 2 // blank line plus the status row
 		status = fmt.Sprintf("%d/%d", len(p.Files), p.TotalFiles)
 		if p.Status != "" {
 			// The status can quote a filesystem name, which may contain
@@ -72,13 +132,7 @@ func (p Pane) Render() string {
 			status += "  " + SanitizeName(p.Status)
 		}
 	} else if p.Status != "" {
-		statusRows = 1
 		status = SanitizeName(p.Status)
-	}
-
-	listRows := p.Height - 4 - 2 - statusRows
-	if listRows < 1 {
-		listRows = 1
 	}
 
 	// The header reserves a marker column in both panes, so the path starts
@@ -113,28 +167,23 @@ func (p Pane) Render() string {
 		}
 		body = p.Theme.StatusText().Render(TruncateName(msg, inner))
 	} else {
-		visibleHeight := p.VisibleHeight
-		if visibleHeight <= 0 || visibleHeight > listRows {
-			visibleHeight = listRows
-		}
-
-		start := 0
-		if p.Cursor >= visibleHeight {
-			start = p.Cursor - visibleHeight + 1
-		}
-		end := start + visibleHeight
+		// The row window comes from Rows, the same one the mouse hit-test
+		// resolves a click through.
+		window := p.Rows()
+		start := window.Start
+		end := start + window.Count
 		if end > len(p.Files) {
 			end = len(p.Files)
 		}
 
-		rows := make([]string, 0, visibleHeight)
+		rows := make([]string, 0, window.Count)
 		for i := start; i < end; i++ {
 			item := NewFileItem(p.Files[i], i == p.Cursor, p.Marked[p.Files[i].Path], p.Theme, inner)
 			item.Unfocused = !p.Active
 			rows = append(rows, item.Render())
 		}
 		// Pad short lists so the pane always occupies its full column height.
-		for len(rows) < visibleHeight {
+		for len(rows) < window.Count {
 			rows = append(rows, "")
 		}
 		body = strings.Join(rows, "\n")

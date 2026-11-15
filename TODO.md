@@ -176,6 +176,10 @@ Ordered by how much they cost the user, with the rough size of each.
 * **Searching by content, date, size or kind** (medium).
 * **The copy could ask what to do about a name that is taken** (small to
   medium).
-* **Decided against, and not to be scheduled:** the mouse, tabs and
-  workspaces, resizable panes, git status badges, image previews through
-  Kitty or Sixel graphics, and a bare-letter or `h/j/k/l` keymap.
+* **Decided against, and not to be scheduled:** tabs and workspaces,
+  resizable panes, git status badges, image previews through Kitty or Sixel
+  graphics, and a bare-letter or `h/j/k/l` keymap. The mouse is no longer on
+  this list: the first tier — click to focus a pane and select a row, wheel
+  to scroll — exists behind `OMAKAIJU_MOUSE`, off by default because mouse
+  reporting costs the terminal's native text selection. A right-click context
+  menu and drag-and-drop between panes are still not scheduled.
