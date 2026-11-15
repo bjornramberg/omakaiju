@@ -71,6 +71,11 @@ func (m Model) View() (v tea.View) {
 		// screen. Quitting then restores what the terminal showed before the
 		// app started instead of leaving the last frame behind.
 		v.AltScreen = true
+		// Mouse reporting is a per-frame property, which is what lets a modal
+		// hand the terminal's own text selection back for as long as it is
+		// open. A frame without the feature, or under a modal, reports None so
+		// the terminal never captures the pointer in the first place.
+		v.MouseMode = m.mouseMode()
 	}()
 	return m.view()
 }
@@ -80,6 +85,42 @@ func (m Model) View() (v tea.View) {
 // width problem, so it cannot be mistaken for the user having turned the
 // preview off with Shift+I.
 const previewSuppressedNote = "preview hidden: terminal too narrow"
+
+// paneViews builds the two file panes the frame draws. It is the single source
+// of the per-pane state: whether a pane has a filter or a status row decides
+// how many rows the listing gets, and that decides which entry sits under the
+// pointer. Render and the mouse hit-test both take these values, so they cannot
+// disagree about where a row is.
+func (m Model) paneViews(layout ui.Layout) [2]ui.Pane {
+	markedSet := make(map[string]bool, len(m.marked))
+	for path := range m.marked {
+		markedSet[path] = true
+	}
+
+	panes := [2]ui.Pane{
+		ui.NewPane(layout.PaneWidth(), layout.PaneHeight(true), m.activePane == 0, m.theme),
+		ui.NewPane(layout.PaneWidth(), layout.PaneHeight(false), m.activePane == 1, m.theme),
+	}
+	paths := [2]string{m.leftPath, m.rightPath}
+	filters := [2]string{m.leftFilter, m.rightFilter}
+	totals := [2]int{len(m.leftFiles), len(m.rightFiles)}
+
+	for pane := range panes {
+		panes[pane].Path = paths[pane]
+		panes[pane].Filter = filters[pane]
+		panes[pane].Files = m.visibleFiles(pane)
+		panes[pane].Cursor = m.rawCursor(pane)
+		panes[pane].TotalFiles = totals[pane]
+		panes[pane].Marked = markedSet
+		// The status line names the marked count, and only the focused pane
+		// carries it. It shortens that pane's listing, which is exactly why
+		// the hit-test reads the same built Pane.
+		if m.activePane == pane && len(m.marked) > 0 {
+			panes[pane].Status = fmt.Sprintf("%d marked", len(m.marked))
+		}
+	}
+	return panes
+}
 
 func (m Model) view() tea.View {
 	if m.viewHook != nil {
@@ -98,34 +139,9 @@ func (m Model) view() tea.View {
 	topBar.Filter = m.filterOf(m.activePane)
 	topBar.Path = m.rawPath(m.activePane)
 
-	markedSet := make(map[string]bool, len(m.marked))
-	for path := range m.marked {
-		markedSet[path] = true
-	}
-
-	leftPane := ui.NewPane(layout.PaneWidth(), layout.PaneHeight(true), m.activePane == 0, m.theme)
-	leftPane.Path = m.leftPath
-	leftPane.Filter = m.leftFilter
-	leftPane.Files = m.visibleFiles(0)
-	leftPane.Cursor = m.leftCursor
-	leftPane.TotalFiles = len(m.leftFiles)
-	leftPane.Marked = markedSet
-	if m.activePane == 0 && len(m.marked) > 0 {
-		leftPane.Status = fmt.Sprintf("%d marked", len(m.marked))
-	}
-	leftRendered := leftPane.Render()
-
-	rightPane := ui.NewPane(layout.PaneWidth(), layout.PaneHeight(false), m.activePane == 1, m.theme)
-	rightPane.Path = m.rightPath
-	rightPane.Filter = m.rightFilter
-	rightPane.Files = m.visibleFiles(1)
-	rightPane.Cursor = m.rightCursor
-	rightPane.TotalFiles = len(m.rightFiles)
-	rightPane.Marked = markedSet
-	if m.activePane == 1 && len(m.marked) > 0 {
-		rightPane.Status = fmt.Sprintf("%d marked", len(m.marked))
-	}
-	rightRendered := rightPane.Render()
+	panes := m.paneViews(layout)
+	leftRendered := panes[0].Render()
+	rightRendered := panes[1].Render()
 
 	var previewRendered string
 	if layout.PreviewVisible() {

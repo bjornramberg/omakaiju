@@ -102,6 +102,22 @@ screen and where two colours are too close to tell apart:
 All three are derived from the same palette the rest of the UI draws from, so
 they follow a theme switch along with everything else.
 
+### Mouse (opt-in)
+
+The mouse is off by default, and deliberately so: a terminal in
+mouse-reporting mode stops doing its own drag-to-select, and the preview pane
+is exactly the text people want to copy. Turn it on with `OMAKAIJU_MOUSE=1`:
+
+* **Left click** a file row to focus its pane and select that row. Clicking a
+  pane's header or empty space focuses the pane without moving the cursor.
+* **Wheel** over a pane scrolls it three rows a notch, and never moves the
+  focus away from the pane you are working in.
+
+Clicks outside the two file panes — the top and bottom bars, the preview
+column — do nothing. While a prompt or overlay is open the mouse is released
+again, so its text can be selected. `OMAKAIJU_MOUSE=0` (or unset) keeps it off;
+any value that is not a boolean, such as `yes`, turns it on.
+
 ---
 
 ## Configuration & Integration

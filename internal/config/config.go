@@ -16,6 +16,13 @@ type Config struct {
 	// from OMAKAIJU_NO_ICONS and is off by default, which keeps the icons
 	// that the people who have the font expect.
 	NoIcons bool
+	// Mouse turns on the terminal's mouse reporting: a left click focuses the
+	// pane under the pointer and selects the row it landed on, and the wheel
+	// scrolls the pane beneath it. It is read from OMAKAIJU_MOUSE and is off
+	// by default, because a terminal in mouse mode stops handing out its
+	// native text selection — and this app's preview is exactly the text
+	// people want to copy. Turning it on is a trade the user has to ask for.
+	Mouse bool
 	// ThemeWatchDirs are the directories to watch for palette changes. A theme
 	// switch swaps a symlink rather than rewriting the file, so both the
 	// resolved theme directory and its parent are watched.
@@ -51,6 +58,7 @@ func Load() (Config, error) {
 		ThemePath:       colorsFile,
 		OmarchyStateDir: state,
 		NoIcons:         iconsDisabled(),
+		Mouse:           mouseEnabled(),
 	}
 	cfg.ThemeWatchDirs = watchDirs(home, colorsFile)
 	return cfg, nil
@@ -76,6 +84,28 @@ func iconsDisabled() bool {
 		return true
 	}
 	return off
+}
+
+// mouseEnv is the environment variable that turns mouse reporting on. Like
+// OMAKAIJU_NO_ICONS it is a single setting with no config file behind it.
+const mouseEnv = "OMAKAIJU_MOUSE"
+
+// mouseEnabled reads OMAKAIJU_MOUSE. The default is off: a terminal in mouse
+// mode swallows drag-to-select, and the preview pane exists to show text the
+// user may well want to copy. An unset or empty value therefore keeps the
+// mouse released. A value that parses as a boolean follows the bool; anything
+// else is a user who typed the variable and meant it, so `OMAKAIJU_MOUSE=yes`
+// turns the mouse on.
+func mouseEnabled() bool {
+	v := strings.TrimSpace(os.Getenv(mouseEnv))
+	if v == "" {
+		return false
+	}
+	on, err := strconv.ParseBool(v)
+	if err != nil {
+		return true
+	}
+	return on
 }
 
 // watchDirs returns the directories whose contents can signal a palette change.
