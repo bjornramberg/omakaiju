@@ -15,6 +15,10 @@ type FileItem struct {
 	Entry  fs.Entry
 	Active bool
 	Marked bool
+	// DropTarget marks the folder row a cross-pane drag would land in. It
+	// paints the row with the drop highlight instead of its ordinary style,
+	// so the destination is visible without moving the pane's cursor.
+	DropTarget bool
 	// Unfocused marks a row that belongs to the pane without the focus. Its
 	// rows recede so the focused pane is the one that stands out. The zero
 	// value is a focused row, so a caller that never sets it gets the plain
@@ -77,6 +81,15 @@ func (f FileItem) Render() string {
 		} else {
 			style = f.Theme.FileItemActive()
 		}
+	}
+
+	// The folder a drop would land in keeps its own foreground (a
+	// directory stays accent-coloured) and gains the selection background,
+	// so it reads as a target. Styling here rather than wrapping the
+	// rendered row avoids nesting ANSI sequences, whose inner reset would
+	// cancel the highlight.
+	if f.DropTarget {
+		style = style.Background(lipgloss.Color(f.Theme.SelectionBG)).Bold(true)
 	}
 
 	// Budget the row before rendering: the marker column and, when the icons
