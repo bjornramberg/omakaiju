@@ -186,7 +186,7 @@ func TestLeftArrowLeavesDirectoryWhileFiltering(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
 	m.width, m.height = 120, 40
 	m.leftPath, m.leftFiles = sub, files
 	m.rightPath, m.rightFiles = sub, files

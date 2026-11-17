@@ -38,7 +38,7 @@ func modelIn(t *testing.T, dir string) Model {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
 	m.width, m.height = 100, 30
 	m.leftPath, m.leftFiles = dir, files
 	m.rightPath, m.rightFiles = dir, files

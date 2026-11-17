@@ -51,7 +51,7 @@ func dragFixture(t *testing.T) (Model, string, string) {
 		t.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(left, "none.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(left, "none.toml")})
 	m.cfg.Mouse = true
 	m.leftPath, m.leftFiles = left, leftFiles
 	m.rightPath, m.rightFiles = right, rightFiles
@@ -535,7 +535,7 @@ func dragFolderFixture(t *testing.T) (Model, string, string) {
 		t.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(left, "none.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(left, "none.toml")})
 	m.cfg.Mouse = true
 	m.leftPath, m.leftFiles = left, leftFiles
 	m.rightPath, m.rightFiles = right, rightFiles
@@ -670,7 +670,7 @@ func TestDragDropFolderIntoItselfIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(root, "none.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(root, "none.toml")})
 	m.cfg.Mouse = true
 	m.leftPath, m.leftFiles = root, rootFiles
 	m.rightPath, m.rightFiles = filepath.Join(root, "folder"), innerFiles

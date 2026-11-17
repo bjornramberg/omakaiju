@@ -15,7 +15,7 @@ func TestNewModelAppliesNoIcons(t *testing.T) {
 	t.Cleanup(func() { icons.SetEnabled(true) })
 	icons.SetEnabled(true)
 
-	NewModel(config.Config{
+	testModel(t, config.Config{
 		ThemePath: filepath.Join(t.TempDir(), "none.toml"),
 		NoIcons:   true,
 	})
@@ -31,7 +31,7 @@ func TestNewModelKeepsIconsByDefault(t *testing.T) {
 	t.Cleanup(func() { icons.SetEnabled(true) })
 	icons.SetEnabled(false)
 
-	NewModel(config.Config{ThemePath: filepath.Join(t.TempDir(), "none.toml")})
+	testModel(t, config.Config{ThemePath: filepath.Join(t.TempDir(), "none.toml")})
 
 	if !icons.Enabled() {
 		t.Error("NewModel should keep the icons on by default")

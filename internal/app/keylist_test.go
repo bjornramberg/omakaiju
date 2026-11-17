@@ -29,7 +29,7 @@ func keyListModel(t *testing.T, w, h int) Model {
 		t.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
 	m.width, m.height = w, h
 	m.leftPath, m.rightPath = dir, dir
 	m.leftFiles, m.rightFiles = files, files

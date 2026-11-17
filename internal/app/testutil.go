@@ -4,6 +4,8 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/bjornramberg/omakaiju/internal/config"
+
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -35,6 +37,30 @@ func shiftKey(r rune) tea.KeyMsg {
 // names the keystroke "space", so the Text is what carries the character.
 func space() tea.KeyMsg {
 	return tea.KeyPressMsg(tea.Key{Code: tea.KeySpace, Text: " "})
+}
+
+// testModel is NewModel for tests: every model owns two fsnotify watchers,
+// and a leaked one holds an inotify instance until the test binary exits.
+// Enough leaked models exhaust the runner's instance limit, and then the
+// theme watcher tests fail to build theirs — far from anything they cover.
+// So every test-built model is closed when its test ends. A test that closes
+// a watcher itself only makes the cleanup's second close fail, which is
+// ignored.
+func testModel(tb interface {
+	Helper()
+	Cleanup(func())
+}, cfg config.Config) Model {
+	tb.Helper()
+	m := NewModel(cfg)
+	tb.Cleanup(func() {
+		if m.themeWatcher != nil {
+			_ = m.themeWatcher.Close()
+		}
+		if m.dirWatcher != nil {
+			_ = m.dirWatcher.Close()
+		}
+	})
+	return m
 }
 
 // updateModel feeds one message and returns the model it produced.

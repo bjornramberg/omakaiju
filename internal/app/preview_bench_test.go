@@ -31,7 +31,7 @@ func BenchmarkCursorMoveWithPreview(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
+	m := testModel(b, config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
 	m.width, m.height = 120, 40
 	m.leftPath, m.leftFiles = dir, files
 	m.rightPath, m.rightFiles = dir, files
@@ -60,7 +60,7 @@ func BenchmarkRenderWithPreview(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
+	m := testModel(b, config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
 	m.width, m.height = 120, 40
 	m.leftPath, m.leftFiles = dir, files
 	m.rightPath, m.rightFiles = dir, files
