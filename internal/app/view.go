@@ -124,6 +124,10 @@ func (m Model) paneViews(layout ui.Layout) [2]ui.Pane {
 		// copy — before letting go. It is set here rather than in the drag
 		// handlers so every frame agrees with the state it was drawn from.
 		panes[pane].Drop = m.dropStateFor(pane)
+		// The folder the pointer is over is the drop's destination, so the
+		// listing can highlight it. -1 keeps the drop on the pane's own
+		// directory, which is what a release over the background does.
+		panes[pane].DropRow = m.dropRowFor(pane)
 		// The status line names the marked count, and only the focused pane
 		// carries it. It shortens that pane's listing, which is exactly why
 		// the hit-test reads the same built Pane.

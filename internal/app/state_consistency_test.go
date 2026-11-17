@@ -342,7 +342,7 @@ func TestPreviewRefreshesWhenFileChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m2 := NewModel(config.Config{ThemePath: filepath.Join(dir2, "nonexistent.toml")})
+	m2 := testModel(t, config.Config{ThemePath: filepath.Join(dir2, "nonexistent.toml")})
 	m2.width, m2.height = 120, 40
 	m2.leftPath, m2.leftFiles = dir2, files
 	m2.rightPath, m2.rightFiles = dir2, files

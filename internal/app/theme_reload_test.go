@@ -26,7 +26,7 @@ func themeFixture(t *testing.T) (Model, string) {
 		ThemeWatchDirs:  []string{dir},
 		OmarchyStateDir: filepath.Join(dir, "state"),
 	}
-	m := NewModel(cfg)
+	m := testModel(t, cfg)
 	if m.themeWatcher == nil {
 		t.Fatal("model should own a theme watcher")
 	}

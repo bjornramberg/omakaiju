@@ -172,3 +172,120 @@ func TestDropTargetBorderUsesAccentColour(t *testing.T) {
 		t.Error("DropMove pane border should use the accent colour")
 	}
 }
+
+// listingRows is the stripped text of the pane's listing rows, in the order
+// they are drawn. The header is left out because a drop tag changes its text
+// without moving any row.
+func listingRows(p Pane) []string {
+	lines := strings.Split(p.Render(), "\n")
+	window := p.Rows()
+	out := make([]string, 0, window.Count)
+	for i := 0; i < window.Count; i++ {
+		row := window.Top + i
+		if row >= len(lines) {
+			break
+		}
+		out = append(out, stripANSI(lines[row]))
+	}
+	return out
+}
+
+// A directory row the drop would land in carries the selection band, so the
+// destination is visible inside the listing and not only on the pane frame.
+func TestDropRowHighlightsTheFolder(t *testing.T) {
+	theme := config.DefaultTheme()
+	p := dropFixture(t)
+	p.Cursor = 0
+	p.Drop = DropMove
+	// beta is the fixture's only directory.
+	p.DropRow = 1
+
+	beta := rawLineWith(p.Render(), "beta")
+	if beta == "" {
+		t.Fatal("could not find the folder row")
+	}
+	if !strings.Contains(beta, ansiBackground(theme.SelectionBG)) {
+		t.Error("the folder row should carry the selection band")
+	}
+
+	for _, name := range []string{"alpha.txt", "gamma.txt"} {
+		row := rawLineWith(p.Render(), name)
+		if row == "" {
+			t.Fatalf("could not find the row for %s", name)
+		}
+		if strings.Contains(row, ansiBackground(theme.SelectionBG)) {
+			t.Errorf("%s is not the drop folder but carries the band", name)
+		}
+	}
+}
+
+// A DropRow that is out of range, negative, names a file, or has no drop state
+// at all is ignored: the listing is drawn exactly as it would be otherwise, so
+// a stale row can never tint an entry that cannot receive the drop.
+func TestDropRowInvalidIsIgnored(t *testing.T) {
+	theme := config.DefaultTheme()
+	p := dropFixture(t)
+	want := listingRows(p)
+
+	for _, tc := range []struct {
+		name string
+		row  int
+		drop DropState
+	}{
+		{"out of range", 99, DropMove},
+		{"negative", -1, DropMove},
+		{"a file row", 0, DropMove},
+		{"no drop", 1, DropNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := p
+			q.Drop = tc.drop
+			q.DropRow = tc.row
+
+			got := listingRows(q)
+			if len(got) != len(want) {
+				t.Fatalf("the listing has %d rows, want %d", len(got), len(want))
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Errorf("row %d is %q, want %q", i, got[i], want[i])
+				}
+			}
+			for _, line := range strings.Split(q.Render(), "\n") {
+				if strings.Contains(line, ansiBackground(theme.SelectionBG)) {
+					t.Errorf("an ignored DropRow painted a row: %q", stripANSI(line))
+				}
+			}
+		})
+	}
+}
+
+// Highlighting a folder row must not change the pane's height or the row each
+// entry sits on: the pointer's release would otherwise land on another entry
+// than the one under it.
+func TestDropRowDoesNotShiftTheListing(t *testing.T) {
+	p := dropFixture(t)
+	p.Cursor = 0
+	none := strings.Split(p.Render(), "\n")
+
+	p.Drop = DropMove
+	p.DropRow = 1
+	drop := strings.Split(p.Render(), "\n")
+
+	if len(none) != len(drop) {
+		t.Fatalf("pane height changed: DropRow=-1 gave %d lines, DropRow=1 gave %d", len(none), len(drop))
+	}
+	if stripANSI(none[paneRowsTop]) != stripANSI(drop[paneRowsTop]) {
+		t.Errorf("the parent row moved: %q vs %q", stripANSI(none[paneRowsTop]), stripANSI(drop[paneRowsTop]))
+	}
+	window := p.Rows()
+	for offset := 0; offset < window.Count; offset++ {
+		row := window.Top + offset
+		if row >= len(none) {
+			break
+		}
+		if stripANSI(none[row]) != stripANSI(drop[row]) {
+			t.Errorf("row %d moved or changed: %q vs %q", row, stripANSI(none[row]), stripANSI(drop[row]))
+		}
+	}
+}

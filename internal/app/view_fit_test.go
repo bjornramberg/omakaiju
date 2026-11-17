@@ -42,7 +42,7 @@ func viewFixture(t *testing.T) Model {
 		t.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "none.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(dir, "none.toml")})
 	m.leftPath, m.leftFiles = dir, files
 
 	// Put the cursor on the huge file so the preview panel renders full height.

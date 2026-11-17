@@ -51,7 +51,7 @@ func dragFixture(t *testing.T) (Model, string, string) {
 		t.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(left, "none.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(left, "none.toml")})
 	m.cfg.Mouse = true
 	m.leftPath, m.leftFiles = left, leftFiles
 	m.rightPath, m.rightFiles = right, rightFiles
@@ -505,5 +505,197 @@ func TestCopyModifier(t *testing.T) {
 				t.Errorf("copyModifier(%v) = %v, want %v", tc.mod, got, tc.want)
 			}
 		})
+	}
+}
+
+// dragFolderFixture builds a model whose target pane lists a directory of its
+// own, so a drop can land inside it rather than on the pane's background. The
+// left pane holds one file to drag; the right pane lists "sub" first and a file
+// after it, which gives the tests a folder row and a plain file row side by
+// side.
+func dragFolderFixture(t *testing.T) (Model, string, string) {
+	t.Helper()
+	left, right := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(left, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(right, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(right, "z.txt"), []byte("z"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	leftFiles, err := fs.ReadDir(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightFiles, err := fs.ReadDir(right)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := testModel(t, config.Config{ThemePath: filepath.Join(left, "none.toml")})
+	m.cfg.Mouse = true
+	m.leftPath, m.leftFiles = left, leftFiles
+	m.rightPath, m.rightFiles = right, rightFiles
+	m.width, m.height = 100, 30
+	m.updatePreview()
+	return m, left, right
+}
+
+// A motion over a folder row of the other pane makes that folder the drop's
+// destination; moving off it onto a file, the ".." row or the pane's background
+// clears it again.
+func TestDragMotionTracksTheFolderRow(t *testing.T) {
+	m, _, _ := dragFolderFixture(t)
+	pressed := updateModel(t, m, clickAt(dragLeftX, dragRowY(0)))
+	if pressed.drag == nil {
+		t.Fatal("setup: the press armed no drag")
+	}
+
+	overFolder, _ := updateModelCmd(t, pressed, dragMotionAt(dragRightX, dragRowY(0), 0))
+	if overFolder.drag == nil {
+		t.Fatal("the drag was dropped by a motion")
+	}
+	if overFolder.drag.target != 1 || overFolder.drag.targetRow != 0 {
+		t.Errorf("a motion over the folder row made target/targetRow %d/%d, want 1/0",
+			overFolder.drag.target, overFolder.drag.targetRow)
+	}
+	if got := overFolder.dropRowFor(1); got != 0 {
+		t.Errorf("dropRowFor(1) = %d, want the folder row 0", got)
+	}
+	if got := overFolder.dropRowFor(0); got != -1 {
+		t.Errorf("dropRowFor(0) = %d, want -1 for the pane the drag came from", got)
+	}
+
+	for _, tc := range []struct {
+		name string
+		x, y int
+	}{
+		{"a file row", dragRightX, dragRowY(1)},
+		{"the pane background", dragRightX, dragRowY(8)},
+		{"the parent row", dragRightX, mouseTopBarRows + mouseParentRow},
+		{"the origin pane", dragLeftX, dragRowY(0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := updateModel(t, overFolder, dragMotionAt(tc.x, tc.y, 0))
+			if got.drag == nil {
+				t.Fatal("the drag was dropped by a motion")
+			}
+			if got.drag.targetRow != -1 {
+				t.Errorf("a motion over %s left targetRow %d, want -1", tc.name, got.drag.targetRow)
+			}
+		})
+	}
+}
+
+// A release over a folder row moves the dragged entry into that folder.
+func TestDragReleaseOnFolderMovesIntoIt(t *testing.T) {
+	m, left, right := dragFolderFixture(t)
+	name := "a.txt"
+
+	pressed := updateModel(t, m, clickAt(dragLeftX, dragRowY(0)))
+	hovered := updateModel(t, pressed, dragMotionAt(dragRightX, dragRowY(0), 0))
+	if hovered.drag == nil || hovered.drag.targetRow != 0 {
+		t.Fatalf("setup: the motion did not target the folder row: %+v", hovered.drag)
+	}
+
+	got, cmd := updateModelCmd(t, hovered, dragReleaseAt(dragRightX, dragRowY(0), 0))
+	if cmd == nil {
+		t.Fatal("a release over a folder started no operation")
+	}
+	after := runDrop(t, got, cmd)
+	if after.opErr != nil {
+		t.Fatalf("the move failed: %v", after.opErr)
+	}
+	if want := "moved 1 file(s)"; after.opResult != want {
+		t.Errorf("the move reported %q, want %q", after.opResult, want)
+	}
+	if _, err := os.Stat(filepath.Join(right, "sub", name)); err != nil {
+		t.Errorf("%s did not land inside the folder: %v", name, err)
+	}
+	if _, err := os.Stat(filepath.Join(left, name)); !os.IsNotExist(err) {
+		t.Errorf("%s is still in the origin pane's directory (stat err = %v)", name, err)
+	}
+}
+
+// A release with Ctrl over a folder row copies the entry into that folder.
+func TestDragReleaseOnFolderWithCtrlCopiesIntoIt(t *testing.T) {
+	m, left, right := dragFolderFixture(t)
+	name := "a.txt"
+
+	pressed := updateModel(t, m, clickAt(dragLeftX, dragRowY(0)))
+	hovered := updateModel(t, pressed, dragMotionAt(dragRightX, dragRowY(0), tea.ModCtrl))
+	if hovered.drag == nil || !hovered.drag.copy || hovered.drag.targetRow != 0 {
+		t.Fatalf("setup: the motion did not record the folder copy: %+v", hovered.drag)
+	}
+
+	got, cmd := updateModelCmd(t, hovered, dragReleaseAt(dragRightX, dragRowY(0), tea.ModCtrl))
+	if cmd == nil {
+		t.Fatal("a copy drop on a folder started no operation")
+	}
+	after := runDrop(t, got, cmd)
+	if after.opErr != nil {
+		t.Fatalf("the copy failed: %v", after.opErr)
+	}
+	if want := "copied 1 file(s)"; after.opResult != want {
+		t.Errorf("the copy reported %q, want %q", after.opResult, want)
+	}
+	if _, err := os.Stat(filepath.Join(right, "sub", name)); err != nil {
+		t.Errorf("%s was not copied into the folder: %v", name, err)
+	}
+	if _, err := os.Stat(filepath.Join(left, name)); err != nil {
+		t.Errorf("a copy removed the original: %v", err)
+	}
+}
+
+// Dropping a folder into itself, or into a folder below it, is refused: the
+// operation cannot finish, so it must not start.
+func TestDragDropFolderIntoItselfIsRefused(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "folder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "folder", "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rootFiles, err := fs.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	innerFiles, err := fs.ReadDir(filepath.Join(root, "folder"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := testModel(t, config.Config{ThemePath: filepath.Join(root, "none.toml")})
+	m.cfg.Mouse = true
+	m.leftPath, m.leftFiles = root, rootFiles
+	m.rightPath, m.rightFiles = filepath.Join(root, "folder"), innerFiles
+	m.width, m.height = 100, 30
+	m.updatePreview()
+
+	// Row 0 of the left pane is the folder itself; row 0 of the right pane is
+	// the folder inside it.
+	pressed := updateModel(t, m, clickAt(dragLeftX, dragRowY(0)))
+	if pressed.drag == nil || !pressed.drag.entry.IsDir {
+		t.Fatalf("setup: the press did not arm a drag of the folder: %+v", pressed.drag)
+	}
+	hovered := updateModel(t, pressed, dragMotionAt(dragRightX, dragRowY(0), 0))
+	if hovered.drag == nil || hovered.drag.targetRow != 0 {
+		t.Fatalf("setup: the motion did not target the inner folder: %+v", hovered.drag)
+	}
+
+	got, cmd := updateModelCmd(t, hovered, dragReleaseAt(dragRightX, dragRowY(0), 0))
+	if cmd != nil {
+		t.Error("a drop of a folder into its own descendant started an operation")
+	}
+	if want := "cannot move into itself"; got.opResult != want {
+		t.Errorf("opResult = %q, want %q", got.opResult, want)
+	}
+	if _, err := os.Stat(filepath.Join(root, "folder")); err != nil {
+		t.Errorf("the folder was disturbed by the refused drop: %v", err)
 	}
 }

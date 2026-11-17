@@ -58,14 +58,20 @@ type Pane struct {
 	// visual side uses it to tint the target pane and to show whether the
 	// operation would move or copy; the app side sets it every frame.
 	Drop DropState
+	// DropRow is the index into Files of the directory a release would drop
+	// into, or -1 when the drop would land on the pane's own directory. It is
+	// only a hint: Render ignores a row that is out of range or does not name
+	// a directory, so a stale value cannot paint a file as a target.
+	DropRow int
 }
 
 func NewPane(width, height int, active bool, theme config.Theme) Pane {
 	return Pane{
-		Width:  width,
-		Height: height,
-		Active: active,
-		Theme:  theme,
+		Width:   width,
+		Height:  height,
+		Active:  active,
+		Theme:   theme,
+		DropRow: -1,
 	}
 }
 
@@ -328,10 +334,19 @@ func (p Pane) Render() string {
 			end = len(p.Files)
 		}
 
+		// The folder the drop would land in is painted like the selection bar,
+		// so the destination is as visible inside the listing as the pane's
+		// border and header tag are around it. The value is validated once so
+		// a stale row cannot tint an entry that is not a directory.
+		dropRow := p.dropRow()
+
 		listing = make([]string, 0, window.Count)
 		for i := start; i < end; i++ {
 			item := NewFileItem(p.Files[i], i == p.Cursor, p.Marked[p.Files[i].Path], p.Theme, inner)
 			item.Unfocused = !p.Active
+			if i == dropRow {
+				item.DropTarget = true
+			}
 			listing = append(listing, item.Render())
 		}
 		// Pad short lists so the pane always occupies its full column height.
@@ -393,6 +408,23 @@ func (p Pane) parentRow(width int) string {
 	// so leaving padding on would add unaccounted columns.
 	row := style.UnsetPaddingLeft().UnsetPaddingRight()
 	return row.Width(width).MaxWidth(width).Render(content + strings.Repeat(" ", pad))
+}
+
+// dropRow is the index into Files of the directory a release would drop into,
+// or -1 when there is none.
+//
+// DropRow is only a hint from the app: the listing may have reloaded during the
+// drag, so a row is accepted only when it still exists and still names a
+// directory. Anything else falls back to the pane's own directory, which is
+// what the release would use as well.
+func (p Pane) dropRow() int {
+	if p.Drop == DropNone || p.DropRow < 0 || p.DropRow >= len(p.Files) {
+		return -1
+	}
+	if !p.Files[p.DropRow].IsDir {
+		return -1
+	}
+	return p.DropRow
 }
 
 // dropTag is the header hint that shows what releasing the pointer would do.

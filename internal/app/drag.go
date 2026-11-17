@@ -2,6 +2,7 @@ package app
 
 import (
 	"path/filepath"
+	"strings"
 
 	"github.com/bjornramberg/omakaiju/internal/fs"
 	"github.com/bjornramberg/omakaiju/internal/ui"
@@ -25,6 +26,11 @@ type dragState struct {
 	// target is the pane the pointer is over now, or -1 when it is over
 	// nothing that can receive a drop.
 	target int
+	// targetRow is the index into the target pane's listing of the directory
+	// the pointer is over, or -1 when the drop would land on the pane's own
+	// directory. A drop on a folder row goes into that folder; the pane
+	// background keeps the plain "into this directory" behaviour.
+	targetRow int
 	// copy says the drop would copy rather than move.
 	copy bool
 }
@@ -57,6 +63,13 @@ func (m Model) dragMotion(msg tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
 	// leak a half-finished drag out of the update that failed.
 	next := *m.drag
 	next.target = target
+	// The row is resolved from the position the pointer is at now, so moving
+	// off a folder row and back onto the pane's background clears the folder
+	// again: the indicator and the release must agree about the destination.
+	next.targetRow = -1
+	if target >= 0 {
+		next.targetRow = m.dropRowAt(hit, ok, target)
+	}
 	// The modifier is tracked here as well as on the release, so the
 	// indicator says "copy" the moment the user presses Ctrl instead of only
 	// when the button comes up.
@@ -85,8 +98,17 @@ func (m Model) dragRelease(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
 	layout := m.layout()
 	hit, ok := layout.HitPane(m.paneViews(layout), msg.X, msg.Y)
 	target := drag.target
-	if ok && hit.Pane != drag.pane {
-		target = hit.Pane
+	targetRow := drag.targetRow
+	if ok {
+		if hit.Pane != drag.pane {
+			target = hit.Pane
+			targetRow = m.dropRowAt(hit, ok, target)
+		} else {
+			// Released back over the pane the drag came from: nothing
+			// would happen there, so the drag is cancelled rather than
+			// falling back to the pane last hovered over.
+			target, targetRow = -1, -1
+		}
 	}
 	if target < 0 {
 		return m, nil
@@ -97,8 +119,41 @@ func (m Model) dragRelease(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
 	// motion the terminal reported and the button coming up.
 	drop := *drag
 	drop.target = target
+	drop.targetRow = targetRow
 	drop.copy = copyModifier(msg.Mouse().Mod)
 	return m.dropEntry(&drop)
+}
+
+// dropRowAt reports the listing row a drop would land in when the position is
+// over a directory of the target pane, or -1 when it is over that pane's
+// background, its ".." row, or a file.
+//
+// Only a directory can receive a drop, so a file row and the pane's own
+// directory behave the same way: the entry goes into the directory the pane
+// shows. The ".." row is ruled out separately because it is not one of the
+// listing's entries at all.
+func (m Model) dropRowAt(hit ui.Hit, ok bool, target int) int {
+	if !ok || hit.Pane != target || hit.Parent || hit.Row < 0 {
+		return -1
+	}
+	files := m.visibleFiles(target)
+	if hit.Row >= len(files) || !files[hit.Row].IsDir {
+		return -1
+	}
+	return hit.Row
+}
+
+// dropRowFor reports the row in pane that accepting the drop would put the
+// entry into, or -1 when the drop would land on the pane's directory or the
+// pane is not the target at all.
+//
+// The indicator reads it rather than the raw drag field so a stale row can
+// never light up a pane the release would not use.
+func (m Model) dropRowFor(pane int) int {
+	if m.drag == nil || m.drag.target != pane {
+		return -1
+	}
+	return m.drag.targetRow
 }
 
 // dropEntry moves the dragged entry into the target pane's directory, or copies
@@ -126,6 +181,15 @@ func (m Model) dropEntry(drag *dragState) (tea.Model, tea.Cmd) {
 	}
 
 	dstDir := m.rawPath(drag.target)
+	// A drop on a folder row goes into that folder instead of the pane's own
+	// directory. The row is checked against the live listing rather than
+	// trusted: the listing can have reloaded while the drag was in flight, and
+	// a row that no longer names a directory must fall back to the pane.
+	if drag.targetRow >= 0 {
+		if files := m.visibleFiles(drag.target); drag.targetRow < len(files) && files[drag.targetRow].IsDir {
+			dstDir = files[drag.targetRow].Path
+		}
+	}
 	dst := filepath.Join(dstDir, drag.entry.Name)
 	if filepath.Clean(dst) == filepath.Clean(drag.entry.Path) {
 		// Both panes are showing the same directory, so the entry is already
@@ -133,6 +197,18 @@ func (m Model) dropEntry(drag *dragState) (tea.Model, tea.Cmd) {
 		// operation that can only refuse itself.
 		m.opResult = "already in this directory"
 		return m, nil
+	}
+	// A directory cannot be dropped into itself or into one of its own
+	// descendants: the operation would try to move or copy a tree inside
+	// itself, which cannot finish. The check is on the destination directory,
+	// so it covers a drop on the folder's own row as well as one on any folder
+	// below it.
+	if drag.entry.IsDir {
+		src := filepath.Clean(drag.entry.Path)
+		if dir := filepath.Clean(dstDir); dir == src || strings.HasPrefix(dir, src+string(filepath.Separator)) {
+			m.opResult = "cannot move into itself"
+			return m, nil
+		}
 	}
 
 	// The entry lands in the pane it was dropped on, so that is where the

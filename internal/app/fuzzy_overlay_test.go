@@ -37,7 +37,7 @@ func fuzzyModel(t *testing.T, w, h int, query string) Model {
 		t.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
 	m.width, m.height = w, h
 	m.leftPath, m.leftFiles = dir, files
 	m.rightPath, m.rightFiles = dir, files

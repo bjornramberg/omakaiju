@@ -42,7 +42,7 @@ func mouseFixture(t *testing.T, n int) (Model, string) {
 		t.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "none.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(dir, "none.toml")})
 	m.cfg.Mouse = true
 	m.leftPath, m.leftFiles = dir, files
 	m.rightPath, m.rightFiles = dir, files

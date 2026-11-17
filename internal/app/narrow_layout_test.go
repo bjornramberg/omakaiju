@@ -28,7 +28,7 @@ func narrowPreviewModel(t *testing.T, width, height int) (Model, string) {
 		t.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
 	m.width, m.height = width, height
 	m.leftPath, m.leftFiles = dir, files
 	m.rightPath, m.rightFiles = dir, files

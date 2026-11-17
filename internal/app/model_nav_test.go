@@ -31,7 +31,7 @@ func fixture(t *testing.T) (Model, string) {
 		t.Fatal(err)
 	}
 
-	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(dir, "nonexistent.toml")})
 	m.leftPath, m.leftFiles = dir, files
 	m.rightPath, m.rightFiles = dir, files
 	m.updatePreview()
@@ -321,7 +321,7 @@ func twoDirFixture(t *testing.T) (Model, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewModel(config.Config{ThemePath: filepath.Join(dir, "none.toml")})
+	m := testModel(t, config.Config{ThemePath: filepath.Join(dir, "none.toml")})
 	m.leftPath, m.leftFiles = dir, files
 	m.rightPath, m.rightFiles = dir, files
 	m.updatePreview()
