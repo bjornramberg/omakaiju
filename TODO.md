@@ -122,19 +122,20 @@ lines here, because each one is a hole someone could walk through:
   operation acts on it.
 * Messages are cleared by the next key press, so a failure being read
   disappears.
-* The README promises line numbers in the preview that are not there, and
-  its first-minute snippet does not match what the bar draws.
-* The README calls the key list "the complete list of what the app binds"
-  while excluding the debug pane from it.
-* The README's arrow row contradicts itself, and it says the space-jump
-  "wraps" when it does not.
+* The README is a landing page now, but the docs under `docs/` promise line
+  numbers in the preview that are not there, and the first-minute snippet
+  does not match what the bar draws.
+* The docs call the key list "the complete list of what the app binds" while
+  excluding the debug pane from it.
+* The docs' arrow row contradicts itself, and it says the space-jump "wraps"
+  when it does not.
 * The marked rows use an ASCII `*` while the focused pane uses `▸`; an
   executable looks like any other file; the hostname in the top bar reads as
   a stray word.
 * Nothing remembers where you were: both panes start in the working
   directory, and the sort and the flags are forgotten.
-* The design document and this file are both scratch: the design document
-  describes a program that does not exist, and this file has been the
+* The design document, now under `docs/`, and this file are both scratch: the
+  design describes a program that does not exist, and this file has been the
   backlog for a while.
 
 ## Features that are wanted

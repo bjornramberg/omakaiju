@@ -30,6 +30,9 @@ archives:
     files:
       - LICENSE
       - README.md
+      # The README is a landing page whose links point into docs/, so the
+      # tarball has to carry that tree too or the links break offline.
+      - docs
 
   # Bare binaries uploaded directly to the release, e.g.
   # omakaiju_linux_amd64 — lets users curl-download without untarring.

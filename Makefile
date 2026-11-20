@@ -22,7 +22,7 @@ VERSION := $(shell \
 	fi)
 LDFLAGS := -s -w -X github.com/bjornramberg/omakaiju/internal/version.Version=$(VERSION)
 
-.PHONY: all build run install clean lint test race check fmt tidy fuzz arm64 vuln static shell installer
+.PHONY: all build run install clean lint test race check fmt tidy fuzz arm64 vuln static shell installer docs
 
 all: build
 
@@ -58,7 +58,7 @@ race:
 
 # The full gate: everything CI runs, in the same order. The release workflow
 # runs this too, so a release cannot ship something CI would have refused.
-check: fmt tidy lint test race fuzz arm64 vuln static shell installer
+check: fmt tidy lint test race fuzz arm64 vuln static shell installer docs
 
 # The tree has to be gofmt'd. A file that is not is a failure, not a note.
 fmt:
@@ -109,3 +109,11 @@ shell:
 # does so when the release's signature checks out.
 installer:
 	sh scripts/installer_test.sh
+
+# The documentation is now split across docs/, and the pages link to each
+# other and back to the repository root. A link that points at a page that was
+# renamed is a dead end for the reader, so the guard resolves every relative
+# link offline. The same run also compares the canonical keybinding table with
+# the code, so the table cannot drift away from what the keys do.
+docs:
+	go test ./internal/nav/ -run 'TestReadme' -count=1
