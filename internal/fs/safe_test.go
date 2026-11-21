@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // assertNoScratchFiles fails when a copy left a scratch file behind.
@@ -21,10 +23,132 @@ func assertNoScratchFiles(t *testing.T, dir string) {
 		t.Fatalf("reading %s: %v", dir, err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), tempPrefix) {
+		if IsScratchName(e.Name()) {
 			t.Errorf("a scratch file was left behind: %s", filepath.Join(dir, e.Name()))
 		}
 	}
+}
+
+// The watcher skips scratch files so a copy's per-chunk writes do not flood
+// the UI; that skip has to recognise the names the copy actually creates,
+// whether it is handed a bare name or a full path.
+func TestIsScratchName(t *testing.T) {
+	scratch, err := os.CreateTemp(t.TempDir(), tempPrefix+"*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratchName := scratch.Name()
+	_ = scratch.Close()
+
+	for _, path := range []string{scratchName, filepath.Base(scratchName)} {
+		if !IsScratchName(path) {
+			t.Errorf("IsScratchName(%q) = false, want true", path)
+		}
+	}
+	for _, path := range []string{"movie.mkv", ".omakaiju-tmp", "not-tmp.omakaiju-tmp-x", "", "subdir/movie.mkv"} {
+		if IsScratchName(path) {
+			t.Errorf("IsScratchName(%q) = true, want false", path)
+		}
+	}
+}
+
+// A filesystem that refuses metadata without refusing the copy — FAT, exFAT,
+// many SMB shares answer chmod and utimes with EPERM — still receives the
+// bytes exactly. The refusals are collected as warnings instead of failing
+// the transfer, so copying onto such storage works and says what it dropped.
+func TestCopyWarnsInsteadOfFailingOnUnsupportedMetadata(t *testing.T) {
+	refuseMetadata(t)
+
+	base := t.TempDir()
+	src := filepath.Join(base, "src", "keep.bin")
+	writeBytes(t, src, 64)
+
+	var warns []MetaWarning
+	dst := filepath.Join(base, "dst", "keep.bin")
+	if err := CopyRecursive(src, dst, &warns); err != nil {
+		t.Fatalf("a copy onto metadata-refusing storage failed: %v", err)
+	}
+	if got := readFile(t, dst); len(got) != 64 {
+		t.Errorf("the destination holds %d bytes, want the full 64", len(got))
+	}
+	if len(warns) != 2 {
+		t.Fatalf("warnings = %+v, want the refused mode and times", warns)
+	}
+	for _, w := range warns {
+		if w.Path != dst {
+			t.Errorf("warning path = %q, want the destination %q", w.Path, dst)
+		}
+	}
+	if warns[0].What != "mode" || warns[1].What != "times" {
+		t.Errorf("warnings = %+v, want mode then times", warns)
+	}
+	assertNoScratchFiles(t, filepath.Join(base, "dst"))
+}
+
+// Without a collector nothing changes: a refused mode still fails the copy
+// with the destination untouched, which is the strict contract the blocking
+// path keeps.
+func TestCopyWithoutCollectorStillFailsOnRefusedMetadata(t *testing.T) {
+	refuseMetadata(t)
+
+	base := t.TempDir()
+	src := filepath.Join(base, "src", "keep.bin")
+	writeBytes(t, src, 64)
+
+	if err := CopyRecursive(src, filepath.Join(base, "dst", "keep.bin")); err == nil {
+		t.Fatal("a copy with no warnings collector should fail on refused metadata")
+	} else if !strings.Contains(err.Error(), "cannot set mode") {
+		t.Errorf("error = %q, want it to name the refused mode change", err)
+	}
+}
+
+// refuseMetadata makes every mode and times change fail the way a share
+// without metadata support fails them.
+func refuseMetadata(t *testing.T) {
+	t.Helper()
+	realChmod, realChtimes := chmodFn, chtimesFn
+	chmodFn = func(string, os.FileMode) error { return syscall.EPERM }
+	chtimesFn = func(string, time.Time, time.Time) error { return syscall.EPERM }
+	t.Cleanup(func() { chmodFn, chtimesFn = realChmod, realChtimes })
+}
+
+// The steppable copier degrades the same way: a large copy onto a share
+// lands whole and reports what it could not carry instead of failing at the
+// final step after moving every byte.
+func TestCopierWarnsInsteadOfFailingOnUnsupportedMetadata(t *testing.T) {
+	refuseMetadata(t)
+
+	base := t.TempDir()
+	src := filepath.Join(base, "big.bin")
+	writeBytes(t, src, 64)
+	dstDir := filepath.Join(base, "dst")
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := NewCopier([]string{src}, dstDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var done bool
+	for i := 0; i < 100 && !done; i++ {
+		var stepErr error
+		done, stepErr = c.Step()
+		if stepErr != nil {
+			t.Fatalf("a copy onto metadata-refusing storage failed: %v", stepErr)
+		}
+	}
+	if !done {
+		t.Fatal("the copy never finished")
+	}
+	if len(c.MetaWarnings()) == 0 {
+		t.Error("the copy landed without reporting the refused metadata")
+	}
+	dst := filepath.Join(dstDir, "big.bin")
+	if got := readFile(t, dst); len(got) != 64 {
+		t.Errorf("the destination holds %d bytes, want the full 64", len(got))
+	}
+	assertNoScratchFiles(t, dstDir)
 }
 
 // readFile returns the contents of path, failing the test if it cannot be

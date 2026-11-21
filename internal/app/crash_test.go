@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -357,4 +358,42 @@ func TestCrashRecoveryWorksOnAZeroModel(t *testing.T) {
 
 func siteName(i int) string {
 	return "site-" + string(rune('a'+i))
+}
+
+// With OMAKAIJU_DEBUG_LOG set, a failing command leaves a timestamped line
+// with the full error chain, so a failure the bottom bar had to shorten can
+// still be diagnosed. Without it, logging costs nothing and writes nothing.
+func TestDebugLogCapturesCommandFailures(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "debug.log")
+	t.Setenv("OMAKAIJU_DEBUG_LOG", log)
+
+	cmd := safeCmd("copy-step", func() tea.Msg {
+		return fileOpMsg{verb: "copied", failures: []opFailure{{
+			name: "big.bin",
+			path: "/mnt/movies/big.bin",
+			err:  fmt.Errorf("copy: cannot set mode -rwxr-xr-x on /mnt/movies/big.bin: operation not permitted"),
+		}}}
+	})
+	if _, ok := cmd().(fileOpMsg); !ok {
+		t.Fatal("expected the command's own message back")
+	}
+
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("reading the debug log: %v", err)
+	}
+	for _, want := range []string{"copy-step", "big.bin", "/mnt/movies/big.bin", "cannot set mode", "operation not permitted"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("debug log = %q, want it to contain %q", data, want)
+		}
+	}
+}
+
+// Without the variable, a failing command writes nothing anywhere.
+func TestDebugLogWritesNothingByDefault(t *testing.T) {
+	t.Setenv("OMAKAIJU_DEBUG_LOG", "")
+	cmd := safeCmd("copy-step", func() tea.Msg {
+		return fileOpMsg{verb: "copied", failures: []opFailure{{name: "a", err: fmt.Errorf("boom")}}}
+	})
+	cmd()
 }

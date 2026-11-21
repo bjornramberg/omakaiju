@@ -62,6 +62,11 @@ type fileOpMsg struct {
 	succeeded int
 	skipped   int
 	failures  []opFailure
+	// unkeptMeta counts the entries that landed without their mode or
+	// times, on a filesystem that refuses metadata without refusing the
+	// copy. They are reported beside the success — the files did arrive —
+	// so the result does not pretend they are exact.
+	unkeptMeta int
 	// text, when set, replaces the generated result. It is for outcomes that
 	// are more than a count, such as a trash that moved the payload but could
 	// not write its metadata.
@@ -101,6 +106,9 @@ func (msg fileOpMsg) result() string {
 			reasons = append(reasons, fmt.Sprintf("%s (%s)", f.name, readableOpError(f.err)))
 		}
 		parts = append(parts, fmt.Sprintf("failed %d: %s", len(failures), strings.Join(reasons, ", ")))
+	}
+	if msg.unkeptMeta > 0 {
+		parts = append(parts, fmt.Sprintf("metadata not kept on %d", msg.unkeptMeta))
 	}
 	return strings.Join(parts, ", ")
 }

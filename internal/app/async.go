@@ -101,9 +101,24 @@ func (m Model) waitThemeCmd() tea.Cmd {
 	})
 }
 
+// dirCoalesceWindow is how long the directory wait lingers after the first
+// event before reporting it. Filesystem bursts — an untar, a download
+// landing, a checkout — raise one event per file, and reporting each one
+// would dispatch a pane reload per file: hundreds of concurrent listings,
+// each pinning its own goroutine and, on a slow mount, its own OS thread,
+// while the event loop starves behind them. Lingering collapses the whole
+// burst into the single reload that actually matters, at the cost of
+// delaying an isolated external change by this window.
+const dirCoalesceWindow = 200 * time.Millisecond
+
 // waitDirCmd blocks until something changes under a watched pane directory
 // and reports it. It is one-shot like the theme wait: Update re-arms it after
 // every message, so there is exactly one wait reading the watcher at a time.
+//
+// Bursts are coalesced: after the first meaningful event the wait lingers for
+// dirCoalesceWindow, absorbing whatever else arrives, and reports only the
+// last path. A sustained torrent therefore yields one message per window —
+// a bounded handful of concurrent listings — no matter how many files changed.
 //
 // The path is reported rather than a pane or a listing: a directory can change
 // while the pane showing it is still loading somewhere else, and the decision
@@ -115,6 +130,8 @@ func (m Model) waitDirCmd() tea.Cmd {
 		return nil
 	}
 	return safeCmd("dir-watch", func() tea.Msg {
+		var path string
+		var deadline <-chan time.Time
 		for {
 			select {
 			case event, ok := <-watcher.Events():
@@ -124,7 +141,22 @@ func (m Model) waitDirCmd() tea.Cmd {
 				if event.Name == "" {
 					continue
 				}
-				return dirChangedMsg{path: event.Name}
+				// A large copy writes its destination through a scratch
+				// file, one chunk per step, and every chunk raises a
+				// filesystem event. Reporting those would dispatch a
+				// pane reload and a preview refresh per chunk — thousands
+				// of concurrent listings for a file that is not even
+				// finished — while the final rename raises the one event
+				// that actually matters: the destination appearing under
+				// its real name. Scratch writes are therefore skipped
+				// here, and the wait continues for a meaningful change.
+				if fs.IsScratchName(event.Name) {
+					continue
+				}
+				path = event.Name
+				if deadline == nil {
+					deadline = time.After(dirCoalesceWindow)
+				}
 			case err, ok := <-watcher.Errors():
 				if !ok {
 					return dirChangedMsg{closed: true}
@@ -132,6 +164,8 @@ func (m Model) waitDirCmd() tea.Cmd {
 				if err != nil {
 					return dirChangedMsg{err: err}
 				}
+			case <-deadline:
+				return dirChangedMsg{path: path}
 			}
 		}
 	})

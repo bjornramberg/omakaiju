@@ -167,7 +167,11 @@ func SortEntriesBy(entries []Entry, mode SortMode) {
 // to a directory would otherwise fail with "is a directory", and copying a
 // link to a file would silently duplicate the target's contents instead of
 // the link the user pointed at.
-func Copy(src, dst string) error {
+// Copy copies a single file, keeping its mode and times.
+//
+// warn, when given, collects MetaWarnings for metadata the filesystem
+// refused without refusing the copy; without it every refusal fails.
+func Copy(src, dst string, warn ...*[]MetaWarning) error {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
@@ -181,7 +185,7 @@ func Copy(src, dst string) error {
 	if !info.Mode().IsRegular() {
 		return &refusedEntry{verb: "copy", path: src}
 	}
-	return copyFileAtomic(src, dst, info)
+	return copyFileAtomic(src, dst, info, firstCollector(warn))
 }
 
 // copyMaxDepth bounds the recursion. A tree nested deeper than this is
@@ -205,8 +209,11 @@ const copyMaxDepth = 256
 //
 // A directory cannot be copied into its own subtree, because the copy would
 // keep discovering the directories it is creating and nest without end.
-func CopyRecursive(src, dst string) error {
-	return copyRecursive(src, dst, nil, 0)
+//
+// warn, when given, collects MetaWarnings for metadata the filesystem
+// refused without refusing the copy; without it every refusal fails.
+func CopyRecursive(src, dst string, warn ...*[]MetaWarning) error {
+	return copyRecursive(src, dst, nil, 0, firstCollector(warn))
 }
 
 // copyRecursive does the work for CopyRecursive.
@@ -215,7 +222,7 @@ func CopyRecursive(src, dst string) error {
 // tree that reaches itself is reported rather than followed. It is the
 // current path only: the same directory legitimately reachable by two
 // different routes is copied twice, as the tree describes it.
-func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
+func copyRecursive(src, dst string, visited []os.FileInfo, depth int, warn *[]MetaWarning) error {
 	if depth > copyMaxDepth {
 		return fmt.Errorf("copy: %s is nested more than %d levels deep", src, copyMaxDepth)
 	}
@@ -236,7 +243,7 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 		if !info.Mode().IsRegular() {
 			return &refusedEntry{verb: "copy", path: src}
 		}
-		return copyFileAtomic(src, dst, info)
+		return copyFileAtomic(src, dst, info, warn)
 	}
 
 	// Copying a directory into its own subtree would make the copy
@@ -263,7 +270,7 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 	// then leaves the destination as it was, instead of a half-filled
 	// directory the user has to clear out by hand before trying again.
 	if _, err := os.Lstat(dst); os.IsNotExist(err) {
-		return copyDirAtomic(src, dst, visited, depth, info)
+		return copyDirAtomic(src, dst, visited, depth, info, warn)
 	}
 
 	visited = append(visited, info)
@@ -282,6 +289,7 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 			filepath.Join(dst, entry.Name()),
 			visited,
 			depth+1,
+			warn,
 		)
 		if err != nil {
 			return err
@@ -300,7 +308,7 @@ func copyRecursive(src, dst string, visited []os.FileInfo, depth int) error {
 // The scratch directory is writable while the tree is built, then given the
 // source's exact mode and times. Writing the contents moves the directory's
 // time forward again, so setting it any earlier would not survive.
-func copyDirAtomic(src, dst string, visited []os.FileInfo, depth int, info os.FileInfo) error {
+func copyDirAtomic(src, dst string, visited []os.FileInfo, depth int, info os.FileInfo, warn *[]MetaWarning) error {
 	dir := filepath.Dir(dst)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -311,7 +319,7 @@ func copyDirAtomic(src, dst string, visited []os.FileInfo, depth int, info os.Fi
 		return err
 	}
 
-	if err := copyRecursive(src, tmp, visited, depth); err != nil {
+	if err := copyRecursive(src, tmp, visited, depth, warn); err != nil {
 		os.RemoveAll(tmp)
 		return err
 	}
@@ -321,12 +329,16 @@ func copyDirAtomic(src, dst string, visited []os.FileInfo, depth int, info os.Fi
 	// the source's times. MkdirTemp was private and writable, which is what
 	// let the contents be written into it.
 	if err := setCopyMode(tmp, info.Mode()); err != nil {
-		os.RemoveAll(tmp)
-		return err
+		if !dropMeta(warn, dst, "mode", err) {
+			os.RemoveAll(tmp)
+			return fmt.Errorf("copy: cannot set mode %v on %s: %w", info.Mode(), dst, err)
+		}
 	}
 	if err := setCopyTimes(tmp, timesOf(info)); err != nil {
-		os.RemoveAll(tmp)
-		return err
+		if !dropMeta(warn, dst, "times", err) {
+			os.RemoveAll(tmp)
+			return fmt.Errorf("copy: cannot set times on %s: %w", dst, err)
+		}
 	}
 
 	if err := os.Rename(tmp, dst); err != nil {
@@ -583,7 +595,10 @@ func absolutePath(path string) (string, error) {
 // and removing the original, but only once the copy has been written,
 // flushed and checked. The source is never removed on the strength of a copy
 // that did not land.
-func Move(src, dst string) error {
+//
+// warn, when given, collects MetaWarnings for metadata the filesystem
+// refused without refusing the copy; without it every refusal fails.
+func Move(src, dst string, warn ...*[]MetaWarning) error {
 	// A source and a destination that are two names for one file would
 	// otherwise be a silent no-op that looks like a successful move.
 	if same, err := SameFile(src, dst); err == nil && same {
@@ -608,7 +623,7 @@ func Move(src, dst string) error {
 	if !isCrossDevice(err) {
 		return err
 	}
-	return moveAcrossDevices(src, dst)
+	return moveAcrossDevices(src, dst, firstCollector(warn))
 }
 
 func Delete(path string) error {

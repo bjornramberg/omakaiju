@@ -134,6 +134,38 @@ func TestWatcherRefreshKeepsCursorAndFilter(t *testing.T) {
 	}
 }
 
+// A burst of external changes — an untar, a checkout, a download landing —
+// must collapse into a single reload, not one per file. Each message fans
+// out into pane reloads that each pin a goroutine and, on a slow mount, an
+// OS thread; reporting a burst file-by-file is what froze the UI with
+// hundreds of threads behind it.
+func TestWatcherCoalescesBurstsIntoOneReload(t *testing.T) {
+	m, dir := watchFixture(t)
+	wait := m.waitDirCmd()
+
+	for _, name := range []string{"burst-a.txt", "burst-b.txt", "burst-c.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("new"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	changed := awaitDirChange(t, wait)
+	if changed.closed || changed.err != nil {
+		t.Fatalf("watcher reported closed=%v err=%v", changed.closed, changed.err)
+	}
+
+	// The whole burst was absorbed into that one message: nothing is left
+	// queued that would dispatch a second reload.
+	second := m.waitDirCmd()
+	ch := make(chan tea.Msg, 1)
+	go func() { ch <- second() }()
+	select {
+	case msg := <-ch:
+		t.Fatalf("a second reload was queued behind the burst: %#v", msg)
+	case <-time.After(2 * dirCoalesceWindow):
+	}
+}
+
 // The watcher follows a pane when it navigates: an event under the old
 // directory is not applied to the new one.
 func TestPaneWatcherFollowsNavigation(t *testing.T) {
@@ -147,5 +179,33 @@ func TestPaneWatcherFollowsNavigation(t *testing.T) {
 	}
 	if panes := m.panesShowing(filepath.Join(dir, "beta.txt")); len(panes) != 1 || panes[0] != 1 {
 		t.Fatalf("an event in the old directory matched panes %v, want only the right pane", panes)
+	}
+}
+
+// A copy writes its destination through a scratch file, one chunk per step,
+// and every chunk raises a filesystem event. Those writes must never reach
+// the panes: a multi-gigabyte copy used to dispatch a reload and a preview
+// refresh per chunk — thousands of concurrent listings for a file that had
+// not even landed — freezing the UI partway through. The one event that
+// matters, the destination appearing under its real name, still arrives.
+func TestWatcherIgnoresCopyScratchFiles(t *testing.T) {
+	m, dir := watchFixture(t)
+	wait := m.waitDirCmd()
+
+	scratch := filepath.Join(dir, ".omakaiju-tmp-12345")
+	if err := os.WriteFile(scratch, []byte("partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(scratch, []byte("partial and longer"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	landed := filepath.Join(dir, "movie.mkv")
+	if err := os.WriteFile(landed, []byte("whole"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed := awaitDirChange(t, wait)
+	if changed.path != landed {
+		t.Fatalf("watcher reported %q, want the landed file %q: scratch writes must be skipped", changed.path, landed)
 	}
 }

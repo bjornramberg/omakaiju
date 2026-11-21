@@ -28,6 +28,48 @@ func moverFailures(copier *fs.Copier) []opFailure {
 	return out
 }
 
+// attachMetaWarnings reports the metadata a finished command could not
+// carry. The command already ran to completion inside cmd; this only adds
+// the warning count to its result and the details to the debug log, so a
+// transfer that landed on a filesystem without metadata support says so
+// instead of pretending it is exact.
+func attachMetaWarnings(cmd tea.Cmd, warns *[]fs.MetaWarning) tea.Cmd {
+	if cmd == nil || warns == nil {
+		return cmd
+	}
+	return safeCmd("paste-warnings", func() tea.Msg {
+		msg := cmd()
+		m, ok := msg.(fileOpMsg)
+		if !ok {
+			return msg
+		}
+		m.unkeptMeta = countUnkept(*warns)
+		debugLogWarnings("paste", warnErrors(*warns))
+		return m
+	})
+}
+
+// countUnkept counts the distinct destinations that landed without their
+// metadata. One entry can warn twice — once for the mode, once for the
+// times — but it is still one entry the result reports on.
+func countUnkept(warns []fs.MetaWarning) int {
+	seen := make(map[string]bool, len(warns))
+	for _, w := range warns {
+		seen[w.Path] = true
+	}
+	return len(seen)
+}
+
+// warnErrors renders warnings for the debug log, where the full chain is
+// kept. The bottom bar only carries the count; this names each entry.
+func warnErrors(warns []fs.MetaWarning) []error {
+	out := make([]error, 0, len(warns))
+	for _, w := range warns {
+		out = append(out, fmt.Errorf("%s: %s not kept (%v)", w.Path, w.What, w.Err))
+	}
+	return out
+}
+
 // recordOpResult stores the outcome of a file operation. A failure goes into
 // opErr, which the bottom bar shows and only a keypress clears; a success goes
 // into opResult. Both live apart from loadErr so neither the pane reload that

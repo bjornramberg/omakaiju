@@ -119,6 +119,53 @@ func TestPreviewMovingAwayAndBackLoadsFreshAndKeepsIt(t *testing.T) {
 	}
 }
 
+// A file changing under a load that is already running for it — a copy
+// growing beside the cursor — must not start another load per change. Each
+// change used to queue its own full read and highlight, so a fast-growing
+// file stacked stale work faster than it could finish.
+func TestPreviewGrowingFileDoesNotStackLoads(t *testing.T) {
+	m, dir := fixture(t)
+	m = cursorOn(t, m, "beta.txt")
+	path := filepath.Join(dir, "beta.txt")
+
+	// Start the load this test observes by hand; the cursor movement's own
+	// load was discarded with its command.
+	m.previewPending = previewRequest{}
+	first := m.updatePreview()
+	if first == nil {
+		t.Fatal("expected a load for a file that has not been previewed yet")
+	}
+	version := m.previewVersion
+
+	// The file grows while the load is running: its stamp moves on.
+	if err := os.WriteFile(path, []byte("b\nGROWN-MARKER\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	second := m.updatePreview()
+	if second != nil {
+		t.Error("a second load was started while one is already running for the same file")
+	}
+	if m.previewVersion != version {
+		t.Errorf("previewVersion = %d, want %d: waiting for the running load must not invalidate it", m.previewVersion, version)
+	}
+
+	// The running load reads after the growth, so its result carries the old
+	// stamp: the handler asks again instead of drawing stale contents.
+	updated, cmd := m.Update(first())
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("finishing the running load must re-request the grown file, not drop it")
+	}
+	m = applyEveryMessage(t, m, cmd)
+	if !previewContains(m, "GROWN-MARKER") {
+		t.Errorf("the grown file was not previewed: %q", previewText(m))
+	}
+	if m.previewPending != (previewRequest{}) {
+		t.Error("the finished load is still marked pending, which would block later updates")
+	}
+}
+
 // A result gathered for another preview version was highlighted with whatever
 // palette was current then. Drawing it would put the old colours back on
 // screen, so it is dropped — silently, without an error.

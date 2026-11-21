@@ -66,6 +66,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case previewLoadedMsg:
+		// The load that just answered is no longer in flight. Anything
+		// else already replaced it, so only the matching marker is
+		// cleared: without this the request outlives its load, and a
+		// later change to the same file is mistaken for work that is
+		// still running and never picked up.
+		if m.previewPending == (previewRequest{path: msg.path, stamp: msg.stamp, version: msg.version}) {
+			m.previewPending = previewRequest{}
+		}
 		// The preview moved on while this was being gathered: the cursor
 		// went elsewhere, the file changed, or the palette was reloaded.
 		// The highlighted content was produced for that earlier preview —
@@ -285,6 +293,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			files := m.copyFiles
 			marks := m.copyMarks
 			skipped := m.copySkipped
+			warns := msg.copier.MetaWarnings()
+			unkept := countUnkept(warns)
 			m.finishCopy()
 			if msg.move {
 				moved := 0
@@ -293,16 +303,19 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					moved = msg.copier.Moved()
 					failures = moverFailures(msg.copier)
 				}
+				debugLogWarnings("move", warnErrors(warns))
 				m.recordOpResult(fileOpMsg{
-					verb:      "moved",
-					succeeded: moved,
-					failures:  failures,
-					marks:     marks,
-					skipped:   skipped,
+					verb:       "moved",
+					succeeded:  moved,
+					failures:   failures,
+					marks:      marks,
+					skipped:    skipped,
+					unkeptMeta: unkept,
 				})
 				return m, m.reloadPanesCmd()
 			}
-			m.recordOpResult(fileOpMsg{verb: "copied", succeeded: files})
+			debugLogWarnings("copy", warnErrors(warns))
+			m.recordOpResult(fileOpMsg{verb: "copied", succeeded: files, unkeptMeta: unkept})
 			return m, m.reloadPanesCmd()
 		}
 

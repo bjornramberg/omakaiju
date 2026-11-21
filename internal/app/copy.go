@@ -162,17 +162,20 @@ func pasteCopyCmd(files []fs.Entry, dstDir string, gen int, clipboard *Clipboard
 		}
 
 		msg := fileOpMsg{verb: "pasted", clipboard: clipboard}
+		var warns []fs.MetaWarning
 		for _, f := range files {
 			dst := filepath.Join(dstDir, f.Name)
 			if filepath.Clean(dst) == filepath.Clean(f.Path) {
 				continue
 			}
-			if err := fs.CopyRecursive(f.Path, dst); err != nil {
+			if err := fs.CopyRecursive(f.Path, dst, &warns); err != nil {
 				msg.failures = append(msg.failures, opFailure{name: f.Name, path: f.Path, err: err})
 				continue
 			}
 			msg.succeeded++
 		}
+		msg.unkeptMeta = countUnkept(warns)
+		debugLogWarnings("paste-copy", warnErrors(warns))
 		return msg
 	})
 }

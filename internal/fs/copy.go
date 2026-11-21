@@ -126,6 +126,12 @@ type Copier struct {
 	renames []renameJob
 	// failures records the entries that could not be moved at all.
 	failures []MoveFailure
+	// metaWarnings records the metadata the transfer could not carry: the
+	// mode or times a filesystem that does not implement them refused.
+	// The bytes always land exactly — only the warning says the entry is
+	// not bit-for-bit the source — so unlike failures these never stop or
+	// undo the transfer.
+	metaWarnings []MetaWarning
 	// srcDirs are the source directories a move emptied. The files are
 	// removed as they land, so what is left behind are the directories
 	// that held them.
@@ -591,7 +597,7 @@ func (c *Copier) Step() (done bool, err error) {
 			// everything: a read-only source directory would otherwise
 			// refuse the contents meant for it, and writing them moves its
 			// time forward again.
-			created, err := mkdirAllTracked(dir.path, dir.mode|0o700, &c.createdDirs)
+			created, err := mkdirAllTracked(dir.path, dir.mode|0o700, &c.createdDirs, &c.metaWarnings)
 			if err != nil {
 				c.stop()
 				return false, err
@@ -789,7 +795,7 @@ func (c *Copier) openCurrent() error {
 		}
 	}
 
-	if _, err := mkdirAllTracked(dir, 0o755, &c.createdDirs); err != nil {
+	if _, err := mkdirAllTracked(dir, 0o755, &c.createdDirs, &c.metaWarnings); err != nil {
 		if src != nil {
 			src.Close()
 		}
@@ -929,10 +935,20 @@ func (c *Copier) finishCurrent() error {
 	// kept the moment it was made instead of the source's time would look
 	// newer than the file it came from, which is what many tools compare.
 	if err := setCopyMode(name, c.jobMode); err != nil {
-		return fail(err)
+		// A filesystem that cannot take metadata at all — FAT, exFAT,
+		// many SMB shares — refuses the mode while holding the bytes
+		// exactly. Failing the whole transfer over that would make
+		// copying to such a filesystem impossible, so the miss is warned
+		// about and the copy carries on. Anything else still fails with
+		// the destination untouched.
+		if !dropMeta(&c.metaWarnings, final, "mode", err) {
+			return fail(fmt.Errorf("copy: cannot set mode %v on %s: %w", c.jobMode, final, err))
+		}
 	}
 	if err := setCopyTimes(name, c.jobTimes); err != nil {
-		return fail(err)
+		if !dropMeta(&c.metaWarnings, final, "times", err) {
+			return fail(fmt.Errorf("copy: cannot set times on %s: %w", final, err))
+		}
 	}
 
 	// A move never replaces a destination that is already there. Planning
@@ -1130,14 +1146,18 @@ func (c *Copier) finishDirs() error {
 	for i := len(c.createdMeta) - 1; i >= 0; i-- {
 		dir := c.createdMeta[i]
 		if err := setCopyMode(dir.path, dir.mode); err != nil {
-			err = fmt.Errorf("copy: %s: cannot set the directory's mode: %w", dir.path, err)
-			c.recordFailure(dir.path, err)
-			return err
+			if !dropMeta(&c.metaWarnings, dir.path, "mode", err) {
+				err = fmt.Errorf("copy: %s: cannot set the directory's mode: %w", dir.path, err)
+				c.recordFailure(dir.path, err)
+				return err
+			}
 		}
 		if err := setCopyTimes(dir.path, dir.times); err != nil {
-			err = fmt.Errorf("copy: %s: cannot set the directory's times: %w", dir.path, err)
-			c.recordFailure(dir.path, err)
-			return err
+			if !dropMeta(&c.metaWarnings, dir.path, "times", err) {
+				err = fmt.Errorf("copy: %s: cannot set the directory's times: %w", dir.path, err)
+				c.recordFailure(dir.path, err)
+				return err
+			}
 		}
 	}
 	c.createdMeta = nil
@@ -1361,9 +1381,13 @@ func (c *Copier) removeCreatedDirs() {
 // The caller passes a mode its owner can write to while the copy fills the
 // directory; the exact mode is applied once its contents are in place.
 //
+// warn collects the metadata warnings when the filesystem refuses modes
+// without refusing the copy; a nil collector keeps the strict contract and
+// fails instead.
+//
 // It reports whether dir itself was created, so the caller knows whether the
 // directory's source metadata is its to apply.
-func mkdirAllTracked(dir string, mode os.FileMode, created *[]string) (bool, error) {
+func mkdirAllTracked(dir string, mode os.FileMode, created *[]string, warn *[]MetaWarning) (bool, error) {
 	var missing []string
 	for p := filepath.Clean(dir); ; p = filepath.Dir(p) {
 		if _, err := os.Lstat(p); err == nil {
@@ -1390,7 +1414,9 @@ func mkdirAllTracked(dir string, mode os.FileMode, created *[]string) (bool, err
 		// The umask has already been applied to the create. Set the mode
 		// explicitly so the copy's directory keeps the bits it was given.
 		if err := setCopyMode(missing[i], mode); err != nil {
-			return false, err
+			if !dropMeta(warn, missing[i], "mode", err) {
+				return false, fmt.Errorf("copy: cannot set mode %v on %s: %w", mode, missing[i], err)
+			}
 		}
 	}
 	return madeDir, nil

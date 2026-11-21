@@ -65,6 +65,19 @@ func (m *Model) updatePreview() tea.Cmd {
 	// the previous preview stale: its colours and contents were gathered for
 	// a screen that no longer exists.
 	if path != m.previewPath || stamp != m.previewStamp {
+		// The file is changing under a load that is already running for
+		// it — a copy growing beside the cursor, a download still
+		// landing. Starting another full read and highlight per change
+		// stacks stale work faster than it can finish: every version of
+		// the file queues its own load, each with its own highlight,
+		// while the file keeps moving on. The target still moves on, so
+		// the running load's result is recognised as outdated when it
+		// lands and asked for again; only the version — and with it a
+		// second load — is held back, keeping at most one in flight.
+		if path == m.previewPath && m.previewPending.path == path {
+			m.previewStamp = stamp
+			return nil
+		}
 		m.previewPath = path
 		m.previewStamp = stamp
 		m.previewContent = ui.Content{}

@@ -15,6 +15,14 @@ import (
 // makes it obvious what left one behind.
 const tempPrefix = ".omakaiju-tmp-"
 
+// IsScratchName reports whether name is a scratch file the copy machinery is
+// still writing: a partial copy beside its destination, waiting for the
+// rename that puts it in place. The check is on the base name, so it accepts
+// a full path as well as a bare file name.
+func IsScratchName(name string) bool {
+	return strings.HasPrefix(filepath.Base(name), tempPrefix)
+}
+
 // SameFile reports whether two paths name the same file on disk.
 //
 // Comparing path strings is not enough. One file can be reached by many
@@ -45,6 +53,10 @@ func SameFile(a, b string) (bool, error) {
 // copyFileAtomic copies src to dst without ever exposing a partial file at
 // dst.
 //
+// warn collects the metadata warnings when the filesystem refuses modes or
+// times without refusing the copy; a nil collector keeps the strict contract
+// and fails instead.
+//
 // The bytes go to a scratch file in the destination's own directory, which is
 // what makes the final rename atomic: a rename within a directory never
 // crosses a filesystem, and the kernel swaps the name over in one step. A
@@ -63,7 +75,7 @@ func SameFile(a, b string) (bool, error) {
 //
 // The source is never modified. A copy that cannot finish leaves dst exactly
 // as it was.
-func copyFileAtomic(src, dst string, info os.FileInfo) error {
+func copyFileAtomic(src, dst string, info os.FileInfo, warn *[]MetaWarning) error {
 	same, err := SameFile(src, dst)
 	if err != nil {
 		return err
@@ -136,13 +148,17 @@ func copyFileAtomic(src, dst string, info os.FileInfo) error {
 	// helper that loses its setuid bit, is a surprise the user would not
 	// expect from a file manager.
 	if err := setCopyMode(tmpName, info.Mode()); err != nil {
-		return err
+		if !dropMeta(warn, dst, "mode", err) {
+			return fmt.Errorf("copy: cannot set mode %v on %s: %w", info.Mode(), dst, err)
+		}
 	}
 	// The times go on the scratch file before the rename, so a failure here
 	// leaves the destination untouched and the copy carries the source's
 	// modification and access times rather than the moment it was made.
 	if err := setCopyTimes(tmpName, timesOf(info)); err != nil {
-		return err
+		if !dropMeta(warn, dst, "times", err) {
+			return fmt.Errorf("copy: cannot set times on %s: %w", dst, err)
+		}
 	}
 
 	backup, err := replaceDestination(tmpName, dst)
@@ -399,10 +415,14 @@ func renameIntoPlace(tmp, dst string) error {
 // failure part way through leaves the files that did land complete, and the
 // rest of the tree untouched.
 //
+// warn collects the metadata warnings when the filesystem refuses modes or
+// times without refusing the copy; a nil collector keeps the strict contract
+// and fails instead.
+//
 // A directory is made writable while it is filled and only then given the
 // source's exact mode and times. Its time cannot be set at creation: each
 // entry written into it moves that time forward again.
-func copyTree(src, dst string) error {
+func copyTree(src, dst string, warn *[]MetaWarning) error {
 	info, err := os.Stat(src)
 	if err != nil {
 		return err
@@ -418,7 +438,9 @@ func copyTree(src, dst string) error {
 		// MkdirAll's mode is masked by the umask, so the writable mode has
 		// to be set explicitly before anything is written into it.
 		if err := setCopyMode(dst, info.Mode()|0o700); err != nil {
-			return err
+			if !dropMeta(warn, dst, "mode", err) {
+				return fmt.Errorf("copy: cannot set mode %v on %s: %w", info.Mode()|0o700, dst, err)
+			}
 		}
 	}
 	entries, err := os.ReadDir(src)
@@ -438,7 +460,7 @@ func copyTree(src, dst string) error {
 				return err
 			}
 		case entryInfo.IsDir():
-			if err := copyTree(srcPath, dstPath); err != nil {
+			if err := copyTree(srcPath, dstPath, warn); err != nil {
 				return err
 			}
 		case !entryInfo.Mode().IsRegular():
@@ -446,7 +468,7 @@ func copyTree(src, dst string) error {
 			// forever. Refuse it by name instead.
 			return &refusedEntry{verb: "move", path: srcPath}
 		default:
-			if err := copyFileAtomic(srcPath, dstPath, entryInfo); err != nil {
+			if err := copyFileAtomic(srcPath, dstPath, entryInfo, warn); err != nil {
 				return err
 			}
 		}
@@ -457,10 +479,14 @@ func copyTree(src, dst string) error {
 		return nil
 	}
 	if err := setCopyMode(dst, info.Mode()); err != nil {
-		return err
+		if !dropMeta(warn, dst, "mode", err) {
+			return fmt.Errorf("copy: cannot set mode %v on %s: %w", info.Mode(), dst, err)
+		}
 	}
 	if err := setCopyTimes(dst, timesOf(info)); err != nil {
-		return err
+		if !dropMeta(warn, dst, "times", err) {
+			return fmt.Errorf("copy: cannot set times on %s: %w", dst, err)
+		}
 	}
 	return nil
 }
@@ -506,12 +532,16 @@ func verifyTree(src, dst string) error {
 // moveAcrossDevices moves src to dst by copying it across and then removing
 // the original.
 //
+// warn collects the metadata warnings when the filesystem refuses modes or
+// times without refusing the copy; a nil collector keeps the strict contract
+// and fails instead.
+//
 // The order matters, and it is the whole point of this function. The copy is
 // written to a scratch file, flushed, checked against the source and only
 // then renamed into place. The source is removed after that, and never
 // before. If anything goes wrong the source is still sitting where it was,
 // with its contents intact.
-func moveAcrossDevices(src, dst string) error {
+func moveAcrossDevices(src, dst string, warn *[]MetaWarning) error {
 	// The destination was checked before the rename was tried, but it can
 	// appear between that check and this copy. A move never replaces what is
 	// already there, whatever filesystem it is on.
@@ -557,7 +587,7 @@ func moveAcrossDevices(src, dst string) error {
 	}
 
 	if info.IsDir() {
-		if err := copyTree(src, dst); err != nil {
+		if err := copyTree(src, dst, warn); err != nil {
 			return err
 		}
 		if err := verifyTree(src, dst); err != nil {
@@ -570,7 +600,7 @@ func moveAcrossDevices(src, dst string) error {
 		return &refusedEntry{verb: "move", path: src}
 	}
 
-	if err := copyFileAtomic(src, dst, info); err != nil {
+	if err := copyFileAtomic(src, dst, info, warn); err != nil {
 		return err
 	}
 

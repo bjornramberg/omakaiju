@@ -173,6 +173,18 @@ func (c *Copier) Renamed() int { return int(c.renamed.Load()) }
 // Failures reports the entries that could not be moved at all.
 func (c *Copier) Failures() []MoveFailure { return c.failures }
 
+// MetaWarnings reports the metadata the transfer could not carry: the mode
+// or times a filesystem that does not implement them refused. The entries
+// landed exactly — only their metadata was dropped — so these are reported
+// beside the success, not as failures. Nil-safe: a transfer that never
+// started has no warnings.
+func (c *Copier) MetaWarnings() []MetaWarning {
+	if c == nil {
+		return nil
+	}
+	return c.metaWarnings
+}
+
 // Moved counts the entries that have reached the destination, whether by a
 // rename or by a copy.
 //

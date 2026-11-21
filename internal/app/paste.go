@@ -69,10 +69,11 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 	}
 
 	verb, gerund := "moved", "moving"
-	op := fs.Move
+	var warns []fs.MetaWarning
+	op := func(src, dst string) error { return fs.Move(src, dst, &warns) }
 	if m.clipboard.Action == "copy" {
 		verb, gerund = "pasted", "copying"
-		op = fs.CopyRecursive
+		op = func(src, dst string) error { return fs.CopyRecursive(src, dst, &warns) }
 	}
 
 	var items []opItem
@@ -96,7 +97,7 @@ func (m Model) handlePaste() (tea.Model, tea.Cmd) {
 	// The work has not run yet, so this is a progress notice rather than a
 	// result: claiming a paste whose outcome is still unknown is the bug.
 	m.opResult = fmt.Sprintf("%s %d file(s)...", gerund, len(items))
-	return m, batchOpCmd(verb, items, 0, nil, &clipboard, op)
+	return m, attachMetaWarnings(batchOpCmd(verb, items, 0, nil, &clipboard, op), &warns)
 }
 
 // pasteMarks moves the marked set into the active pane's current directory.

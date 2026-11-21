@@ -3,6 +3,8 @@ package app
 import (
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -159,9 +161,111 @@ func safeCmd(where string, fn tea.Cmd) tea.Cmd {
 			if r := recover(); r != nil {
 				msg = panicMsg{report: newCrashReport(where, r)}
 			}
+			debugLogResult(where, msg)
 		}()
 		return fn()
 	}
+}
+
+// debugLogMu serialises the debug log: every command runs in its own
+// goroutine, and two failures landing at once must not interleave mid-line.
+var debugLogMu sync.Mutex
+
+// debugLogResult appends a command's failure to the debug log, if one is
+// configured.
+//
+// OMAKAIJU_DEBUG_LOG names the file. It is empty in normal use, and then
+// this costs one environment lookup per command and nothing else. With it
+// set, every failing background command — copy, move, trash, delete, load —
+// leaves a timestamped line with the full error chain, so a failure the
+// bottom bar had to shorten can still be diagnosed after the fact. Nothing
+// here can fail the command it is logging: all errors are swallowed.
+func debugLogResult(where string, msg tea.Msg) {
+	defer func() { _ = recover() }()
+	path := os.Getenv("OMAKAIJU_DEBUG_LOG")
+	if path == "" || msg == nil {
+		return
+	}
+	errs := resultErrors(msg)
+	if len(errs) == 0 {
+		return
+	}
+	debugLogErrors(path, where+" "+fmt.Sprintf("%T", msg), errs)
+}
+
+// debugLogErrors appends errs to the named log file with a timestamp. All
+// writes are serialised and all errors swallowed: logging must never fail
+// the command it is logging.
+func debugLogErrors(path, kind string, errs []error) {
+	defer func() { _ = recover() }()
+	if path == "" || len(errs) == 0 {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s %s\n", time.Now().Format(time.RFC3339), kind)
+	for _, err := range errs {
+		fmt.Fprintf(&b, "  error: %v\n", err)
+	}
+	debugLogMu.Lock()
+	defer debugLogMu.Unlock()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = io.WriteString(f, b.String())
+}
+
+// debugLogWarnings appends metadata warnings to the debug log, if one is
+// configured. Warnings are not failures, so resultErrors never sees them;
+// callers that degrade gracefully report them here explicitly.
+func debugLogWarnings(where string, errs []error) {
+	if len(errs) == 0 {
+		return
+	}
+	path := os.Getenv("OMAKAIJU_DEBUG_LOG")
+	if path == "" {
+		return
+	}
+	debugLogErrors(path, where, errs)
+}
+
+// resultErrors pulls the failures out of a command's message, if it carries// any. Successes log nothing: the log is for diagnosing what went wrong, not
+// a trace of everything that went right.
+func resultErrors(msg tea.Msg) []error {
+	switch m := msg.(type) {
+	case fileOpMsg:
+		var out []error
+		for _, f := range m.failures {
+			if f.err != nil {
+				out = append(out, fmt.Errorf("%s (%s): %w", f.name, f.path, f.err))
+			}
+		}
+		return out
+	case copyProgressMsg:
+		if m.err != nil {
+			return []error{fmt.Errorf("%s (%s): %w", m.name, m.path, m.err)}
+		}
+	case dirLoadedMsg:
+		if m.err != nil {
+			return []error{fmt.Errorf("load %s: %w", m.path, m.err)}
+		}
+	case dirChangedMsg:
+		if m.err != nil {
+			return []error{m.err}
+		}
+	case openMsg:
+		if m.err != nil {
+			return []error{fmt.Errorf("open %s: %w", m.name, m.err)}
+		}
+	case themeReloadedMsg:
+		if m.err != nil {
+			return []error{m.err}
+		}
+	case panicMsg:
+		return []error{fmt.Errorf("panic: %v", m.report.Err)}
+	}
+	return nil
 }
 
 // crashError is the one-line summary shown in the bottom bar.

@@ -65,6 +65,10 @@ func permissionDenied(name string) *os.LinkError {
 	}
 }
 
+// strictMove keeps the blocking move's strict contract for the batch tests:
+// no warnings collector, so every refusal fails exactly like before.
+func strictMove(src, dst string) error { return fs.Move(src, dst) }
+
 // The bug: the failed-operation handler reloads the panes, and the successful
 // reload used to clear the error before it was ever drawn. The operation error
 // must outlive the reload the operation itself triggered.
@@ -130,7 +134,7 @@ func TestBatchPartialFailureReportsCountsAndNames(t *testing.T) {
 		{name: "gone.txt", src: gone, dst: filepath.Join(dstDir, "gone.txt")},
 	}
 
-	msg, ok := singleMsg(t, batchOpCmd("moved", items, 0, nil, nil, fs.Move)).(fileOpMsg)
+	msg, ok := singleMsg(t, batchOpCmd("moved", items, 0, nil, nil, strictMove)).(fileOpMsg)
 	if !ok {
 		t.Fatal("batchOpCmd should report a fileOpMsg")
 	}
@@ -187,7 +191,7 @@ func TestBatchResultIsIndependentOfOrder(t *testing.T) {
 			items = append(items, opItem{name: name, src: src, dst: filepath.Join(dstDir, name)})
 		}
 
-		msg, ok := singleMsg(t, batchOpCmd("moved", items, 0, nil, nil, fs.Move)).(fileOpMsg)
+		msg, ok := singleMsg(t, batchOpCmd("moved", items, 0, nil, nil, strictMove)).(fileOpMsg)
 		if !ok {
 			t.Fatal("batchOpCmd should report a fileOpMsg")
 		}
@@ -414,6 +418,21 @@ func TestOperationResultText(t *testing.T) {
 			},
 			want: "failed 1: alpha.txt (permission denied)",
 		},
+		{
+			name: "metadata not kept",
+			msg:  fileOpMsg{verb: "copied", succeeded: 1, unkeptMeta: 1},
+			want: "copied 1 file(s), metadata not kept on 1",
+		},
+		{
+			name: "failures and unkept metadata",
+			msg: fileOpMsg{
+				verb:       "moved",
+				succeeded:  1,
+				failures:   []opFailure{{name: "b.txt", err: permissionDenied("b.txt")}},
+				unkeptMeta: 2,
+			},
+			want: "moved 1 file(s), failed 1: b.txt (permission denied), metadata not kept on 2",
+		},
 	}
 
 	for _, tc := range cases {
@@ -597,7 +616,7 @@ func TestPartialBatchRestoresOnlyFailedMarks(t *testing.T) {
 		{name: "gone.txt", src: gone, dst: filepath.Join(dstDir, "gone.txt")},
 	}
 
-	msg, ok := singleMsg(t, batchOpCmd("moved", items, 0, marks, nil, fs.Move)).(fileOpMsg)
+	msg, ok := singleMsg(t, batchOpCmd("moved", items, 0, marks, nil, strictMove)).(fileOpMsg)
 	if !ok {
 		t.Fatal("batchOpCmd should report a fileOpMsg")
 	}
