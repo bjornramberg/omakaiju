@@ -82,6 +82,7 @@ func (m *Model) recordOpResult(msg fileOpMsg) {
 	// blocking path reports through here without finishCopy having run.
 	m.copyClipboard = nil
 	m.copyFiles = 0
+	m.copyReplaced = 0
 	if len(msg.failures) > 0 {
 		m.restoreSelection(msg)
 		m.opErr = errors.New(msg.result())
@@ -264,6 +265,7 @@ func (m Model) handleDelete() (tea.Model, tea.Cmd) {
 	}
 	m.confirmDelete = true
 	m.deleteTarget = files[cursor].Path
+	m.deleteIsDir = files[cursor].IsDir
 	return m, nil
 }
 
@@ -338,24 +340,54 @@ func (m Model) cycleSortAction() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	switch keyID(msg) {
 	// Trash is the safe choice, so it is the one that also answers to the
-	// keys people reach for out of habit.
-	case "t", "T", "y", "Y", "enter":
+	// keys people reach for out of habit. Enter is deliberately not one of
+	// them: a key pressed to dismiss an unread question must not delete.
+	case "t", "T", "y", "Y":
 		m.confirmDelete = false
 		target := m.deleteTarget
 		m.deleteTarget = ""
+		m.deleteIsDir = false
 		m.opResult = "trashing " + filepath.Base(target) + "..."
 		return m, trashCmd(target)
-	case "f", "F":
+	case "p", "P", "f", "F", "d", "D":
+		// Permanent deletion is never one keypress. This opens the question
+		// that says exactly what will go; the next answer decides.
 		m.confirmDelete = false
-		target := m.deleteTarget
+		m.confirmPermanentDelete = true
+		m.permanentTarget = m.deleteTarget
+		m.permanentIsDir = m.deleteIsDir
 		m.deleteTarget = ""
+		m.deleteIsDir = false
+		m.opResult = ""
+		return m, nil
+	case "n", "N", "esc", "enter":
+		m.confirmDelete = false
+		m.deleteTarget = ""
+		m.deleteIsDir = false
+		m.opResult = "cancelled"
+		return m, nil
+	}
+	return m, nil
+}
+
+// handleConfirmPermanentDelete answers the second, explicit question about a
+// permanent deletion. Only an affirmative answer deletes; Enter is the safe
+// answer, not a shortcut to the destructive one.
+func (m Model) handleConfirmPermanentDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch keyID(msg) {
+	case "y", "Y", "p", "P", "f", "F", "d", "D":
+		m.confirmPermanentDelete = false
+		target := m.permanentTarget
+		m.permanentTarget = ""
+		m.permanentIsDir = false
 		m.opResult = "deleting " + filepath.Base(target) + "..."
 		return m, deleteCmd(target)
-	case "n", "N", "esc":
-		m.confirmDelete = false
-		m.deleteTarget = ""
+	case "n", "N", "esc", "enter":
+		m.confirmPermanentDelete = false
+		m.permanentTarget = ""
+		m.permanentIsDir = false
 		m.opResult = "cancelled"
 		return m, nil
 	}

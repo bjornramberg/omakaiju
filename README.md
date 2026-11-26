@@ -58,6 +58,7 @@ See [Usage](docs/usage.md) for focus cues, the mouse, the `..` row, Omarchy inte
 * [Usage](docs/usage.md) — focus cues, mouse, the `..` row, Omarchy integration, theming.
 * [Keybindings](docs/keybindings.md) — the complete key list.
 * [Architecture](docs/architecture.md) — performance, previews, file-safety invariants, the debug pane.
+* [Destructive actions](docs/destructive-actions.md) — the project rule for confirming deletes, replacements, and trash.
 * [Security](docs/security.md) — the signing model, trust root, and key locations.
 * [Development](docs/development.md) — make targets, version stamping, and fuzzing.
 

@@ -28,8 +28,8 @@ const doubleClickWindow = 500 * time.Millisecond
 // with the pointer, so it keeps the mouse, and handleMouse reaches it before
 // this gate.
 func (m Model) modalActive() bool {
-	return m.confirmEmptyTrash || m.confirmDelete || m.fuzzyActive ||
-		m.keyListActive || m.mode != inputNone
+	return m.confirmEmptyTrash || m.confirmPermanentDelete || m.confirmDelete || m.confirmPaste ||
+		m.fuzzyActive || m.keyListActive || m.mode != inputNone
 }
 
 // mouseMode is the reporting mode for the next frame. It is MouseModeNone

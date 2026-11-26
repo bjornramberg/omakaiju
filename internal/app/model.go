@@ -58,6 +58,18 @@ type Model struct {
 	clipboardOn   bool
 	confirmDelete bool
 	deleteTarget  string
+	// deleteIsDir records whether the delete target is a directory, so the
+	// permanent-delete question can say what the operation will remove.
+	deleteIsDir bool
+	// confirmPermanentDelete is the second delete step. The first key opens
+	// it, and only a further confirmation deletes anything permanently.
+	confirmPermanentDelete bool
+	permanentTarget        string
+	permanentIsDir         bool
+	// confirmPaste holds a paste at the point where a destination name is
+	// already taken, so the user chooses overwrite, skip, or keep both.
+	confirmPaste bool
+	pastePlan    *pastePlan
 	// confirmEmptyTrash holds the quit prompt open while the user decides
 	// whether the home trash should be emptied on the way out.
 	confirmEmptyTrash bool
@@ -77,9 +89,13 @@ type Model struct {
 	// copyMarks holds the marked entries a move consumed. A failed entry is
 	// put back so the user can fix the cause and try again.
 	copyMarks map[string]fs.Entry
-	// copySkipped counts the entries a move never attempted, such as ones
-	// that had already vanished. They are reported with the result.
+	// copySkipped counts the entries a transfer never attempted, such as ones
+	// that had already vanished or a paste the user chose to skip because the
+	// destination name was taken. They are reported with the result.
 	copySkipped int
+	// copyReplaced counts the paste destinations that already existed and
+	// were replaced with the user's consent, so the result says what was lost.
+	copyReplaced int
 	// copyGen identifies the current copy. It changes whenever a copy
 	// starts or ends, so a message from a copy that has been cancelled is
 	// recognised as stale and dropped.

@@ -229,7 +229,7 @@ func (m Model) dropEntry(drag *dragState) (tea.Model, tea.Cmd) {
 		m.copyFiles = 1
 		m.copyGen++
 		m.opResult = "copying " + drag.entry.Name + "..."
-		return m, startCopyCmd([]string{drag.entry.Path}, dstDir, m.copyGen, nil)
+		return m, startCopyCmd([]string{drag.entry.Path}, dstDir, m.copyGen, nil, 0, 0)
 	}
 
 	// The dragged entry's own mark goes with it, because the entry is leaving

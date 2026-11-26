@@ -20,8 +20,8 @@ every build, so it cannot drift away from what the keys actually do.
 | Key | Action |
 |-----|--------|
 | `Shift+C` | Copy (yank) entry under cursor |
-| `Shift+V` | Paste into this pane (y-staged copy, or move marked entries there) |
-| `Shift+D` | Delete prompt: `t`rash (default, also `y`/`Enter`), `f`orce delete, `n`/`Esc` cancel |
+| `Shift+V` | Paste into this pane (y-staged copy, or move marked entries there). A taken destination name asks: overwrite, skip, or keep both |
+| `Shift+D` | Delete prompt: `t`rash (also `y`), `p`ermanently delete (a second `y` confirms), `n`/`Esc`/`Enter` cancel |
 | `Shift+M` | Mark / unmark entry (repeat to select several for bulk move) |
 | `Shift+A` | Add file |
 | `Shift+N` | Add directory |
@@ -43,7 +43,7 @@ every build, so it cannot drift away from what the keys actually do.
 ### System
 | Key | Action |
 |-----|--------|
-| `q` / `Shift+Q` | Quit (asks whether to empty a non-empty home trash first) |
+| `q` / `Shift+Q` | Quit (asks whether to empty a non-empty home trash first; `Enter` means no) |
 | `Esc` | Cancel copy / dismiss prompt / clear filter |
 
 The shifted key is the whole binding: `Shift+G` opens the goto prompt and the
@@ -59,7 +59,16 @@ file. A move that has to cross a filesystem — onto a share, say — is a copy
 followed by the removal of the original, so it gets a bar and a cancel of its
 own.
 
+A paste onto a name that is already taken does not replace it silently. It
+asks whether to overwrite, skip, or keep both; the result then says how many
+entries were replaced. Overwriting a folder merges into it, as before.
+
 Quitting with items in the trash asks whether to empty it. Answering yes
-empties the home trash and quits; answering no — or pressing `Esc` — quits and
-leaves the trash alone. Only the home trash is covered, because the
-per-filesystem trashes are not walked.
+empties the home trash and quits; answering no — or pressing `Enter` or `Esc`
+— quits and leaves the trash alone. Only the home trash is covered, because
+the per-filesystem trashes are not walked.
+
+Deleting permanently is always two steps. The first key opens a question that
+names what will go — a file, or a folder and everything in it — and only a
+second confirmation deletes it. `Enter` is the safe answer on every
+confirmation.

@@ -20,6 +20,7 @@ func (m *Model) finishCopy() {
 	m.copyClipboard = nil
 	m.copyMarks = nil
 	m.copySkipped = 0
+	m.copyReplaced = 0
 	m.copyGen++
 }
 
@@ -151,17 +152,17 @@ func dirContentSize(root string, budget *int) int64 {
 // its progress bar) or the simple blocking path. Doing that walk in Update
 // froze the whole UI on a large folder before the progress notice could be
 // shown; here it happens where the copy itself happens.
-func pasteCopyCmd(files []fs.Entry, dstDir string, gen int, clipboard *Clipboard) tea.Cmd {
+func pasteCopyCmd(files []fs.Entry, dstDir string, gen int, clipboard *Clipboard, skipped, replaced int) tea.Cmd {
 	return safeCmd("paste-copy", func() tea.Msg {
 		if pasteSizeWalk(files) >= copyProgressThreshold {
 			srcs := make([]string, 0, len(files))
 			for _, f := range files {
 				srcs = append(srcs, f.Path)
 			}
-			return startCopyCmd(srcs, dstDir, gen, clipboard)()
+			return startCopyCmd(srcs, dstDir, gen, clipboard, skipped, replaced)()
 		}
 
-		msg := fileOpMsg{verb: "pasted", clipboard: clipboard}
+		msg := fileOpMsg{verb: "pasted", clipboard: clipboard, skipped: skipped, replaced: replaced}
 		var warns []fs.MetaWarning
 		for _, f := range files {
 			dst := filepath.Join(dstDir, f.Name)

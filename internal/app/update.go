@@ -265,6 +265,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			clipboard := m.copyClipboard
 			marks := m.copyMarks
 			skipped := m.copySkipped
+			replaced := m.copyReplaced
 			m.finishCopy()
 			verb := "copied"
 			failures := []opFailure{{name: name, path: path, err: msg.err}}
@@ -274,6 +275,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// and the one that stopped it is reported beside them.
 				failures = append(moverFailures(msg.copier), failures...)
 				done = 0
+				replaced = 0
 				if msg.copier != nil {
 					done = msg.copier.Moved()
 				}
@@ -285,6 +287,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				clipboard: clipboard,
 				marks:     marks,
 				skipped:   skipped,
+				replaced:  replaced,
 			})
 			return m, m.reloadPanesCmd()
 		}
@@ -293,6 +296,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			files := m.copyFiles
 			marks := m.copyMarks
 			skipped := m.copySkipped
+			replaced := m.copyReplaced
 			warns := msg.copier.MetaWarnings()
 			unkept := countUnkept(warns)
 			m.finishCopy()
@@ -315,7 +319,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.reloadPanesCmd()
 			}
 			debugLogWarnings("copy", warnErrors(warns))
-			m.recordOpResult(fileOpMsg{verb: "copied", succeeded: files, unkeptMeta: unkept})
+			m.recordOpResult(fileOpMsg{
+				verb:       "copied",
+				succeeded:  files,
+				skipped:    skipped,
+				replaced:   replaced,
+				unkeptMeta: unkept,
+			})
 			return m, m.reloadPanesCmd()
 		}
 
