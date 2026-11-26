@@ -1,3 +1,5 @@
+<p align="center"><img width="300" src="omakaiju_logo.png" alt="Omakaiju logotype"/></p>
+
 # omakaiju
 
 ![CI](https://github.com/bjornramberg/omakaiju/actions/workflows/ci.yml/badge.svg)
