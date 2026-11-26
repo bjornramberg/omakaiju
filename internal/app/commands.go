@@ -67,13 +67,13 @@ const copyProgressThreshold = 1 << 20
 
 // startCopyCmd builds the copier and performs the first step. clipboard is the
 // paste selection the copy consumed, restored if the job cannot start.
-func startCopyCmd(srcs []string, dstDir string, gen int, clipboard *Clipboard) tea.Cmd {
+func startCopyCmd(srcs []string, dstDir string, gen int, clipboard *Clipboard, skipped, replaced int) tea.Cmd {
 	return safeCmd("copy-start", func() tea.Msg {
 		copier, err := fs.NewCopier(srcs, dstDir)
 		if err != nil {
 			// Nothing was copied. Name each source so the failure reads
 			// like any other aggregate result.
-			msg := fileOpMsg{verb: "copied", clipboard: clipboard}
+			msg := fileOpMsg{verb: "copied", clipboard: clipboard, skipped: skipped, replaced: replaced}
 			for _, src := range srcs {
 				msg.failures = append(msg.failures, opFailure{name: filepath.Base(src), path: src, err: err})
 			}

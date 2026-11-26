@@ -1165,6 +1165,157 @@ func TestYankPasteStillWorksWithoutMarks(t *testing.T) {
 	}
 }
 
+// yankCopyIntoDst stages alpha.txt in the left pane, tabs to dst, and pastes.
+func yankCopyIntoDst(t *testing.T, m Model, dst string) (Model, tea.Cmd) {
+	t.Helper()
+	m = moveCursorTo(t, m, "alpha.txt")
+	updated, _ := m.Update(shiftKey('c'))
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(Model)
+	updated, cmd := m.Update(shiftKey('v'))
+	return updated.(Model), cmd
+}
+
+// Pasting over an existing name asks first, and does not touch either file
+// until the question is answered.
+func TestPasteOverExistingNameAsksFirst(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+	m.width, m.height = 44, 24
+	const existing = "already here"
+	if err := os.WriteFile(filepath.Join(dst, "alpha.txt"), []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, cmd := yankCopyIntoDst(t, m, dst)
+	if cmd != nil {
+		t.Fatal("a paste over an existing file must not start before the question is answered")
+	}
+	if !m.confirmPaste {
+		t.Fatal("a paste over an existing file should ask what to do")
+	}
+
+	view := plainView.ReplaceAllString(m.View().Content, "")
+	if !strings.Contains(view, "Replace alpha.txt?") {
+		t.Errorf("the question should name the destination, got:\n%s", view)
+	}
+	if !strings.Contains(view, "(o)verwrite") || !strings.Contains(view, "(s)kip") || !strings.Contains(view, "(k)eep both") {
+		t.Errorf("the question should offer overwrite, skip and keep both, got:\n%s", view)
+	}
+	if data, err := os.ReadFile(filepath.Join(dst, "alpha.txt")); err != nil || string(data) != existing {
+		t.Errorf("the existing file was touched before the answer: %q, %v", data, err)
+	}
+}
+
+// Choosing overwrite replaces the destination, and the result says so instead
+// of only claiming that the paste succeeded.
+func TestPasteOverwriteReportsReplacement(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+	if err := os.WriteFile(filepath.Join(dst, "alpha.txt"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = yankCopyIntoDst(t, m, dst)
+	updated, cmd := m.Update(key('o'))
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("answering overwrite should start the copy")
+	}
+	msgs := runBatch(t, cmd)
+	requireNoOpErrors(t, msgs)
+	m = applyOps(t, m, msgs)
+
+	if !strings.Contains(m.opResult, "replaced 1") {
+		t.Errorf("opResult = %q, want the replacement reported", m.opResult)
+	}
+	want, err := os.ReadFile(filepath.Join(m.leftPath, "alpha.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "alpha.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Error("overwrite should put the copied contents at the destination")
+	}
+}
+
+// Choosing skip leaves the existing file exactly as it was.
+func TestPasteSkipLeavesExistingFileAlone(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+	const existing = "already here"
+	if err := os.WriteFile(filepath.Join(dst, "alpha.txt"), []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = yankCopyIntoDst(t, m, dst)
+	updated, cmd := m.Update(key('s'))
+	m = updated.(Model)
+	if cmd != nil {
+		msg := cmd()
+		if fm, ok := msg.(fileOpMsg); ok && len(fm.failures) == 0 {
+			t.Fatalf("skip should not copy anything, got %s", fm.result())
+		}
+	}
+	if !strings.Contains(m.opResult, "skipped 1") {
+		t.Errorf("opResult = %q, want the skipped entry reported", m.opResult)
+	}
+	if data, err := os.ReadFile(filepath.Join(dst, "alpha.txt")); err != nil || string(data) != existing {
+		t.Errorf("skip changed the existing file: %q, %v", data, err)
+	}
+}
+
+// Choosing keep both writes the copy under a new name and leaves the original
+// where it was.
+func TestPasteKeepBothPreservesOriginal(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+	const existing = "already here"
+	if err := os.WriteFile(filepath.Join(dst, "alpha.txt"), []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = yankCopyIntoDst(t, m, dst)
+	updated, cmd := m.Update(key('k'))
+	m = updated.(Model)
+	msgs := runBatch(t, cmd)
+	requireNoOpErrors(t, msgs)
+	m = applyOps(t, m, msgs)
+
+	if data, err := os.ReadFile(filepath.Join(dst, "alpha.txt")); err != nil || string(data) != existing {
+		t.Errorf("keep both changed the original: %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "alpha (1).txt")); err != nil {
+		t.Errorf("keep both did not copy under a new name: %v", err)
+	}
+}
+
+// Enter refuses the overwrite: the safe answer must not destroy the file.
+func TestPasteEnterCancels(t *testing.T) {
+	m, _, dst := twoPaneFixture(t)
+	const existing = "already here"
+	if err := os.WriteFile(filepath.Join(dst, "alpha.txt"), []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = yankCopyIntoDst(t, m, dst)
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Error("Enter should not start a paste")
+	}
+	if m.confirmPaste {
+		t.Error("Enter should close the question")
+	}
+	if !m.clipboardOn {
+		t.Error("cancelling should leave the clipboard armed")
+	}
+	if data, err := os.ReadFile(filepath.Join(dst, "alpha.txt")); err != nil || string(data) != existing {
+		t.Errorf("Enter changed the existing file: %q, %v", data, err)
+	}
+}
+
 func TestArchivePreviewIsCached(t *testing.T) {
 	m, dir := fixture(t)
 
@@ -1488,12 +1639,11 @@ func stageDelete(t *testing.T, m Model, name string) Model {
 }
 
 func TestDeleteTrashesByDefault(t *testing.T) {
-	// Trash is the safe choice, so it answers to t as well as the habitual y
-	// and enter. Each key needs its own file since trashing consumes it.
+	// Trash is the safe choice, so it answers to t as well as the habitual y.
+	// Each key needs its own file since trashing consumes it.
 	for _, k := range []tea.KeyPressMsg{
 		{Code: 't'},
 		{Code: 'y'},
-		{Code: tea.KeyEnter},
 	} {
 		t.Run(k.String(), func(t *testing.T) {
 			m, dir := fixture(t)
@@ -1521,13 +1671,53 @@ func TestDeleteTrashesByDefault(t *testing.T) {
 	}
 }
 
-func TestDeleteForceRemovesPermanently(t *testing.T) {
+// Enter dismisses the delete prompt without deleting anything: it is the key
+// people press to answer a question they may not have read.
+func TestDeleteEnterCancels(t *testing.T) {
 	m, dir := fixture(t)
+	m = stageDelete(t, m, "alpha.txt")
+
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Error("Enter should not dispatch a delete")
+	}
+	if m.confirmDelete {
+		t.Error("Enter should close the prompt")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "alpha.txt")); err != nil {
+		t.Errorf("Enter must leave the file in place: %v", err)
+	}
+}
+
+// A permanent delete is two steps: the first key opens the question that says
+// what will be removed, and only the second answer deletes.
+func TestDeletePermanentNeedsConfirmation(t *testing.T) {
+	m, dir := fixture(t)
+	m.width, m.height = 44, 24
 
 	target := filepath.Join(dir, "alpha.txt")
 	m = stageDelete(t, m, "alpha.txt")
 
 	updated, cmd := m.Update(key('f'))
+	m = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("the first key must not delete permanently")
+	}
+	if !m.confirmPermanentDelete {
+		t.Fatal("the first key should open the permanent-delete question")
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("the first key removed the file: %v", err)
+	}
+	view := plainView.ReplaceAllString(m.View().Content, "")
+	if !strings.Contains(view, "Permanently delete alpha.txt?") {
+		t.Errorf("the second step should say what it does, got:\n%s", view)
+	}
+
+	updated, cmd = m.Update(key('y'))
 	m = updated.(Model)
 
 	if m.opResult != "deleting alpha.txt..." {
@@ -1540,7 +1730,29 @@ func TestDeleteForceRemovesPermanently(t *testing.T) {
 		t.Errorf("opResult = %q, want %q", m.opResult, "deleted alpha.txt")
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
-		t.Error("force delete should remove the file")
+		t.Error("the confirmed delete should remove the file")
+	}
+}
+
+// A folder's permanent-delete question says that the whole tree goes, not just
+// a name with an innocuous set of permissions beside it.
+func TestDeletePermanentFolderSaysEverythingGoes(t *testing.T) {
+	m, _ := fixture(t)
+	m.width, m.height = 44, 24
+	m = stageDelete(t, m, "subdir")
+
+	updated, _ := m.Update(key('p'))
+	m = updated.(Model)
+	if !m.confirmPermanentDelete {
+		t.Fatal("p should open the permanent-delete question")
+	}
+
+	view := plainView.ReplaceAllString(m.View().Content, "")
+	if !strings.Contains(view, "Permanently delete subdir (folder)?") {
+		t.Errorf("the question should name the folder, got:\n%s", view)
+	}
+	if !strings.Contains(view, "everything in it") {
+		t.Errorf("the question should say the whole tree goes, got:\n%s", view)
 	}
 }
 
@@ -1550,7 +1762,9 @@ func TestDeleteLandsCursorOnNextEntry(t *testing.T) {
 	m, _ := fixture(t)
 	m = stageDelete(t, m, "alpha.txt")
 
-	updated, cmd := m.Update(key('f'))
+	updated, _ := m.Update(key('f'))
+	m = updated.(Model)
+	updated, cmd := m.Update(key('y'))
 	m = updated.(Model)
 	msgs := runBatch(t, cmd)
 	requireNoOpErrors(t, msgs)
@@ -1591,11 +1805,30 @@ func TestDeletePromptLabelsOfferTrash(t *testing.T) {
 	if !strings.Contains(content, "(t)rash") {
 		t.Error("prompt should offer the safe trash option")
 	}
-	if !strings.Contains(content, "(f)orce") {
-		t.Error("prompt should offer force delete")
+	if !strings.Contains(content, "(p)ermanently") {
+		t.Error("prompt should label permanent deletion as permanent")
+	}
+	if strings.Contains(content, "force") {
+		t.Error("force is not the label for a permanent delete")
 	}
 	if !strings.Contains(content, "alpha.txt") {
 		t.Error("prompt should name the target")
+	}
+}
+
+// The delete question and its answers both survive the advertised minimum
+// width; the old long line lost its beginning and left only the options.
+func TestDeletePromptFitsMinimumWidth(t *testing.T) {
+	m, _ := fixture(t)
+	m.width, m.height = 44, 24
+	m = stageDelete(t, m, "alpha.txt")
+
+	view := plainView.ReplaceAllString(m.View().Content, "")
+	if !strings.Contains(view, "Delete alpha.txt?") {
+		t.Errorf("the question is not readable at the minimum width, got:\n%s", view)
+	}
+	if !strings.Contains(view, "(t)rash") || !strings.Contains(view, "(p)ermanently") || !strings.Contains(view, "(n)o") {
+		t.Errorf("the answers are not readable at the minimum width, got:\n%s", view)
 	}
 }
 

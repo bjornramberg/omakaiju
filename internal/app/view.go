@@ -234,9 +234,23 @@ func (m Model) view() tea.View {
 			progress := ui.NewProgress(m.copier, m.theme)
 			bottomBar.Progress = &progress
 		} else if m.confirmEmptyTrash {
-			bottomBar.Input = "there are items in the trash — empty it? (y)es / (n)o (Esc quits without emptying)"
+			bottomBar.ConfirmQuestion = "Empty the trash before quitting?"
+			bottomBar.ConfirmOptions = "(y)es / (n)o"
+		} else if m.confirmPermanentDelete {
+			name := filepath.Base(m.permanentTarget)
+			if m.permanentIsDir {
+				bottomBar.ConfirmQuestion = "Permanently delete " + name + " (folder)?"
+				bottomBar.ConfirmOptions = "everything in it — (y)es / (n)o"
+			} else {
+				bottomBar.ConfirmQuestion = "Permanently delete " + name + "?"
+				bottomBar.ConfirmOptions = "(y)es / (n)o"
+			}
 		} else if m.confirmDelete {
-			bottomBar.Input = filepath.Base(m.deleteTarget) + "? (t)rash / (f)orce / (n)o"
+			bottomBar.ConfirmQuestion = "Delete " + filepath.Base(m.deleteTarget) + "?"
+			bottomBar.ConfirmOptions = "(t)rash / (p)ermanently / (n)o"
+		} else if m.confirmPaste {
+			bottomBar.ConfirmQuestion = pasteConflictQuestion(m.pastePlan)
+			bottomBar.ConfirmOptions = "(o)verwrite / (s)kip / (k)eep both"
 		} else if m.crashErr != nil {
 			// A recovered crash outranks a load error: it is the one thing
 			// the user needs to know about, and it may still be relevant.

@@ -71,6 +71,9 @@ Copies and moves never expose a half-written file, and never lose one.
 * Every operation that fails says so, names the file, and stays on screen
   until you do something else. What did not move stays selected, so you can
   fix the cause and try again.
+* The interface follows the same rule as the filesystem code: a destructive
+  action says what it will do before it does it. See
+  [Destructive actions](destructive-actions.md) for the project practice.
 
 ## Debug pane (hidden)
 

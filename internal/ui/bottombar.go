@@ -15,7 +15,13 @@ type BottomBar struct {
 	FuzzyInput  string
 	Prompt      string
 	PromptInput string
-	Progress    *Progress
+	// ConfirmQuestion and ConfirmOptions are a two-line confirmation. The
+	// question keeps its beginning (unlike a text prompt, which keeps its
+	// tail) and the options sit on a row of their own, so both stay readable
+	// at the advertised minimum width.
+	ConfirmQuestion string
+	ConfirmOptions  string
+	Progress        *Progress
 	// Splash is pre-rendered version text placed flush right on the hints
 	// row while a version splash is fading. Empty means no splash.
 	Splash string
@@ -35,6 +41,10 @@ func (b BottomBar) Render() string {
 	if b.Prompt != "" {
 		label := b.Prompt + "> "
 		return b.line(b.Theme.AccentText().Render(label) + b.tail(label, b.PromptInput))
+	}
+
+	if b.ConfirmQuestion != "" {
+		return b.line(b.confirmContent())
 	}
 
 	if b.Error != "" {
@@ -85,6 +95,22 @@ func (b BottomBar) line(content string) string {
 		Height(3).
 		MaxHeight(3).
 		Render(content)
+}
+
+// confirmContent draws a confirmation as a question and its answers on
+// separate rows. The question keeps its start because that is where the verb
+// and the target are; a text prompt keeps its end because that is where the
+// typing is. Each row is bounded independently, so a long file name cannot
+// push the answers off the screen.
+func (b BottomBar) confirmContent() string {
+	avail := b.contentWidth() - 2
+	question := TruncateEnd(SanitizeName(b.ConfirmQuestion), avail)
+	lines := []string{b.Theme.AccentText().Render("> " + question)}
+	if b.ConfirmOptions != "" {
+		options := TruncateEnd(SanitizeName(b.ConfirmOptions), avail)
+		lines = append(lines, b.Theme.StatusText().Render("  "+options))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // tail clips an input string to whatever space the prompt leaves, keeping the

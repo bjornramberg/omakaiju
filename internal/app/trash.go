@@ -63,12 +63,13 @@ func (m Model) requestQuit() (tea.Model, tea.Cmd) {
 
 // handleConfirmEmptyTrash answers the question asked on the way out.
 //
-// Enter counts as yes because that is the safe answer the delete prompt also
-// gives it. No and Esc quit without touching the trash: Esc means "no" here,
-// not "stay", because the user has already asked to quit.
+// Enter is "no": it is the key people press to dismiss a prompt, and a question
+// that was not read must not empty the trash. No and Esc also quit without
+// touching the trash; Esc means "no" here, not "stay", because the user has
+// already asked to quit.
 func (m Model) handleConfirmEmptyTrash(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y", "enter":
+	switch keyID(msg) {
+	case "y", "Y":
 		m.confirmEmptyTrash = false
 		if err := fs.EmptyTrash(); err != nil {
 			// The user asked to quit; a trash that will not empty is
@@ -78,7 +79,7 @@ func (m Model) handleConfirmEmptyTrash(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.opResult = "trash emptied"
 		}
 		return m.quit()
-	case "n", "N", "esc":
+	case "n", "N", "esc", "enter":
 		m.confirmEmptyTrash = false
 		return m.quit()
 	}

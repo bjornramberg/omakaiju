@@ -175,8 +175,6 @@ Ordered by how much they cost the user, with the rough size of each.
 * **A command line** (medium; the project has decided against a general
   command line, so this is a decision to revisit).
 * **Searching by content, date, size or kind** (medium).
-* **The copy could ask what to do about a name that is taken** (small to
-  medium).
 * **Decided against, and not to be scheduled:** tabs and workspaces,
   resizable panes, git status badges, image previews through Kitty or Sixel
   graphics, and a bare-letter or `h/j/k/l` keymap. The mouse is no longer on

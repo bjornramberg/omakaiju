@@ -94,8 +94,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirmEmptyTrash(msg)
 	}
 
+	if m.confirmPermanentDelete {
+		return m.handleConfirmPermanentDelete(msg)
+	}
+
 	if m.confirmDelete {
 		return m.handleConfirmDelete(msg)
+	}
+
+	if m.confirmPaste {
+		return m.handleConfirmPaste(msg)
 	}
 
 	if m.fuzzyActive {

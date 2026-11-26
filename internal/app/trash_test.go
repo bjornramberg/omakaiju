@@ -109,8 +109,52 @@ func TestQuitWithANonEmptyTrashAsksFirst(t *testing.T) {
 	}
 
 	view := plainView.ReplaceAllString(m.View().Content, "")
-	if !strings.Contains(view, "empty it") {
+	if !strings.Contains(view, "Empty the trash before quitting?") {
 		t.Errorf("the question should be on screen, got:\n%s", view)
+	}
+	if !strings.Contains(view, "(y)es / (n)o") {
+		t.Errorf("the answers should be on screen, got:\n%s", view)
+	}
+}
+
+// At the advertised minimum width the question and its answer are both
+// readable: the bar must not keep only the tail of a long sentence.
+func TestQuitQuestionFitsMinimumWidth(t *testing.T) {
+	m, dir := trashModel(t)
+	m.width, m.height = 44, 24
+	trashOne(t, dir, "alpha.txt")
+
+	updated, _ := m.Update(key('q'))
+	m = updated.(Model)
+
+	view := plainView.ReplaceAllString(m.View().Content, "")
+	if !strings.Contains(view, "Empty the trash before quitting?") {
+		t.Errorf("the question is not readable at the minimum width, got:\n%s", view)
+	}
+	if !strings.Contains(view, "(y)es / (n)o") {
+		t.Errorf("the answer is not readable at the minimum width, got:\n%s", view)
+	}
+}
+
+// Enter is the key people press to dismiss a question. It must not be the
+// answer that empties the trash.
+func TestQuitEnterLeavesTheTrashAlone(t *testing.T) {
+	m, dir := trashModel(t)
+	trashOne(t, dir, "alpha.txt")
+
+	updated, _ := m.Update(key('q'))
+	m = updated.(Model)
+
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(Model)
+	assertQuits(t, cmd)
+
+	entries, err := fs.ListTrash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("Enter emptied the trash: %d entry/entries left", len(entries))
 	}
 }
 

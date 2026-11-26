@@ -61,7 +61,11 @@ type fileOpMsg struct {
 	name      string
 	succeeded int
 	skipped   int
-	failures  []opFailure
+	// replaced counts paste destinations that already existed and were
+	// replaced with the user's consent. It is reported beside the success,
+	// so the paste never claims a replacement it did not mention.
+	replaced int
+	failures []opFailure
 	// unkeptMeta counts the entries that landed without their mode or
 	// times, on a filesystem that refuses metadata without refusing the
 	// copy. They are reported beside the success — the files did arrive —
@@ -87,13 +91,16 @@ func (msg fileOpMsg) result() string {
 	if msg.text != "" {
 		return msg.text
 	}
-	if len(msg.failures) == 0 && msg.skipped == 0 && msg.succeeded == 1 && msg.name != "" {
+	if len(msg.failures) == 0 && msg.skipped == 0 && msg.replaced == 0 && msg.succeeded == 1 && msg.name != "" {
 		return msg.verb + " " + msg.name
 	}
 
 	var parts []string
 	if msg.succeeded > 0 {
 		parts = append(parts, fmt.Sprintf("%s %d file(s)", msg.verb, msg.succeeded))
+	}
+	if msg.replaced > 0 {
+		parts = append(parts, fmt.Sprintf("replaced %d", msg.replaced))
 	}
 	if msg.skipped > 0 {
 		parts = append(parts, fmt.Sprintf("skipped %d", msg.skipped))

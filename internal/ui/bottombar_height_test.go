@@ -48,6 +48,10 @@ func TestBottomBarHeightSameInEveryState(t *testing.T) {
 		{"result", func(b *BottomBar) { b.OpResult = "moved 3 file(s)" }},
 		{"prompt", func(b *BottomBar) { b.Prompt = "rename"; b.PromptInput = "new-name" }},
 		{"input", func(b *BottomBar) { b.Input = "delete?" }},
+		{"confirm", func(b *BottomBar) {
+			b.ConfirmQuestion = "Empty the trash before quitting?"
+			b.ConfirmOptions = "(y)es / (n)o"
+		}},
 		{"fuzzy", func(b *BottomBar) { b.FuzzyActive = true; b.FuzzyInput = "arch" }},
 		{"progress", func(b *BottomBar) { b.Progress = &p }},
 		{"hints", func(b *BottomBar) {}},
